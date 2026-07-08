@@ -3,6 +3,7 @@ import type {
   PriceListFormat,
   PriceListPayload
 } from "./pricelist";
+import type { ImageExportOptions, ImageExportResult } from "./imageExport";
 import type {
   ArtworkInput,
   ContactInput,
@@ -55,12 +56,35 @@ const api = {
     ipcRenderer.invoke("lookup:save", input),
   deleteLookup: (input: LookupInput): Promise<InventoryData> =>
     ipcRenderer.invoke("lookup:delete", input),
+  reassignLookup: (input: {
+    category: string;
+    fromValue: string;
+    assignments: Array<{ id: string; value: string }>;
+  }): Promise<InventoryData> => ipcRenderer.invoke("lookup:reassign", input),
   importImage: (
     targetType: "artwork" | "edition" | "exhibition",
     targetId: string,
     category: string
   ): Promise<{ image: unknown; inventory: InventoryData } | null> =>
     ipcRenderer.invoke("image:import", targetType, targetId, category),
+  importDocument: (
+    targetType: "artwork" | "edition" | "exhibition",
+    targetId: string
+  ): Promise<{ image: unknown; inventory: InventoryData } | null> =>
+    ipcRenderer.invoke("document:import", targetType, targetId),
+  setDocumentCaption: (imageId: string, caption: string): Promise<InventoryData> =>
+    ipcRenderer.invoke("document:setCaption", imageId, caption),
+  openDocument: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke("document:open", filePath),
+  pickImagePath: (): Promise<{ path: string; dataUrl: string } | null> =>
+    ipcRenderer.invoke("image:pickPath"),
+  importImageFromPath: (
+    sourcePath: string,
+    targetType: "artwork" | "edition" | "exhibition",
+    targetId: string,
+    category: string
+  ): Promise<{ image: unknown; inventory: InventoryData } | null> =>
+    ipcRenderer.invoke("image:importPath", sourcePath, targetType, targetId, category),
   deleteImage: (imageId: string): Promise<InventoryData> =>
     ipcRenderer.invoke("image:delete", imageId),
   markMovementReturned: (movementId: string): Promise<InventoryData> =>
@@ -69,6 +93,8 @@ const api = {
     ipcRenderer.invoke("image:toDataUrl", filePath),
   saveImageCopy: (filePath: string, suggestedName?: string): Promise<string | null> =>
     ipcRenderer.invoke("image:saveCopy", filePath, suggestedName),
+  exportImage: (options: ImageExportOptions): Promise<ImageExportResult | null> =>
+    ipcRenderer.invoke("image:export", options),
   pickImageDataUrl: (): Promise<string | null> =>
     ipcRenderer.invoke("image:pickDataUrl")
 };

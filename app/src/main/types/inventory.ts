@@ -120,6 +120,7 @@ export interface ArtworkImage {
   relativePath: string;
   absolutePath?: string;
   caption?: string;
+  originalName?: string;
   createdAt: string;
 }
 

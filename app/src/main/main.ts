@@ -1,4 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  type OpenDialogOptions
+} from "electron";
 import { readFile, copyFile } from "fs/promises";
 import path from "path";
 import { InventoryStore } from "./excel/inventoryStore";
@@ -8,6 +15,7 @@ import {
   type PriceListFormat,
   type PriceListPayload
 } from "./pricelist";
+import { exportImage, type ImageExportOptions } from "./imageExport";
 import type {
   ArtworkInput,
   ContactInput,
@@ -120,6 +128,17 @@ ipcMain.handle("lookup:delete", async (_event, input: LookupInput) =>
   store().deleteLookup(input)
 );
 ipcMain.handle(
+  "lookup:reassign",
+  async (
+    _event,
+    input: {
+      category: string;
+      fromValue: string;
+      assignments: Array<{ id: string; value: string }>;
+    }
+  ) => store().reassignLookup(input)
+);
+ipcMain.handle(
   "exhibition:addSale",
   async (
     _event,
@@ -169,6 +188,101 @@ ipcMain.handle(
     return store().importImage(result.filePaths[0], targetType, targetId, category);
   }
 );
+
+ipcMain.handle(
+  "image:export",
+  async (_event, options: ImageExportOptions) => exportImage(mainWindow, options)
+);
+
+// Pick an image file without importing it yet (used while the artwork has no
+// id). Returns the path plus a data URL for an instant preview.
+ipcMain.handle("image:pickPath", async () => {
+  const options: OpenDialogOptions = {
+    title: "Elegir foto",
+    properties: ["openFile"],
+    filters: [
+      { name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "gif", "tiff"] }
+    ]
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) return null;
+  const filePath = result.filePaths[0];
+  const buffer = await readFile(filePath);
+  return {
+    path: filePath,
+    dataUrl: `data:${mimeType(filePath)};base64,${buffer.toString("base64")}`
+  };
+});
+
+ipcMain.handle(
+  "image:importPath",
+  async (
+    _event,
+    sourcePath: string,
+    targetType: "artwork" | "edition" | "exhibition",
+    targetId: string,
+    category: string
+  ) => store().importImage(sourcePath, targetType, targetId, category)
+);
+
+// Import any document type (images, PDF, Word, etc.) as an attachment.
+ipcMain.handle(
+  "document:import",
+  async (
+    _event,
+    targetType: "artwork" | "edition" | "exhibition",
+    targetId: string
+  ) => {
+    const options: OpenDialogOptions = {
+      title: "Elegir documento",
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "Documentos",
+          extensions: [
+            "pdf",
+            "doc",
+            "docx",
+            "odt",
+            "rtf",
+            "txt",
+            "xls",
+            "xlsx",
+            "ppt",
+            "pptx",
+            "jpg",
+            "jpeg",
+            "png",
+            "webp",
+            "gif",
+            "tiff",
+            "heic"
+          ]
+        },
+        { name: "Todos los archivos", extensions: ["*"] }
+      ]
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) return null;
+    return store().importImage(result.filePaths[0], targetType, targetId, "document");
+  }
+);
+
+ipcMain.handle(
+  "document:setCaption",
+  async (_event, imageId: string, caption: string) =>
+    store().updateImageCaption(imageId, caption)
+);
+
+ipcMain.handle("document:open", async (_event, filePath: string) => {
+  const error = await shell.openPath(filePath);
+  if (error) throw new Error(error);
+  return true;
+});
 
 ipcMain.handle("image:toDataUrl", async (_event, filePath: string) => {
   const buffer = await readFile(filePath);

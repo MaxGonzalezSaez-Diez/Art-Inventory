@@ -380,6 +380,52 @@ export class InventoryStore {
     return this.load();
   }
 
+  // Reassign every record that still uses `fromValue` to a new value, then
+  // delete the old lookup option. `assignments` maps a record id to the value
+  // its field should take. Any affected record not listed keeps `fromValue`
+  // untouched (so it is safe to call with a partial map).
+  async reassignLookup(input: {
+    category: string;
+    fromValue: string;
+    assignments: Array<{ id: string; value: string }>;
+  }): Promise<InventoryData> {
+    const data = await this.load();
+    const now = new Date().toISOString();
+    const map = new Map(input.assignments.map((a) => [a.id, a.value]));
+
+    if (input.category === "artworkType") {
+      data.artworks = data.artworks.map((artwork) =>
+        map.has(artwork.id)
+          ? { ...artwork, type: map.get(artwork.id) as Artwork["type"], updatedAt: now }
+          : artwork
+      );
+    } else if (input.category === "movementType") {
+      data.movements = data.movements.map((movement) =>
+        map.has(movement.id)
+          ? { ...movement, type: map.get(movement.id) as Movement["type"] }
+          : movement
+      );
+    } else if (input.category === "exhibitionType") {
+      data.exhibitions = data.exhibitions.map((exhibition) =>
+        map.has(exhibition.id)
+          ? { ...exhibition, exhibitionType: map.get(exhibition.id) ?? "", updatedAt: now }
+          : exhibition
+      );
+    }
+
+    if (!isDefaultLookup(input.category, input.fromValue)) {
+      data.lookups = data.lookups.filter(
+        (lookup) =>
+          !(
+            lookup.category === input.category &&
+            lookup.value.toLowerCase() === input.fromValue.toLowerCase()
+          )
+      );
+    }
+    await this.persist(data);
+    return this.load();
+  }
+
   async importImage(
     sourcePath: string,
     targetType: "artwork" | "edition" | "exhibition",
@@ -408,6 +454,7 @@ export class InventoryStore {
       targetId,
       category,
       relativePath,
+      originalName: path.basename(sourcePath),
       createdAt: now
     };
 
@@ -453,6 +500,15 @@ export class InventoryStore {
           : artwork
       );
     }
+    await this.persist(data);
+    return this.load();
+  }
+
+  async updateImageCaption(imageId: string, caption: string): Promise<InventoryData> {
+    const data = await this.load();
+    data.images = data.images.map((image) =>
+      image.id === imageId ? { ...image, caption } : image
+    );
     await this.persist(data);
     return this.load();
   }

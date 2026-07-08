@@ -79,6 +79,10 @@ export function App() {
   const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
   const [saving, setSaving] = useState(false);
   const saveRef = useRef<null | (() => Promise<boolean>)>(null);
+  // Bumped when the user clicks the "Exposiciones" tab so the page closes any
+  // exhibition form that is open (otherwise "salir sin guardar" appears to do
+  // nothing because the page does not change).
+  const [exhResetToken, setExhResetToken] = useState(0);
 
   useEffect(() => {
     void refresh();
@@ -185,7 +189,16 @@ export function App() {
           <NavButton active={page === "contacts"} onClick={() => guarded(() => goTo("contacts"))}>
             <span className="nav-dot dot-people" /> Personas y galerías
           </NavButton>
-          <NavButton active={page === "exhibitions"} onClick={() => guarded(() => goTo("exhibitions"))}>
+          <NavButton
+            active={page === "exhibitions"}
+            onClick={() =>
+              guarded(() => {
+                setExhibitionToOpen(null);
+                setExhResetToken((value) => value + 1);
+                goTo("exhibitions");
+              })
+            }
+          >
             <span className="nav-dot dot-exh" /> Exposiciones
           </NavButton>
           <NavButton active={page === "pricelist"} onClick={() => guarded(() => openPriceList(null))}>
@@ -274,6 +287,8 @@ export function App() {
             onError={setMessage}
             openId={exhibitionToOpen}
             onOpened={() => setExhibitionToOpen(null)}
+            resetToken={exhResetToken}
+            guard={guarded}
             onDirtyChange={setDirty}
             saveRef={saveRef}
             onOpenArtwork={(artworkId) =>
@@ -304,16 +319,30 @@ export function App() {
             <div className="modal-head">
               <h3>Tienes cambios sin guardar</h3>
             </div>
-            <p className="confirm-message">
-              Tienes cambios sin guardar. Puedes guardarlos y salir, salir sin
-              guardar, o seguir editando.
-            </p>
-            <div className="modal-actions">
-              <button className="ghost" onClick={() => setPendingNav(null)}>
-                Seguir editando
+            <p className="confirm-message">¿Qué quieres hacer con los cambios?</p>
+            <div className="leave-choices">
+              <button
+                className="leave-choice"
+                disabled={saving}
+                onClick={async () => {
+                  const action = pendingNav;
+                  setSaving(true);
+                  const ok = saveRef.current ? await saveRef.current() : true;
+                  setSaving(false);
+                  // On failure, close the modal and stay on the form so the
+                  // red error message (e.g. missing title) is visible.
+                  setPendingNav(null);
+                  if (!ok) return;
+                  setDirty(false);
+                  action?.();
+                }}
+              >
+                <strong>{saving ? "Guardando…" : "Guardar y salir"}</strong>
+                <span>Guarda los cambios y continúa.</span>
               </button>
               <button
-                className="ghost danger"
+                className="leave-choice danger-choice"
+                disabled={saving}
                 onClick={() => {
                   const action = pendingNav;
                   setPendingNav(null);
@@ -321,22 +350,16 @@ export function App() {
                   action?.();
                 }}
               >
-                Salir sin guardar
+                <strong>Salir sin guardar</strong>
+                <span>Los cambios recientes se perderán.</span>
               </button>
               <button
+                className="leave-choice ghost-choice"
                 disabled={saving}
-                onClick={async () => {
-                  const action = pendingNav;
-                  setSaving(true);
-                  const ok = saveRef.current ? await saveRef.current() : true;
-                  setSaving(false);
-                  if (!ok) return;
-                  setPendingNav(null);
-                  setDirty(false);
-                  action?.();
-                }}
+                onClick={() => setPendingNav(null)}
               >
-                {saving ? "Guardando…" : "Guardar y salir"}
+                <strong>Seguir editando</strong>
+                <span>Vuelve al formulario sin salir.</span>
               </button>
             </div>
           </div>
@@ -724,6 +747,12 @@ function ArtworkForm({
   const [locked, setLocked] = useState(false);
   const [error, setError] = useState("");
   const [collapseSignal, setCollapseSignal] = useState(0);
+  // Photo chosen before saving: kept locally and imported when the artwork
+  // is saved, so choosing a photo never requires a title first.
+  const [pendingImage, setPendingImage] = useState<{
+    path: string;
+    dataUrl: string;
+  } | null>(null);
 
   useEffect(() => {
     onDirtyChange?.(false);
@@ -758,15 +787,28 @@ function ArtworkForm({
 
   async function persistCurrent(): Promise<InventoryData | null> {
     if (!form.title.trim()) {
-      setError("Escribe un título antes de continuar.");
+      setError("Escribe un título antes de guardar la obra.");
       setTab("info");
       return null;
     }
     setError("");
-    const data = await window.inventoryApi.saveArtwork(form);
-    const saved =
+    let data = await window.inventoryApi.saveArtwork(form);
+    let saved =
       (form.id && data.artworks.find((item) => item.id === form.id)) ||
       [...data.artworks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (saved && pendingImage) {
+      const result = await window.inventoryApi.importImageFromPath(
+        pendingImage.path,
+        "artwork",
+        saved.id,
+        "main"
+      );
+      if (result?.inventory) {
+        data = result.inventory;
+        saved = data.artworks.find((item) => item.id === saved!.id) ?? saved;
+      }
+      setPendingImage(null);
+    }
     setInventory(data);
     if (saved) setForm(toInput(saved, data));
     return saved ? data : null;
@@ -791,18 +833,10 @@ function ArtworkForm({
 
   async function addImage() {
     try {
-      const data = await persistCurrent();
-      if (!data) return;
-      const current =
-        (form.id && data.artworks.find((i) => i.id === form.id)) ||
-        [...data.artworks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-      if (!current) return;
-      const result = await window.inventoryApi.importImage("artwork", current.id, "main");
-      if (result?.inventory) {
-        setInventory(result.inventory);
-        const saved = result.inventory.artworks.find((item) => item.id === current.id);
-        if (saved) setForm(toInput(saved, result.inventory));
-      }
+      const picked = await window.inventoryApi.pickImagePath();
+      if (!picked) return;
+      setPendingImage(picked);
+      onDirtyChange?.(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo añadir la foto.");
     }
@@ -849,14 +883,22 @@ function ArtworkForm({
 
       <div className="image-strip">
         <div className="image-strip-thumb">
-          {imageUrl ? <img src={imageUrl} alt={form.title} /> : <span>Sin foto</span>}
+          {pendingImage ? (
+            <img src={pendingImage.dataUrl} alt={form.title} />
+          ) : imageUrl ? (
+            <img src={imageUrl} alt={form.title} />
+          ) : (
+            <span>Sin foto</span>
+          )}
         </div>
         <div className="image-strip-text">
-          <button className="ghost" onClick={addImage}>
-            {imageUrl ? "Cambiar foto" : "Añadir foto"}
+          <button className="ghost" onClick={addImage} disabled={locked}>
+            {pendingImage || imageUrl ? "Cambiar foto" : "Añadir foto"}
           </button>
           <span className="muted">
-            Se guarda la obra automáticamente al añadir la foto.
+            {pendingImage
+              ? "Foto elegida. Se guardará al pulsar «Guardar»."
+              : "Elige la foto cuando quieras; se guarda junto con la obra."}
           </span>
         </div>
       </div>
@@ -1661,6 +1703,193 @@ function ExhibitionSelect({
  * Detail
  * ------------------------------------------------------------------------- */
 
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(2)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function ExportThumb({
+  image,
+  active,
+  onClick
+}: {
+  image: ArtworkImage;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const url = useImageDataUrl(image.absolutePath);
+  return (
+    <button
+      type="button"
+      className={`export-thumb${active ? " active" : ""}`}
+      onClick={onClick}
+    >
+      {url ? <img src={url} alt="" /> : <span className="muted">…</span>}
+    </button>
+  );
+}
+
+// Lets the artist re-save any of an artwork's photos in a chosen format and
+// (optionally) under a target file size — no external editor needed.
+function ImageExportModal({
+  inventory,
+  artwork,
+  onClose
+}: {
+  inventory: InventoryData;
+  artwork: Artwork;
+  onClose: () => void;
+}) {
+  const main = mainImageFor(artwork, inventory);
+  const all = inventory.images.filter(
+    (image) => image.targetType === "artwork" && image.targetId === artwork.id
+  );
+  const ordered = [
+    ...(main ? [main] : []),
+    ...all.filter((image) => image.id !== main?.id)
+  ].filter((image) => image.absolutePath);
+
+  const [selectedId, setSelectedId] = useState(ordered[0]?.id ?? "");
+  const [format, setFormat] = useState<"jpg" | "png" | "pdf">("jpg");
+  const [sizeValue, setSizeValue] = useState("");
+  const [sizeUnit, setSizeUnit] = useState<"kb" | "mb">("kb");
+  const [maxDim, setMaxDim] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const selected = ordered.find((image) => image.id === selectedId);
+
+  async function run() {
+    if (!selected?.absolutePath) {
+      setError("Elige una imagen primero.");
+      return;
+    }
+    const num = parseFloat(sizeValue.replace(",", "."));
+    const targetKB =
+      Number.isFinite(num) && num > 0 ? (sizeUnit === "mb" ? num * 1024 : num) : undefined;
+    const dim = parseInt(maxDim, 10);
+    setBusy(true);
+    setError("");
+    setDone(null);
+    try {
+      const res = await window.inventoryApi.exportImage({
+        sourcePath: selected.absolutePath,
+        format,
+        targetKB,
+        maxDimension: Number.isFinite(dim) && dim > 0 ? dim : undefined,
+        suggestedName: artwork.title || artwork.id
+      });
+      if (res) setDone(`Guardada correctamente · ${formatBytes(res.bytes)}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo guardar la imagen.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Salvar imagen</h3>
+          <button className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          {ordered.length === 0 ? (
+            <p className="muted">
+              Esta obra todavía no tiene imágenes. Añade una foto primero.
+            </p>
+          ) : (
+            <>
+              <span className="field-label">1 · Elige la imagen</span>
+              <div className="export-thumb-grid">
+                {ordered.map((image) => (
+                  <ExportThumb
+                    key={image.id}
+                    image={image}
+                    active={image.id === selectedId}
+                    onClick={() => setSelectedId(image.id)}
+                  />
+                ))}
+              </div>
+
+              <label className="field">
+                2 · Formato del archivo
+                <select
+                  value={format}
+                  onChange={(event) =>
+                    setFormat(event.target.value as "jpg" | "png" | "pdf")
+                  }
+                >
+                  <option value="jpg">JPG (foto, archivo pequeño)</option>
+                  <option value="png">PNG (máxima calidad)</option>
+                  <option value="pdf">PDF (documento)</option>
+                </select>
+              </label>
+
+              <div className="form-row">
+                <label className="field">
+                  3 · Tamaño máximo (opcional)
+                  <input
+                    inputMode="decimal"
+                    placeholder="ej. 500"
+                    value={sizeValue}
+                    onChange={(event) =>
+                      setSizeValue(event.target.value.replace(/[^0-9.,]/g, ""))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  Unidad
+                  <select
+                    value={sizeUnit}
+                    onChange={(event) => setSizeUnit(event.target.value as "kb" | "mb")}
+                  >
+                    <option value="kb">KB</option>
+                    <option value="mb">MB</option>
+                  </select>
+                </label>
+              </div>
+
+              <label className="field">
+                Ancho/alto máximo en píxeles (opcional)
+                <input
+                  inputMode="numeric"
+                  placeholder="ej. 2000"
+                  value={maxDim}
+                  onChange={(event) =>
+                    setMaxDim(event.target.value.replace(/[^0-9]/g, ""))
+                  }
+                />
+              </label>
+              <p className="muted small-note">
+                Si indicas un tamaño máximo, la app baja la calidad (y reduce la
+                imagen si hace falta) hasta lograrlo. Déjalo en blanco para conservar
+                la calidad original.
+              </p>
+            </>
+          )}
+
+          {error && <div className="error-banner">{error}</div>}
+          {done && <div className="success-banner">{done}</div>}
+        </div>
+        <div className="modal-actions">
+          <button disabled={busy || ordered.length === 0} onClick={run}>
+            {busy ? "Guardando…" : "Guardar imagen…"}
+          </button>
+          <button className="ghost" onClick={onClose}>
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ArtworkDetail({
   artwork,
   inventory,
@@ -1679,6 +1908,7 @@ function ArtworkDetail({
   const [tab, setTab] = useState<DetailTab>("info");
   const [openMovement, setOpenMovement] = useState<Movement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const image = mainImageFor(artwork, inventory);
   const imageUrl = useImageDataUrl(image?.absolutePath);
   const editions = inventory.editions.filter((item) => item.artworkId === artwork.id);
@@ -1700,9 +1930,14 @@ function ArtworkDetail({
     <section className="detail-layout">
       <div className="detail-image-panel">
         {imageUrl ? <img src={imageUrl} alt={artwork.title} /> : <div>Sin foto</div>}
-        <button className="ghost" onClick={addImage}>
-          {imageUrl ? "Cambiar foto" : "Añadir foto"}
-        </button>
+        <div className="image-panel-actions">
+          <button className="ghost" onClick={addImage}>
+            {imageUrl ? "Cambiar foto" : "Añadir foto"}
+          </button>
+          <button className="ghost" onClick={() => setExporting(true)}>
+            Salvar imagen…
+          </button>
+        </div>
       </div>
       <div className="detail-panel">
         <div className="detail-header">
@@ -1869,6 +2104,14 @@ function ArtworkDetail({
         />
       )}
 
+      {exporting && (
+        <ImageExportModal
+          inventory={inventory}
+          artwork={artwork}
+          onClose={() => setExporting(false)}
+        />
+      )}
+
       {confirmDelete && (
         <ConfirmDialog
           title="Eliminar obra"
@@ -1888,6 +2131,35 @@ function ArtworkDetail({
 /* ----------------------------------------------------------------------------
  * Reusable controls
  * ------------------------------------------------------------------------- */
+
+// Which stored records still reference a given lookup value, so we can force a
+// reassignment before the option is deleted.
+function lookupUsage(
+  inventory: InventoryData,
+  category: string,
+  value: string
+): Array<{ id: string; label: string }> {
+  if (category === "artworkType") {
+    return inventory.artworks
+      .filter((artwork) => artwork.type === value)
+      .map((artwork) => ({ id: artwork.id, label: artwork.title || artwork.id }));
+  }
+  if (category === "exhibitionType") {
+    return inventory.exhibitions
+      .filter((exhibition) => exhibition.exhibitionType === value)
+      .map((exhibition) => ({ id: exhibition.id, label: exhibition.title || exhibition.id }));
+  }
+  if (category === "movementType") {
+    return inventory.movements
+      .filter((movement) => movement.type === value)
+      .map((movement) => {
+        const art = inventory.artworks.find((a) => a.id === movement.artworkId);
+        const parts = [art?.title || movement.artworkId, movement.date].filter(Boolean);
+        return { id: movement.id, label: parts.join(" · ") };
+      });
+  }
+  return [];
+}
 
 function LookupSelect({
   inventory,
@@ -1910,6 +2182,7 @@ function LookupSelect({
 }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
+  const [reassigning, setReassigning] = useState(false);
   const options = lookupOptions(inventory, category).filter(
     (option) => !(hideValues ?? []).includes(option.value)
   );
@@ -1933,9 +2206,32 @@ function LookupSelect({
   async function removeOption() {
     const selected = options.find((option) => option.value === value);
     if (!selected) return;
-    const data = await window.inventoryApi.deleteLookup(selected);
-    setInventory(data);
-    onChange("");
+    const usage = lookupUsage(inventory, category, selected.value);
+    // Nobody uses it: just delete.
+    if (usage.length === 0) {
+      const data = await window.inventoryApi.deleteLookup(selected);
+      setInventory(data);
+      onChange("");
+      return;
+    }
+    const targets = lookupOptions(inventory, category).filter(
+      (option) => option.value !== selected.value
+    );
+    // A single record uses it (typically just this one): silently move it to
+    // the first other option and delete — one click, the name simply changes.
+    if (usage.length === 1 && targets.length > 0) {
+      const next = targets[0].value;
+      const data = await window.inventoryApi.reassignLookup({
+        category,
+        fromValue: selected.value,
+        assignments: usage.map((item) => ({ id: item.id, value: next }))
+      });
+      setInventory(data);
+      onChange(next);
+      return;
+    }
+    // Several records use it: make the user reassign each one first.
+    setReassigning(true);
   }
 
   return (
@@ -2004,6 +2300,126 @@ function LookupSelect({
           </button>
         </div>
       )}
+      {reassigning && (
+        <LookupReassignModal
+          inventory={inventory}
+          setInventory={setInventory}
+          category={category}
+          label={label}
+          fromValue={value}
+          onClose={() => setReassigning(false)}
+          onDone={() => {
+            setReassigning(false);
+            onChange("");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LookupReassignModal({
+  inventory,
+  setInventory,
+  category,
+  label,
+  fromValue,
+  onClose,
+  onDone
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  category: string;
+  label: string;
+  fromValue: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const usage = lookupUsage(inventory, category, fromValue);
+  const targets = lookupOptions(inventory, category).filter(
+    (option) => option.value !== fromValue
+  );
+  const fromLabel = labelFor(inventory, category, fromValue);
+  const [choices, setChoices] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  const allChosen = usage.every((item) => (choices[item.id] ?? "").length > 0);
+
+  async function confirm() {
+    if (!allChosen || busy) return;
+    setBusy(true);
+    try {
+      const data = await window.inventoryApi.reassignLookup({
+        category,
+        fromValue,
+        assignments: usage.map((item) => ({ id: item.id, value: choices[item.id] }))
+      });
+      setInventory(data);
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Cambiar «{fromLabel}» antes de borrar</h3>
+          <button className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <p className="muted">
+          Hay {usage.length}{" "}
+          {usage.length === 1 ? "registro que usa" : "registros que usan"} esta
+          opción de «{label.toLowerCase()}». Elige un valor nuevo para cada uno.
+          Cuando todos tengan un valor, se borrará «{fromLabel}».
+        </p>
+        <div className="reassign-list">
+          {usage.map((item) => (
+            <div className="reassign-row" key={item.id}>
+              <span className="reassign-name" title={item.label}>
+                {item.label}
+              </span>
+              <select
+                value={choices[item.id] ?? ""}
+                onChange={(event) =>
+                  setChoices((current) => ({
+                    ...current,
+                    [item.id]: event.target.value
+                  }))
+                }
+              >
+                <option value="">Elegir nuevo valor…</option>
+                {targets.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+        {targets.length === 0 && (
+          <p className="danger-text">
+            No hay otra opción disponible. Añade una opción nueva antes de borrar
+            esta.
+          </p>
+        )}
+        <div className="modal-actions">
+          <button className="ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button
+            className="danger-solid"
+            disabled={!allChosen || busy || targets.length === 0}
+            onClick={confirm}
+          >
+            Actualizar y borrar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2838,6 +3254,137 @@ function ExtraImages({
   );
 }
 
+const IMAGE_EXTENSIONS = [
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "tiff",
+  "bmp",
+  "heic"
+];
+
+function isImageFile(name?: string): boolean {
+  if (!name) return false;
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_EXTENSIONS.includes(ext);
+}
+
+function DocumentRow({
+  image,
+  setInventory,
+  onDelete
+}: {
+  image: ArtworkImage;
+  setInventory: (data: InventoryData) => void;
+  onDelete: () => void;
+}) {
+  const name = image.originalName || image.relativePath.split("/").pop() || "documento";
+  const isImage = isImageFile(name);
+  const url = useImageDataUrl(isImage ? image.absolutePath : undefined);
+  const [caption, setCaption] = useState(image.caption ?? "");
+
+  async function saveCaption() {
+    if ((image.caption ?? "") === caption) return;
+    const data = await window.inventoryApi.setDocumentCaption(image.id, caption);
+    setInventory(data);
+  }
+
+  async function open() {
+    if (image.absolutePath) await window.inventoryApi.openDocument(image.absolutePath);
+  }
+
+  return (
+    <div className="doc-row">
+      <button type="button" className="doc-preview" onClick={open} title="Abrir">
+        {isImage && url ? (
+          <img src={url} alt={name} />
+        ) : (
+          <span className="doc-icon">{name.split(".").pop()?.toUpperCase() || "DOC"}</span>
+        )}
+      </button>
+      <div className="doc-body">
+        <button type="button" className="doc-name" onClick={open} title="Abrir documento">
+          {name}
+        </button>
+        <input
+          className="doc-caption"
+          placeholder="Descripción o comentario…"
+          value={caption}
+          onChange={(event) => setCaption(event.target.value)}
+          onBlur={saveCaption}
+        />
+      </div>
+      <button type="button" className="ghost danger small" onClick={onDelete}>
+        Quitar
+      </button>
+    </div>
+  );
+}
+
+function ExhibitionDocuments({
+  inventory,
+  setInventory,
+  exhibitionId
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  exhibitionId: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const documents = inventory.images.filter(
+    (image) =>
+      image.targetType === "exhibition" &&
+      image.targetId === exhibitionId &&
+      (image.category === "document" || image.category === "extra")
+  );
+
+  async function add() {
+    setBusy(true);
+    try {
+      const result = await window.inventoryApi.importDocument("exhibition", exhibitionId);
+      if (result) setInventory(result.inventory);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(imageId: string) {
+    const data = await window.inventoryApi.deleteImage(imageId);
+    setInventory(data);
+  }
+
+  return (
+    <div className="form-section extra-images-section">
+      <div className="related-head">
+        <h3>Documentos de la exposición</h3>
+        <button type="button" className="ghost" disabled={busy} onClick={add}>
+          + Añadir documento
+        </button>
+      </div>
+      <p className="muted small-note">
+        Fotos de la sala, catálogos, notas de prensa, PDF o Word. Cada archivo
+        puede llevar una descripción.
+      </p>
+      {documents.length === 0 ? (
+        <p className="muted small-note">Aún no hay documentos guardados.</p>
+      ) : (
+        <div className="doc-list">
+          {documents.map((image) => (
+            <DocumentRow
+              key={image.id}
+              image={image}
+              setInventory={setInventory}
+              onDelete={() => void remove(image.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExhibitionSalesSection({
   inventory,
   setInventory,
@@ -3480,6 +4027,8 @@ function ExhibitionsPage({
   onError,
   openId,
   onOpened,
+  resetToken,
+  guard,
   onGeneratePriceList,
   onDirtyChange,
   onOpenArtwork,
@@ -3490,6 +4039,8 @@ function ExhibitionsPage({
   onError: (message: string) => void;
   openId?: string | null;
   onOpened?: () => void;
+  resetToken?: number;
+  guard?: (action: () => void) => void;
   onGeneratePriceList: (exhibitionId: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onOpenArtwork?: (artworkId: string) => void;
@@ -3508,6 +4059,12 @@ function ExhibitionsPage({
     onOpened?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openId]);
+
+  // Close any open exhibition form when the user clicks the tab again (e.g.
+  // after choosing "salir sin guardar").
+  useEffect(() => {
+    if (resetToken !== undefined && resetToken > 0) setEditing(null);
+  }, [resetToken]);
 
   const countries = uniqueValues(inventory.exhibitions.map((item) => item.country)).sort(
     (a, b) => a.localeCompare(b)
@@ -3541,6 +4098,7 @@ function ExhibitionsPage({
         exhibition={editing === "new" ? null : editing}
         onError={onError}
         onDone={() => setEditing(null)}
+        onCancel={() => (guard ?? ((action: () => void) => action()))(() => setEditing(null))}
         onGeneratePriceList={onGeneratePriceList}
         onDirtyChange={onDirtyChange}
         onOpenArtwork={onOpenArtwork}
@@ -3667,6 +4225,7 @@ function ExhibitionForm({
   exhibition,
   onError,
   onDone,
+  onCancel,
   onGeneratePriceList,
   onDirtyChange,
   onOpenArtwork,
@@ -3677,6 +4236,7 @@ function ExhibitionForm({
   exhibition: Exhibition | null;
   onError: (message: string) => void;
   onDone: () => void;
+  onCancel?: () => void;
   onGeneratePriceList: (exhibitionId: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onOpenArtwork?: (artworkId: string) => void;
@@ -3753,6 +4313,7 @@ function ExhibitionForm({
     if (!exhibition) return;
     const data = await window.inventoryApi.deleteExhibition(exhibition.id);
     setInventory(data);
+    onDirtyChange?.(false);
     onDone();
   }
 
@@ -3791,7 +4352,7 @@ function ExhibitionForm({
               Generar lista de precios
             </button>
           )}
-          <button className="ghost" onClick={onDone}>
+          <button className="ghost" onClick={onCancel ?? onDone}>
             Cancelar
           </button>
         </div>
@@ -3961,17 +4522,14 @@ function ExhibitionForm({
         )}
 
         {exhibition ? (
-          <ExtraImages
+          <ExhibitionDocuments
             inventory={inventory}
             setInventory={setInventory}
-            targetType="exhibition"
-            targetId={exhibition.id}
-            label="Imágenes de la exposición"
-            hint="Fotos de la sala, montaje o recortes de prensa. Se guardan en la biblioteca."
+            exhibitionId={exhibition.id}
           />
         ) : (
           <p className="muted small-note">
-            Guarda la exposición para poder añadir imágenes y ventas.
+            Guarda la exposición para poder añadir documentos y ventas.
           </p>
         )}
 
@@ -4407,6 +4965,9 @@ function PriceListPage({
   const [headerColor, setHeaderColor] = useState("#1c1c1c");
   const [subtitleItalic, setSubtitleItalic] = useState(true);
   const [subtitleColor, setSubtitleColor] = useState("#555555");
+  const [priceBold, setPriceBold] = useState(true);
+  const [imageGap, setImageGap] = useState(16);
+  const [frameBorderColor, setFrameBorderColor] = useState("#e4e4e4");
   const [prices, setPrices] = useState<Record<string, string>>({});
   const [customImages, setCustomImages] = useState<Record<string, string>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
@@ -4485,6 +5046,13 @@ function PriceListPage({
     return prices[id] ?? listedPriceFor(id);
   }
 
+  // Mirrors rowImageHeight() in the PDF generator so the preview shows the
+  // exact frame size the PDF will use.
+  function previewFrameSize(perPage: number): number {
+    const per = (980 - 110) / Math.max(1, perPage);
+    return Math.max(60, Math.min(340, Math.round(per - 30)));
+  }
+
   async function pickImage(id: string) {
     const dataUrl = await window.inventoryApi.pickImageDataUrl();
     if (dataUrl) setCustomImages((current) => ({ ...current, [id]: dataUrl }));
@@ -4526,7 +5094,10 @@ function PriceListPage({
         leftHeader,
         rightHeader,
         showPrice,
+        priceBold,
         imagesPerPage,
+        imageGap,
+        frameBorderColor,
         fonts: { header: fontHeader, subtitle: fontSubtitle, body: fontBody },
         headerStyle: { bold: headerBold, italic: headerItalic, color: headerColor },
         subtitleStyle: { italic: subtitleItalic, color: subtitleColor },
@@ -4613,6 +5184,54 @@ function PriceListPage({
             </div>
           )}
 
+          {selectedIds.length > 0 && (
+            <div className="pl-block">
+              <span className="pl-block-title">Precio e imagen de cada obra</span>
+              <div className="pl-row-list">
+                {selectedIds.map((id) => {
+                  const art = artworkById.get(id);
+                  if (!art) return null;
+                  return (
+                    <div className="pl-row-item" key={id}>
+                      <span className="pl-row-title" title={art.title}>
+                        {art.title}
+                      </span>
+                      {showPrice && (
+                        <input
+                          className="pl-price"
+                          placeholder="Precio €"
+                          value={prices[id] ?? listedPriceFor(id)}
+                          onChange={(event) =>
+                            setPrices((current) => ({
+                              ...current,
+                              [id]: event.target.value
+                            }))
+                          }
+                        />
+                      )}
+                      <button className="ghost small" onClick={() => pickImage(id)}>
+                        {customImages[id] ? "Cambiar imagen" : "Otra imagen"}
+                      </button>
+                      {mode === "free" && (
+                        <button
+                          type="button"
+                          className="link-button remove-link"
+                          onClick={() =>
+                            setFreeSelected((current) =>
+                              current.filter((item) => item !== id)
+                            )
+                          }
+                        >
+                          Quitar
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <label className="field">
             Encabezado (título del documento)
             <input
@@ -4686,6 +5305,41 @@ function PriceListPage({
             />
             Mostrar precio (en euros)
           </label>
+          {showPrice && (
+            <label className="checkline">
+              <input
+                type="checkbox"
+                checked={priceBold}
+                onChange={(event) => setPriceBold(event.target.checked)}
+              />
+              Precio en negrita
+            </label>
+          )}
+
+          <div className="form-row">
+            <label className="field">
+              Espacio entre imagen y texto
+              <div className="range-inline">
+                <input
+                  type="range"
+                  min={0}
+                  max={120}
+                  value={imageGap}
+                  onChange={(event) => setImageGap(Number(event.target.value))}
+                />
+                <span className="range-value">{imageGap}px</span>
+              </div>
+            </label>
+            <label className="field">
+              Color del borde del marco
+              <input
+                type="color"
+                className="color-chip"
+                value={frameBorderColor}
+                onChange={(event) => setFrameBorderColor(event.target.value)}
+              />
+            </label>
+          </div>
 
           <div className="pl-style-block">
             <span className="pl-block-title">Estilo del título</span>
@@ -4766,99 +5420,132 @@ function PriceListPage({
 
         <div className="pl-preview-pane">
           <span className="pl-fp-label muted">
-            Vista previa ({selectedIds.length} obras)
+            Vista previa · así saldrá el PDF ({selectedIds.length} obras)
           </span>
           <div className="pl-paper">
-            {(leftHeader || rightHeader) && (
-              <div className="pl-paper-subhead">
-                <span>{leftHeader}</span>
-                <span>{rightHeader}</span>
-              </div>
-            )}
-            <div
-              className="pl-paper-title"
-              style={{
-                fontFamily: fontHeader,
-                color: headerColor,
-                fontWeight: headerBold ? 700 : 400,
-                fontStyle: headerItalic ? "italic" : "normal"
-              }}
-            >
-              {header || "Lista de precios"}
-            </div>
-            {subtitle && (
+            <div className="pl-sheet" style={{ fontFamily: fontBody }}>
+              {(leftHeader || rightHeader) && (
+                <div className="pl-sheet-subhead">
+                  <span className="pl-sheet-subhead-left">{leftHeader}</span>
+                  <span>{rightHeader}</span>
+                </div>
+              )}
               <div
-                className="pl-paper-subtitle"
+                className="pl-sheet-title"
                 style={{
-                  fontFamily: fontSubtitle,
-                  color: subtitleColor,
-                  fontStyle: subtitleItalic ? "italic" : "normal"
+                  fontFamily: fontHeader,
+                  color: headerColor,
+                  fontWeight: headerBold ? 700 : 400,
+                  fontStyle: headerItalic ? "italic" : "normal"
                 }}
               >
-                {subtitle}
+                {header || "Lista de precios"}
               </div>
-            )}
-            <div className="pl-paper-rule" />
-            {selectedIds.length === 0 ? (
-              <p className="muted">
-                {mode === "exhibition"
-                  ? "Selecciona una exposición con obras."
-                  : "Añade obras para verlas aquí."}
-              </p>
-            ) : (
-              selectedIds.map((id) => {
-                const art = artworkById.get(id);
-                if (!art) return null;
-                const url = customImages[id] || previewImages[id];
-                return (
-                  <div className="pl-paper-row" key={id} style={{ fontFamily: fontBody }}>
-                    <div className="pl-paper-img pl-paper-frame">
-                      {url ? <img src={url} alt={art.title} /> : <span>—</span>}
-                    </div>
-                    <div className="pl-paper-info">
-                      <strong>{art.title}</strong>
-                      {art.series && <span>{art.series}</span>}
-                      <span>{artTypeLabel(inventory, art.type, language)}</span>
-                      <span>{formatSize(art)}</span>
-                      {art.yearMade && <span>{art.yearMade}</span>}
-                      {showPrice && (
-                        <span className="pl-paper-price">
-                          {formatEuro(rawPrice(id)) || "—"}
-                        </span>
+              {subtitle && (
+                <div
+                  className="pl-sheet-subtitle"
+                  style={{
+                    fontFamily: fontSubtitle,
+                    color: subtitleColor,
+                    fontStyle: subtitleItalic ? "italic" : "normal"
+                  }}
+                >
+                  {subtitle}
+                </div>
+              )}
+              <div className="pl-sheet-rule" />
+              {selectedIds.length === 0 ? (
+                <p className="muted">
+                  {mode === "exhibition"
+                    ? "Selecciona una exposición con obras."
+                    : "Añade obras para verlas aquí."}
+                </p>
+              ) : (
+                selectedIds.map((id, index) => {
+                  const art = artworkById.get(id);
+                  if (!art) return null;
+                  const url = customImages[id] || previewImages[id];
+                  const frameSize = previewFrameSize(imagesPerPage);
+                  const pageBreakHere =
+                    index > 0 && index % imagesPerPage === 0;
+                  const wCm = toCm(art.width, art.unit) ?? 0;
+                  const hCm = toCm(art.height, art.unit) ?? 0;
+                  let iw = frameSize;
+                  let ih = frameSize;
+                  if (wCm > 0 && hCm > 0) {
+                    const aspect = wCm / hCm;
+                    if (aspect >= 1) ih = Math.round(frameSize / aspect);
+                    else iw = Math.round(frameSize * aspect);
+                  }
+                  return (
+                    <Fragment key={id}>
+                      {pageBreakHere && (
+                        <div className="pl-page-break">
+                          <span>Página {Math.floor(index / imagesPerPage) + 1}</span>
+                        </div>
                       )}
-                    </div>
-                    <div className="pl-paper-controls">
-                      {showPrice && (
-                        <input
-                          className="pl-price"
-                          placeholder="Precio"
-                          value={prices[id] ?? listedPriceFor(id)}
-                          onChange={(event) =>
-                            setPrices((current) => ({ ...current, [id]: event.target.value }))
-                          }
-                        />
-                      )}
-                      <button className="ghost small" onClick={() => pickImage(id)}>
-                        {customImages[id] ? "Cambiar imagen" : "Imagen propia"}
-                      </button>
-                      {mode === "free" && (
-                        <button
-                          type="button"
-                          className="link-button remove-link"
-                          onClick={() =>
-                            setFreeSelected((current) =>
-                              current.filter((item) => item !== id)
-                            )
-                          }
+                    <div
+                      className="pl-sheet-row"
+                      style={
+                        index === 0 || pageBreakHere
+                          ? { borderTop: "1px solid #d8d8d8" }
+                          : undefined
+                      }
+                    >
+                      <div className="pl-sheet-imgcell">
+                        <div
+                          className="pl-sheet-frame"
+                          style={{
+                            width: `${frameSize}px`,
+                            height: `${frameSize}px`,
+                            borderColor: frameBorderColor
+                          }}
                         >
-                          Quitar
-                        </button>
-                      )}
+                          {url ? (
+                            <img
+                              src={url}
+                              alt={art.title}
+                              style={{
+                                width: `${iw}px`,
+                                height: `${ih}px`,
+                                objectFit: "fill"
+                              }}
+                            />
+                          ) : (
+                            <span className="pl-sheet-noimg">Sin imagen</span>
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        className="pl-sheet-info"
+                        style={{ paddingLeft: `${imageGap}px` }}
+                      >
+                        <div className="pl-sheet-info-title">{art.title}</div>
+                        {art.series && (
+                          <div className="pl-sheet-meta">{art.series}</div>
+                        )}
+                        <div className="pl-sheet-meta">
+                          {artTypeLabel(inventory, art.type, language)}
+                        </div>
+                        <div className="pl-sheet-meta">{formatSize(art)}</div>
+                        {art.yearMade && (
+                          <div className="pl-sheet-meta">{art.yearMade}</div>
+                        )}
+                        {showPrice && (
+                          <div
+                            className="pl-sheet-price"
+                            style={{ fontWeight: priceBold ? 700 : 400 }}
+                          >
+                            {formatEuro(rawPrice(id)) || "—"}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })
-            )}
+                    </Fragment>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       </div>

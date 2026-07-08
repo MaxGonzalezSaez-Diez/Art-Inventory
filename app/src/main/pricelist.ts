@@ -7,6 +7,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  HeightRule,
   ImageRun,
   Packer,
   Paragraph,
@@ -49,11 +50,23 @@ export interface PriceListPayload {
   leftHeader?: string;
   rightHeader?: string;
   showPrice: boolean;
+  priceBold?: boolean; // whether the price is shown in bold
   imagesPerPage?: number;
+  imageGap?: number; // horizontal space (px) between the frame and the text
+  frameBorderColor?: string; // hex colour of the image frame border
   fonts?: PriceListFonts;
   headerStyle?: PriceListStyle;
   subtitleStyle?: PriceListStyle;
   rows: PriceListRow[];
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const per = Math.max(1, size);
+  const pages: T[][] = [];
+  for (let index = 0; index < items.length; index += per) {
+    pages.push(items.slice(index, index + per));
+  }
+  return pages.length > 0 ? pages : [[]];
 }
 
 export type PriceListFormat = "pdf" | "docx";
@@ -133,33 +146,50 @@ function buildHtml(payload: PriceListPayload): string {
   const subtitleColor = `#${normalizeColor(payload.subtitleStyle?.color, "555555")}`;
 
   const frame = imgHeight;
-  const rowsHtml = payload.rows
-    .map((row) => {
-      const imageCell = `<td class="img-cell"><div class="img-box" style="width:${frame}px;height:${frame}px;">${
-        row.imageDataUrl
-          ? `<img src="${row.imageDataUrl}" alt="" />`
-          : `<span class="noimg">Sin imagen</span>`
-      }</div></td>`;
-      const meta = [row.series, row.material, row.size]
-        .filter((value) => value && value.trim())
-        .map((value) => `<div class="meta">${escapeHtml(value)}</div>`)
-        .join("");
-      const yearLine = row.year ? `<div class="meta">${escapeHtml(row.year)}</div>` : "";
-      const priceLine =
-        payload.showPrice && row.price
-          ? `<div class="price">${escapeHtml(row.price)}</div>`
-          : "";
-      const details = [
-        `<div class="title">${escapeHtml(row.title || "Sin título")}</div>`,
-        meta,
-        yearLine,
-        priceLine
-      ]
-        .filter(Boolean)
-        .join("");
-      return `<tr>${imageCell}<td class="info-cell">${details}</td></tr>`;
+  const gap = Math.max(0, Math.round(payload.imageGap ?? 16));
+  const borderColor = `#${normalizeColor(payload.frameBorderColor, "E4E4E4")}`;
+
+  function renderRow(row: PriceListRow): string {
+    const fit = fitInSquare(row, frame);
+    const innerImg = row.imageDataUrl
+      ? `<img src="${row.imageDataUrl}" alt="" style="width:${fit.width}px;height:${fit.height}px;object-fit:fill;" />`
+      : `<span class="noimg">Sin imagen</span>`;
+    const imageCell = `<td class="img-cell"><div class="img-box" style="width:${frame}px;height:${frame}px;">${innerImg}</div></td>`;
+    const meta = [row.series, row.material, row.size]
+      .filter((value) => value && value.trim())
+      .map((value) => `<div class="meta">${escapeHtml(value)}</div>`)
+      .join("");
+    const yearLine = row.year ? `<div class="meta">${escapeHtml(row.year)}</div>` : "";
+    const priceLine =
+      payload.showPrice && row.price
+        ? `<div class="price">${escapeHtml(row.price)}</div>`
+        : "";
+    const details = [
+      `<div class="title">${escapeHtml(row.title || "Sin título")}</div>`,
+      meta,
+      yearLine,
+      priceLine
+    ]
+      .filter(Boolean)
+      .join("");
+    return `<tr>${imageCell}<td class="info-cell">${details}</td></tr>`;
+  }
+
+  // Split into pages so the PDF breaks cleanly (a painting never gets cut in
+  // half across a page). Each page holds exactly `perPage` artworks.
+  const pages = chunk(payload.rows, perPage);
+  const pagesHtml = pages
+    .map((pageRows, index) => {
+      const rows = pageRows.map(renderRow).join("");
+      const isLast = index === pages.length - 1;
+      const breakStyle = isLast
+        ? ""
+        : ' style="page-break-after: always; break-after: page;"';
+      return `<div class="page"${breakStyle}><table>${rows}</table></div>`;
     })
     .join("");
+
+  const priceWeight = payload.priceBold === false ? 400 : 700;
 
   const subHeaderRow =
     payload.leftHeader || payload.rightHeader
@@ -200,21 +230,24 @@ function buildHtml(payload: PriceListPayload): string {
   .subhead-left { font-weight: 600; }
   .subhead-right { text-align: right; }
   .rule { border: none; border-top: 1.5px solid #1c1c1c; margin: 12px 0 18px; }
+  .page { }
   table { width: 100%; border-collapse: collapse; }
-  tr { border-bottom: 0.6px solid #d8d8d8; }
+  tr { border-bottom: 0.6px solid #d8d8d8; page-break-inside: avoid; break-inside: avoid; }
+  /* A grey line above the first painting on every page (the one that was
+     otherwise missing at the top of a new page). */
+  table tr:first-child { border-top: 0.6px solid #d8d8d8; }
   td { padding: 12px 10px; vertical-align: middle; }
-  .img-cell { width: ${frame + 24}px; text-align: left; }
+  .img-cell { width: ${frame + 12}px; text-align: left; padding-right: 0; }
   .img-box {
     display: flex; align-items: center; justify-content: center;
-    background: #fafafa; border: 0.6px solid #e4e4e4;
+    background: #fafafa; border: 1px solid ${borderColor};
   }
-  .img-box img { width: 100%; height: 100%; object-fit: contain; }
   .noimg { font-size: 10px; color: #aaa; font-family: Arial, sans-serif; }
-  .info-cell { text-align: left; }
+  .info-cell { text-align: left; padding-left: ${gap}px; }
   .info-cell .title { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
   .info-cell .meta { font-size: 12.5px; color: #444; line-height: 1.5; }
   .info-cell .price {
-    font-size: 14px; font-weight: 600; color: #1c1c1c; margin-top: 14px;
+    font-size: 14px; font-weight: ${priceWeight}; color: #1c1c1c; margin-top: 14px;
   }
 </style></head>
 <body>
@@ -224,7 +257,7 @@ function buildHtml(payload: PriceListPayload): string {
     ${payload.subtitle ? `<p class="subtitle">${escapeHtml(payload.subtitle)}</p>` : ""}
   </div>
   <hr class="rule" />
-  <table>${rowsHtml}</table>
+  ${pagesHtml}
 </body></html>`;
 }
 
@@ -262,28 +295,23 @@ const INK = "1C1C1C";
 const GREY = "444444";
 const LINE = "D8D8D8";
 
-function bottomBorderCell(children: Paragraph[], width?: number): TableCell {
-  return new TableCell({
-    children,
-    verticalAlign: VerticalAlign.CENTER,
-    width: width ? { size: width, type: WidthType.DXA } : undefined,
-    margins: { top: 120, bottom: 120, left: 80, right: 80 },
-    borders: {
-      top: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
-      left: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
-      right: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
-      bottom: { style: BorderStyle.SINGLE, size: 4, color: LINE }
-    }
-  });
-}
-
 async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
   const fonts = payload.fonts ?? DEFAULT_FONTS;
   const perPage = payload.imagesPerPage ?? 4;
   const imgHeight = Math.round(rowImageHeight(perPage) * 0.85);
 
   const frame = imgHeight;
-  const tableRows = payload.rows.map((row) => {
+  const frameTwips = frame * 15;
+  const gapTwips = Math.round((payload.imageGap ?? 16) * 15);
+  const priceBold = payload.priceBold !== false;
+  // Word shows faint non-printing gridlines wherever a cell edge has no border,
+  // which reads as unwanted grey vertical lines. We instead paint every edge:
+  // grey horizontals (the divider the user wants) and *white* verticals (which
+  // are invisible on the page and suppress the gridlines).
+  const grayBorder = { style: BorderStyle.SINGLE, size: 4, color: LINE } as const;
+  const whiteBorder = { style: BorderStyle.SINGLE, size: 4, color: "FFFFFF" } as const;
+
+  function buildRow(row: PriceListRow): TableRow {
     const cells: TableCell[] = [];
 
     const decoded = decodeDataUrl(row.imageDataUrl);
@@ -291,6 +319,7 @@ async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
     const imageChildren: Paragraph[] = decoded
       ? [
           new Paragraph({
+            alignment: AlignmentType.CENTER,
             children: [
               new ImageRun({
                 data: decoded.buffer,
@@ -301,7 +330,22 @@ async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
           })
         ]
       : [new Paragraph({ children: [new TextRun({ text: "", size: 2 })] })];
-    cells.push(bottomBorderCell(imageChildren, Math.round((frame + 24) * 15)));
+    // Only horizontal dividers in the Word document (no vertical frame lines);
+    // the image is still centred in a fixed-size slot per row.
+    cells.push(
+      new TableCell({
+        children: imageChildren,
+        verticalAlign: VerticalAlign.CENTER,
+        width: { size: frameTwips, type: WidthType.DXA },
+        margins: { top: 120, bottom: 120, left: 40, right: 40 },
+        borders: {
+          top: grayBorder,
+          left: whiteBorder,
+          right: whiteBorder,
+          bottom: grayBorder
+        }
+      })
+    );
 
     const detailParagraphs: Paragraph[] = [
       new Paragraph({
@@ -331,14 +375,65 @@ async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
         new Paragraph({
           spacing: { before: 200 },
           children: [
-            new TextRun({ text: row.price, bold: true, size: 24, color: INK, font: fonts.body })
+            new TextRun({
+              text: row.price,
+              bold: priceBold,
+              size: 24,
+              color: INK,
+              font: fonts.body
+            })
           ]
         })
       );
     }
-    cells.push(bottomBorderCell(detailParagraphs));
+    cells.push(
+      new TableCell({
+        children: detailParagraphs,
+        verticalAlign: VerticalAlign.CENTER,
+        margins: { top: 120, bottom: 120, left: gapTwips, right: 80 },
+        borders: {
+          top: grayBorder,
+          left: whiteBorder,
+          right: whiteBorder,
+          bottom: grayBorder
+        }
+      })
+    );
 
-    return new TableRow({ children: cells });
+    return new TableRow({
+      children: cells,
+      cantSplit: true,
+      height: { value: frameTwips + 240, rule: HeightRule.ATLEAST }
+    });
+  }
+
+  const tableBorders = {
+    top: grayBorder,
+    bottom: grayBorder,
+    left: whiteBorder,
+    right: whiteBorder,
+    insideHorizontal: grayBorder,
+    insideVertical: whiteBorder
+  };
+
+  // One table per page so a painting is never split across pages. Each page
+  // (after the first) starts with a paragraph that forces a page break, which
+  // Word honours far more reliably than a bare page-break run.
+  const pages = chunk(payload.rows, perPage);
+  const pageBlocks: (Table | Paragraph)[] = [];
+  pages.forEach((pageRows, index) => {
+    if (index > 0) {
+      pageBlocks.push(
+        new Paragraph({ pageBreakBefore: true, spacing: { after: 0 }, children: [] })
+      );
+    }
+    pageBlocks.push(
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: tableBorders,
+        rows: pageRows.map(buildRow)
+      })
+    );
   });
 
   const headerChildren: Paragraph[] = [];
@@ -405,13 +500,7 @@ async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
     sections: [
       {
         properties: {},
-        children: [
-          ...headerChildren,
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            rows: tableRows
-          })
-        ]
+        children: [...headerChildren, ...pageBlocks]
       }
     ]
   });
