@@ -225,6 +225,10 @@ p {
   background: #e08f8f;
 }
 
+.dot-factor {
+  background: #8fd0b4;
+}
+
 .library-path {
   border-top: 1px solid #33453a;
   color: #9aa89f;
@@ -1677,6 +1681,96 @@ button.ghost.danger:hover {
   width: 150px;
 }
 
+/* exhibition listed-price cell (edit / confirm) -------------------------- */
+
+.pick-price-cell {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.pick-price-value {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 84px;
+  text-align: right;
+}
+
+.pick-price-empty {
+  color: var(--muted);
+  font-style: italic;
+  min-width: 84px;
+  text-align: right;
+}
+
+.pick-price-edit {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.pick-price-edit:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.pick-price-input {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  display: flex;
+  padding: 0 0.55rem;
+}
+
+.pick-price-input input {
+  border: none;
+  outline: none;
+  padding: 0.35rem 0;
+  text-align: right;
+  width: 90px;
+}
+
+.pick-price-eur {
+  color: var(--muted);
+  padding-left: 0.25rem;
+}
+
+.pick-price-ok {
+  background: var(--add-bg, #e7f4ec);
+  border: 1px solid var(--add, #4f9d69);
+  border-radius: 8px;
+  color: #205c37;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.pick-price-ok:hover {
+  background: #d6ecdd;
+}
+
+.pick-price-cancel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.pick-price-cancel:hover {
+  background: var(--line-soft);
+}
+
 /* movement rows (list + modal) ------------------------------------------- */
 
 .movement-row {
@@ -2481,9 +2575,11 @@ button.ghost.danger:hover {
   align-items: center;
   background: #fafafa;
   border: 1px solid #e4e4e4;
+  box-sizing: border-box;
   display: flex;
   justify-content: center;
   overflow: hidden;
+  padding: 8px;
 }
 .pl-sheet-noimg {
   color: #aaa;
@@ -2594,4 +2690,193 @@ button.ghost.danger:hover {
 }
 .leave-choice.ghost-choice {
   background: transparent;
+}
+
+/* pricing settings + price history --------------------------------------- */
+.pricing-page .page-head {
+  align-items: flex-end;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+.pricing-block {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  margin-bottom: 1rem;
+  padding: 1rem 1.1rem;
+}
+.factor-table {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+.factor-row {
+  align-items: center;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: 1fr 1.4fr 1fr auto;
+}
+.factor-row.tax-row {
+  grid-template-columns: 2fr 1.3fr 1fr auto;
+}
+.factor-row.period-row {
+  grid-template-columns: 1.4fr 1fr auto;
+}
+
+/* size-type cards (factors grouped by size band) ------------------------- */
+.size-type-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.6rem;
+}
+.size-type-card {
+  background: var(--line-soft, #faf7f0);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.7rem 0.85rem;
+}
+.size-type-head {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+}
+.size-type-toggle {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 0.2rem;
+}
+.size-type-range {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.size-type-range label {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 0.9rem;
+  gap: 0.35rem;
+}
+.size-type-range label input {
+  width: 84px;
+}
+.size-type-label {
+  flex: 1;
+  min-width: 160px;
+}
+.size-type-body {
+  border-top: 1px solid var(--line);
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+}
+.factor-head {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.factor-head span {
+  padding-left: 0.1rem;
+}
+.price-current-list {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+.price-current-row {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  cursor: pointer;
+  display: grid;
+  font-weight: 500;
+  gap: 0.7rem;
+  grid-template-columns: 2fr 1.3fr 1.3fr 1fr;
+  padding: 0.6rem 0.8rem;
+  text-align: left;
+}
+.price-current-row:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.price-current-row .pc-title {
+  font-weight: 600;
+}
+.price-current-row .pc-series,
+.price-current-row .pc-size {
+  color: var(--muted);
+}
+.price-current-row .pc-price {
+  font-weight: 700;
+  text-align: right;
+}
+
+.price-history {
+  padding-top: 0.4rem;
+}
+.ph-summary {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(3, 1fr);
+  margin-bottom: 0.9rem;
+}
+.ph-summary > div {
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.7rem 0.85rem;
+}
+.ph-summary strong {
+  font-size: 1.15rem;
+}
+.ph-controls {
+  align-items: center;
+  display: flex;
+  gap: 1.2rem;
+  margin-bottom: 0.6rem;
+}
+.price-chart {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.8rem;
+}
+.chart-axis {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.chart-tip {
+  fill: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.6rem;
+}
+.legend-item {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 0.85rem;
+  gap: 0.4rem;
+}
+.legend-swatch {
+  border-radius: 3px;
+  display: inline-block;
+  height: 12px;
+  width: 12px;
 }

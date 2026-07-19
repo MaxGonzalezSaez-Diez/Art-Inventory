@@ -1,8 +1,19 @@
 import { BrowserWindow, dialog, shell, type SaveDialogOptions } from "electron";
 import { writeFile, unlink } from "fs/promises";
+import { execFile } from "child_process";
 import { tmpdir } from "os";
 import path from "path";
 import { randomUUID } from "crypto";
+
+// macOS Word opens files with the `com.apple.quarantine` attribute in read-only
+// Protected View. Files written by an unsigned Electron app can inherit it, so
+// strip it (best effort) before opening the document for editing.
+function clearQuarantine(filePath: string): Promise<void> {
+  if (process.platform !== "darwin") return Promise.resolve();
+  return new Promise((resolve) => {
+    execFile("xattr", ["-d", "com.apple.quarantine", filePath], () => resolve());
+  });
+}
 import {
   AlignmentType,
   BorderStyle,
@@ -148,9 +159,14 @@ function buildHtml(payload: PriceListPayload): string {
   const frame = imgHeight;
   const gap = Math.max(0, Math.round(payload.imageGap ?? 16));
   const borderColor = `#${normalizeColor(payload.frameBorderColor, "E4E4E4")}`;
+  // Keep the image strictly inside the frame so the border is never covered by
+  // the (often white-edged) picture. The box is `frame`, the image fits the
+  // padded inner area.
+  const framePad = 8;
+  const innerFrame = Math.max(20, frame - 2 * (framePad + 1));
 
   function renderRow(row: PriceListRow): string {
-    const fit = fitInSquare(row, frame);
+    const fit = fitInSquare(row, innerFrame);
     const innerImg = row.imageDataUrl
       ? `<img src="${row.imageDataUrl}" alt="" style="width:${fit.width}px;height:${fit.height}px;object-fit:fill;" />`
       : `<span class="noimg">Sin imagen</span>`;
@@ -241,6 +257,7 @@ function buildHtml(payload: PriceListPayload): string {
   .img-box {
     display: flex; align-items: center; justify-content: center;
     background: #fafafa; border: 1px solid ${borderColor};
+    padding: ${framePad}px; overflow: hidden;
   }
   .noimg { font-size: 10px; color: #aaa; font-family: Arial, sans-serif; }
   .info-cell { text-align: left; padding-left: ${gap}px; }
@@ -310,34 +327,75 @@ async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
   // are invisible on the page and suppress the gridlines).
   const grayBorder = { style: BorderStyle.SINGLE, size: 4, color: LINE } as const;
   const whiteBorder = { style: BorderStyle.SINGLE, size: 4, color: "FFFFFF" } as const;
+  // The frame box drawn around each painting (same idea as the PDF).
+  const frameBoxColor = normalizeColor(payload.frameBorderColor, "E4E4E4");
+  const frameBorder = { style: BorderStyle.SINGLE, size: 4, color: frameBoxColor } as const;
+  const boxBorders = {
+    top: frameBorder,
+    bottom: frameBorder,
+    left: frameBorder,
+    right: frameBorder,
+    insideHorizontal: frameBorder,
+    insideVertical: frameBorder
+  };
+  // Leave a margin inside the box so the picture never overlaps the border.
+  const boxInsetPx = 12;
 
   function buildRow(row: PriceListRow): TableRow {
     const cells: TableCell[] = [];
 
     const decoded = decodeDataUrl(row.imageDataUrl);
-    const { width, height } = fitInSquare(row, frame);
-    const imageChildren: Paragraph[] = decoded
-      ? [
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [
-              new ImageRun({
-                data: decoded.buffer,
-                type: decoded.type,
-                transformation: { width, height }
-              })
-            ]
-          })
-        ]
-      : [new Paragraph({ children: [new TextRun({ text: "", size: 2 })] })];
-    // Only horizontal dividers in the Word document (no vertical frame lines);
-    // the image is still centred in a fixed-size slot per row.
+    const { width, height } = fitInSquare(row, Math.max(20, frame - boxInsetPx * 2));
+    const imageParagraph: Paragraph = decoded
+      ? new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new ImageRun({
+              data: decoded.buffer,
+              type: decoded.type,
+              transformation: { width, height }
+            })
+          ]
+        })
+      : new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: "", size: 2 })]
+        });
+
+    // A one-cell nested table forms a clean box (frame) around the picture.
+    // Because it is nested it doesn't add any vertical lines to the main table.
+    const frameBox = new Table({
+      width: { size: frameTwips, type: WidthType.DXA },
+      borders: boxBorders,
+      rows: [
+        new TableRow({
+          cantSplit: true,
+          height: { value: frameTwips, rule: HeightRule.ATLEAST },
+          children: [
+            new TableCell({
+              children: [imageParagraph],
+              verticalAlign: VerticalAlign.CENTER,
+              width: { size: frameTwips, type: WidthType.DXA },
+              margins: {
+                top: boxInsetPx * 15,
+                bottom: boxInsetPx * 15,
+                left: boxInsetPx * 15,
+                right: boxInsetPx * 15
+              }
+            })
+          ]
+        })
+      ]
+    });
+
+    // The outer image cell keeps only the horizontal row divider (grey top and
+    // bottom); its verticals are white so no grey grid line appears.
     cells.push(
       new TableCell({
-        children: imageChildren,
+        children: [frameBox],
         verticalAlign: VerticalAlign.CENTER,
-        width: { size: frameTwips, type: WidthType.DXA },
-        margins: { top: 120, bottom: 120, left: 40, right: 40 },
+        width: { size: frameTwips + 240, type: WidthType.DXA },
+        margins: { top: 140, bottom: 140, left: 40, right: 120 },
         borders: {
           top: grayBorder,
           left: whiteBorder,
@@ -403,7 +461,7 @@ async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
     return new TableRow({
       children: cells,
       cantSplit: true,
-      height: { value: frameTwips + 240, rule: HeightRule.ATLEAST }
+      height: { value: frameTwips + boxInsetPx * 30 + 320, rule: HeightRule.ATLEAST }
     });
   }
 
@@ -543,6 +601,7 @@ export async function generatePriceList(
   const buffer =
     format === "pdf" ? await renderPdf(payload) : await buildDocx(payload);
   await writeFile(result.filePath, buffer);
+  await clearQuarantine(result.filePath);
   void shell.openPath(result.filePath);
   return result.filePath;
 }

@@ -10,6 +10,7 @@ import {
   type SetStateAction
 } from "react";
 import type {
+  AppSettings,
   Artwork,
   ArtworkImage,
   ArtworkInput,
@@ -23,7 +24,10 @@ import type {
   LookupOption,
   Movement,
   MovementContext,
-  MovementInput
+  MovementInput,
+  FactorPeriod,
+  SizeType,
+  TaxRate
 } from "../main/types/inventory";
 
 type Page =
@@ -33,14 +37,15 @@ type Page =
   | "contacts"
   | "contactDetail"
   | "exhibitions"
-  | "pricelist";
+  | "pricelist"
+  | "pricing";
 
 interface PriceListPreset {
   exhibitionId?: string;
   artworkIds?: string[];
 }
 type FormTab = "info" | "movimientos";
-type DetailTab = "info" | "movimientos";
+type DetailTab = "info" | "movimientos" | "precio";
 
 const emptyArtwork: ArtworkInput = {
   title: "",
@@ -204,6 +209,9 @@ export function App() {
           <NavButton active={page === "pricelist"} onClick={() => guarded(() => openPriceList(null))}>
             <span className="nav-dot dot-price" /> Lista de precios
           </NavButton>
+          <NavButton active={page === "pricing"} onClick={() => guarded(() => goTo("pricing"))}>
+            <span className="nav-dot dot-factor" /> Factores y precios
+          </NavButton>
         </nav>
         <div className="library-path">
           <span>Carpeta local</span>
@@ -256,6 +264,12 @@ export function App() {
               setInventory(data);
               goBack();
             }}
+            onOpenExhibition={(exhibitionId) =>
+              guarded(() => {
+                setExhibitionToOpen(exhibitionId);
+                goTo("exhibitions");
+              })
+            }
           />
         ) : page === "contacts" ? (
           <ContactsPage
@@ -305,6 +319,13 @@ export function App() {
           <PriceListPage
             inventory={inventory}
             preset={pricelistPreset}
+            onError={setMessage}
+            onToast={setToast}
+          />
+        ) : page === "pricing" ? (
+          <PricingSettingsPage
+            inventory={inventory}
+            setInventory={setInventory}
             onError={setMessage}
             onToast={setToast}
           />
@@ -1592,6 +1613,21 @@ function MovementModal({
                     onChange={(value) => set({ exhibitionId: value })}
                   />
                 )}
+                {(m.context === "gallery" || m.context === "exhibition") && (
+                  <label className="field">
+                    Recibido (parte para la artista, tras la comisión)
+                    <input
+                      inputMode="decimal"
+                      placeholder="ej. 700 €"
+                      value={m.received ?? ""}
+                      onChange={(event) => set({ received: event.target.value })}
+                    />
+                    <span className="muted small-note">
+                      La galería suele quedarse una comisión; aquí va lo que
+                      realmente recibe la artista.
+                    </span>
+                  </label>
+                )}
               </div>
             </>
           ) : (
@@ -1896,7 +1932,8 @@ function ArtworkDetail({
   setInventory,
   onEdit,
   onBack,
-  onDeleted
+  onDeleted,
+  onOpenExhibition
 }: {
   artwork: Artwork;
   inventory: InventoryData;
@@ -1904,6 +1941,7 @@ function ArtworkDetail({
   onEdit: () => void;
   onBack: () => void;
   onDeleted: (data: InventoryData) => void;
+  onOpenExhibition: (exhibitionId: string) => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("info");
   const [openMovement, setOpenMovement] = useState<Movement | null>(null);
@@ -1964,7 +2002,18 @@ function ArtworkDetail({
           >
             Movimientos ({movements.length})
           </SubTab>
+          <SubTab active={tab === "precio"} onClick={() => setTab("precio")}>
+            Precio histórico
+          </SubTab>
         </div>
+
+        {tab === "precio" && (
+          <PriceHistoryTab
+            artwork={artwork}
+            inventory={inventory}
+            onOpenExhibition={onOpenExhibition}
+          />
+        )}
 
         {tab === "info" && (
           <dl className="metadata">
@@ -4061,9 +4110,13 @@ function ExhibitionsPage({
   }, [openId]);
 
   // Close any open exhibition form when the user clicks the tab again (e.g.
-  // after choosing "salir sin guardar").
+  // after choosing "salir sin guardar"). Only react to real changes — running
+  // this on mount would clobber an exhibition opened via `openId`.
+  const lastResetToken = useRef(resetToken);
   useEffect(() => {
-    if (resetToken !== undefined && resetToken > 0) setEditing(null);
+    if (resetToken === lastResetToken.current) return;
+    lastResetToken.current = resetToken;
+    setEditing(null);
   }, [resetToken]);
 
   const countries = uniqueValues(inventory.exhibitions.map((item) => item.country)).sort(
@@ -4219,6 +4272,74 @@ function ExhibitionsPage({
   );
 }
 
+function ExhibitionPriceCell({
+  value,
+  onCommit
+}: {
+  value: string;
+  onCommit: (next: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  function commit() {
+    onCommit(draft.trim());
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDraft(value);
+    setEditing(false);
+  }
+
+  if (!editing) {
+    const shown = formatEuro(value);
+    return (
+      <div className="pick-price-cell">
+        <span className={shown ? "pick-price-value" : "pick-price-empty"}>
+          {shown || "Sin precio"}
+        </span>
+        <button
+          type="button"
+          className="pick-price-edit"
+          onClick={() => setEditing(true)}
+        >
+          {shown ? "Editar" : "Poner precio"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pick-price-cell editing">
+      <div className="pick-price-input">
+        <input
+          autoFocus
+          inputMode="decimal"
+          placeholder="0"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commit();
+            if (event.key === "Escape") cancel();
+          }}
+        />
+        <span className="pick-price-eur">€</span>
+      </div>
+      <button type="button" className="pick-price-ok" onClick={commit}>
+        Guardar
+      </button>
+      <button type="button" className="pick-price-cancel" onClick={cancel}>
+        Cancelar
+      </button>
+    </div>
+  );
+}
+
 function ExhibitionForm({
   inventory,
   setInventory,
@@ -4322,21 +4443,26 @@ function ExhibitionForm({
     artworkSort
   );
 
-  // A piece sold before this exhibition cannot be shown in it. If the
-  // exhibition has no date yet, any sold piece is blocked to be safe.
+  // A piece can only be blocked from an exhibition that happened *after* it was
+  // sold. We only block when we actually know both dates and the sale is on or
+  // before the exhibition start — otherwise we allow it (a piece sold in 2026
+  // can still be added to a 2024 show).
   const exhStartMs = dateToMs(form.startDate);
-  const soldBlockedIds = inventory.artworks
-    .filter((artwork) => {
-      const sale = inventory.movements.find(
-        (movement) =>
-          movement.artworkId === artwork.id && movementKind(movement.type) === "sale"
-      );
-      if (!sale) return false;
-      if (!Number.isFinite(exhStartMs)) return true;
-      const saleMs = dateToMs(sale.date);
-      return !Number.isFinite(saleMs) || saleMs <= exhStartMs;
-    })
-    .map((artwork) => artwork.id);
+  const soldBlockedIds = Number.isFinite(exhStartMs)
+    ? inventory.artworks
+        .filter((artwork) =>
+          inventory.movements.some((movement) => {
+            if (
+              movement.artworkId !== artwork.id ||
+              movementKind(movement.type) !== "sale"
+            )
+              return false;
+            const saleMs = dateToMs(movement.date);
+            return Number.isFinite(saleMs) && (saleMs as number) <= exhStartMs;
+          })
+        )
+        .map((artwork) => artwork.id)
+    : [];
 
   return (
     <div className="form-card">
@@ -4483,16 +4609,11 @@ function ExhibitionForm({
                       {formatSize(artwork) || artwork.id}
                     </span>
                   </button>
-                  <input
-                    className="pick-price"
-                    placeholder="Precio de lista"
+                  <ExhibitionPriceCell
                     value={listed[artwork.id] ?? ""}
-                    onChange={(event) => {
+                    onCommit={(next) => {
                       markDirty();
-                      setListed((current) => ({
-                        ...current,
-                        [artwork.id]: event.target.value
-                      }));
+                      setListed((current) => ({ ...current, [artwork.id]: next }));
                     }}
                   />
                   <button
@@ -4537,7 +4658,7 @@ function ExhibitionForm({
           <ArtworkPickerModal
             inventory={inventory}
             excludeIds={[...selected, ...soldBlockedIds]}
-            notice="Las obras ya vendidas antes de esta exposición no aparecen en la lista."
+            notice="No aparecen las obras vendidas antes de la fecha de inicio de esta exposición."
             title="Añadir obras a la exposición"
             onConfirm={(ids) => {
               markDirty();
@@ -4742,7 +4863,8 @@ function MovementDetailModal({
           : "En exposición"
     ]);
   } else {
-    if (movement.price) rows.push(["Precio", movement.price]);
+    if (movement.price) rows.push(["Precio", formatEuro(movement.price)]);
+    if (movement.received) rows.push(["Recibido (neto)", formatEuro(movement.received)]);
     if (movement.context === "gallery") rows.push(["Contexto", "A través de galería"]);
     if (movement.context === "exhibition")
       rows.push([
@@ -4932,6 +5054,866 @@ function toSlashDate(value?: string): string {
   if (!value) return "";
   const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value);
   return match ? `${match[1]}/${match[2]}/${match[3]}` : value;
+}
+
+/* ----------------------------------------------------------------------------
+ * Pricing: factors, tax and price history
+ * ------------------------------------------------------------------------- */
+
+function sizeSumCm(artwork: Artwork): number {
+  const h = toCm(artwork.height, artwork.unit) ?? 0;
+  const w = toCm(artwork.width, artwork.unit) ?? 0;
+  return h + w;
+}
+
+// Effective date of a factor/tax period as a timestamp. An empty date means
+// "from the beginning of time".
+function periodMs(from?: string): number {
+  if (!from || !from.trim()) return -Infinity;
+  const ms = dateToMs(from);
+  return Number.isFinite(ms) ? (ms as number) : -Infinity;
+}
+
+// Fractional year (year + month share) so mid-year changes plot at the right
+// spot on the time axis.
+function fractionalYear(from?: string): number | null {
+  if (!from) return null;
+  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(from.trim());
+  if (match) return Number(match[3]) + (Number(match[2]) - 1) / 12;
+  const y = Number(String(from).replace(/[^0-9]/g, "").slice(0, 4));
+  return Number.isFinite(y) && y > 0 ? y : null;
+}
+
+// The size band whose [fromSum, toSum] range covers the size (toSum 0 = no cap).
+function sizeTypeForSum(types: SizeType[], sizeSum: number): SizeType | null {
+  const covering = types.filter(
+    (t) =>
+      sizeSum >= (Number(t.fromSum) || 0) &&
+      (!t.toSum || sizeSum <= Number(t.toSum))
+  );
+  if (covering.length === 0) return null;
+  covering.sort((a, b) => (a.toSum || Infinity) - (b.toSum || Infinity));
+  return covering[0];
+}
+
+// The factor that applies to a size type at a given moment (latest period whose
+// effective date is on or before that moment; falls back to the earliest one).
+function factorAt(type: SizeType, dateMs: number): number | null {
+  const periods = type.factors.filter((p) => p.factor > 0);
+  if (periods.length === 0) return null;
+  const sorted = [...periods].sort((a, b) => periodMs(a.from) - periodMs(b.from));
+  let chosen = sorted[0];
+  for (const p of sorted) {
+    if (periodMs(p.from) <= dateMs) chosen = p;
+  }
+  return chosen.factor;
+}
+
+function factorForDate(
+  settings: AppSettings,
+  sizeSum: number,
+  dateMs: number
+): number | null {
+  const type = sizeTypeForSum(settings.sizeTypes, sizeSum);
+  if (!type) return null;
+  return factorAt(type, dateMs);
+}
+
+function basePriceAt(
+  artwork: Artwork,
+  settings: AppSettings,
+  dateMs: number
+): number | null {
+  const factor = factorForDate(settings, sizeSumCm(artwork), dateMs);
+  if (factor == null) return null;
+  return sizeSumCm(artwork) * factor;
+}
+
+// Tax rate for a country effective at a given moment (latest period on or before
+// that moment; falls back to the earliest one).
+function taxRateAt(settings: AppSettings, country: string, dateMs: number): number {
+  const forCountry = settings.taxRates.filter((t) => t.country === country);
+  if (forCountry.length === 0) return 0;
+  const sorted = [...forCountry].sort((a, b) => periodMs(a.from) - periodMs(b.from));
+  let chosen = sorted[0];
+  for (const t of sorted) {
+    if (periodMs(t.from) <= dateMs) chosen = t;
+  }
+  return chosen.rate;
+}
+
+function taxCountries(settings: AppSettings): string[] {
+  return uniqueValues(settings.taxRates.map((t) => t.country)).filter((c) => c.trim());
+}
+
+// Years at which the size-band factor changes, so the history line steps at the
+// right places.
+function factorChangeYears(type: SizeType | null): number[] {
+  if (!type) return [];
+  const ys = type.factors
+    .map((p) => fractionalYear(p.from))
+    .filter((y): y is number => y != null);
+  return uniqueNumbers(ys).sort((a, b) => a - b);
+}
+
+function uniqueNumbers(values: number[]): number[] {
+  return Array.from(new Set(values));
+}
+
+function formatMoney(value: number): string {
+  return `${Math.round(value).toLocaleString("es-ES")} €`;
+}
+
+function parseMoney(value?: string): number | null {
+  if (!value) return null;
+  const cleaned = value.replace(/[^0-9.,]/g, "").replace(/\.(?=\d{3}\b)/g, "").replace(",", ".");
+  const num = parseFloat(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
+
+interface ChartSeries {
+  label: string;
+  color: string;
+  points: Array<{ x: number; y: number }>;
+}
+interface ChartDot {
+  x: number;
+  y: number;
+  label: string;
+  exhibitionId?: string;
+}
+
+function PriceLineChart({
+  series,
+  dots,
+  onDotClick
+}: {
+  series: ChartSeries[];
+  dots: ChartDot[];
+  onDotClick?: (exhibitionId: string) => void;
+}) {
+  const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(
+    null
+  );
+  const width = 640;
+  const height = 340;
+  const pad = { top: 20, right: 20, bottom: 40, left: 64 };
+
+  const allX = [
+    ...series.flatMap((s) => s.points.map((p) => p.x)),
+    ...dots.map((d) => d.x)
+  ];
+  const allY = [
+    ...series.flatMap((s) => s.points.map((p) => p.y)),
+    ...dots.map((d) => d.y)
+  ];
+  if (allX.length === 0 || allY.length === 0) {
+    return <p className="muted">No hay datos suficientes para dibujar la gráfica.</p>;
+  }
+  let minX = Math.min(...allX);
+  let maxX = Math.max(...allX);
+  if (minX === maxX) {
+    minX -= 1;
+    maxX += 1;
+  }
+  const maxY = Math.max(...allY) * 1.1 || 1;
+
+  const sx = (x: number) =>
+    pad.left + ((x - minX) / (maxX - minX)) * (width - pad.left - pad.right);
+  const sy = (y: number) =>
+    height - pad.bottom - (y / maxY) * (height - pad.top - pad.bottom);
+
+  const yTicks = 4;
+  const xYears: number[] = [];
+  for (let y = Math.ceil(minX); y <= Math.floor(maxX); y++) xYears.push(y);
+
+  return (
+    <div className="price-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img">
+        {Array.from({ length: yTicks + 1 }, (_, i) => {
+          const value = (maxY / yTicks) * i;
+          const y = sy(value);
+          return (
+            <g key={i}>
+              <line
+                x1={pad.left}
+                x2={width - pad.right}
+                y1={y}
+                y2={y}
+                stroke="#e7e0d3"
+              />
+              <text x={pad.left - 8} y={y + 4} textAnchor="end" className="chart-axis">
+                {formatMoney(value)}
+              </text>
+            </g>
+          );
+        })}
+        {xYears.map((yr) => (
+          <text
+            key={yr}
+            x={sx(yr)}
+            y={height - pad.bottom + 20}
+            textAnchor="middle"
+            className="chart-axis"
+          >
+            {yr}
+          </text>
+        ))}
+        {series.map((s) => (
+          <g key={s.label}>
+            {s.points.length > 1 && (
+              <polyline
+                fill="none"
+                stroke={s.color}
+                strokeWidth={2.5}
+                points={s.points.map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ")}
+              />
+            )}
+            {s.points.map((p, i) => (
+              <circle
+                key={i}
+                cx={sx(p.x)}
+                cy={sy(p.y)}
+                r={4}
+                fill={s.color}
+                onMouseEnter={() =>
+                  setHover({
+                    x: sx(p.x),
+                    y: sy(p.y),
+                    text: `${s.label}: ${formatMoney(p.y)} (${p.x})`
+                  })
+                }
+                onMouseLeave={() => setHover(null)}
+              />
+            ))}
+          </g>
+        ))}
+        {dots.map((d, i) => (
+          <circle
+            key={`dot-${i}`}
+            cx={sx(d.x)}
+            cy={sy(d.y)}
+            r={6}
+            fill="#c0392b"
+            stroke="#fff"
+            strokeWidth={1.5}
+            style={{ cursor: d.exhibitionId ? "pointer" : "default" }}
+            onMouseEnter={() =>
+              setHover({ x: sx(d.x), y: sy(d.y), text: `${d.label}: ${formatMoney(d.y)}` })
+            }
+            onMouseLeave={() => setHover(null)}
+            onClick={() => d.exhibitionId && onDotClick?.(d.exhibitionId)}
+          />
+        ))}
+        {hover && (
+          <g>
+            <rect
+              x={Math.min(Math.max(hover.x - 80, 2), width - 162)}
+              y={Math.max(hover.y - 34, 2)}
+              width={160}
+              height={24}
+              rx={5}
+              fill="#2a2620"
+              opacity={0.92}
+            />
+            <text
+              x={Math.min(Math.max(hover.x - 80, 2), width - 162) + 80}
+              y={Math.max(hover.y - 34, 2) + 16}
+              textAnchor="middle"
+              className="chart-tip"
+            >
+              {hover.text}
+            </text>
+          </g>
+        )}
+      </svg>
+      <div className="chart-legend">
+        {series.map((s) => (
+          <span key={s.label} className="legend-item">
+            <span className="legend-swatch" style={{ background: s.color }} /> {s.label}
+          </span>
+        ))}
+        {dots.length > 0 && (
+          <span className="legend-item">
+            <span className="legend-swatch" style={{ background: "#c0392b" }} /> Precio en
+            exposición
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PriceHistoryTab({
+  artwork,
+  inventory,
+  onOpenExhibition
+}: {
+  artwork: Artwork;
+  inventory: InventoryData;
+  onOpenExhibition: (exhibitionId: string) => void;
+}) {
+  const settings: AppSettings = {
+    sizeTypes: inventory.settings.sizeTypes ?? [],
+    taxRates: inventory.settings.taxRates ?? []
+  };
+  const taxRates = settings.taxRates;
+  const [country, setCountry] = useState(taxCountries(settings)[0] ?? "");
+  const [showTax, setShowTax] = useState(true);
+
+  const sizeSum = sizeSumCm(artwork);
+  const sizeType = sizeTypeForSum(settings.sizeTypes, sizeSum);
+  const nowMs = Date.now();
+  const nowYear = new Date().getFullYear();
+
+  // Time axis: from the earliest factor change (or the year the work was made)
+  // through the current year. Points are placed at each factor change plus now.
+  const changeYears = factorChangeYears(sizeType);
+  const madeYear = year(artwork.yearMade) ?? null;
+  const startYear = Math.min(
+    ...[...changeYears, madeYear ?? nowYear].filter((y): y is number => y != null)
+  );
+  const pointYears = uniqueNumbers([
+    ...changeYears.filter((y) => y <= nowYear),
+    nowYear
+  ]).sort((a, b) => a - b);
+  if (pointYears.length > 0 && pointYears[0] > startYear) pointYears.unshift(startYear);
+
+  const yearToMs = (y: number) => new Date(Math.floor(y), 0, 1).getTime();
+
+  const baseSeries: ChartSeries = {
+    label: "Precio por factor",
+    color: "#3a7a57",
+    points: pointYears
+      .map((y) => {
+        const base = basePriceAt(artwork, settings, yearToMs(y));
+        return base == null ? null : { x: y, y: base };
+      })
+      .filter((p): p is { x: number; y: number } => p !== null)
+  };
+  const taxSeries: ChartSeries = {
+    label: `Con impuesto (${country || "—"})`,
+    color: "#b06a14",
+    points: baseSeries.points.map((p) => ({
+      x: p.x,
+      y: p.y * (1 + taxRateAt(settings, country, yearToMs(p.x)) / 100)
+    }))
+  };
+
+  const exhibitionDots: ChartDot[] = inventory.movements
+    .filter((m) => m.artworkId === artwork.id && m.exhibitionId && m.listedPrice)
+    .map((m): ChartDot | null => {
+      const exhibition = inventory.exhibitions.find((e) => e.id === m.exhibitionId);
+      const yr = year(exhibition?.startDate || m.date);
+      const value = parseMoney(m.listedPrice);
+      if (!yr || value == null) return null;
+      return {
+        x: yr,
+        y: value,
+        label: exhibition?.title || "Exposición",
+        exhibitionId: m.exhibitionId
+      };
+    })
+    .filter((d): d is ChartDot => d !== null);
+
+  const series = showTax ? [baseSeries, taxSeries] : [baseSeries];
+  const hasData = baseSeries.points.length > 0 || exhibitionDots.length > 0;
+  const currentYear = String(nowYear);
+  const currentBase = basePriceAt(artwork, settings, nowMs);
+  const currentTax = taxRateAt(settings, country, nowMs);
+
+  return (
+    <div className="price-history">
+      <div className="ph-summary">
+        <div>
+          <span className="eyebrow">Tamaño (alto + ancho)</span>
+          <strong>{sizeSum > 0 ? `${Math.round(sizeSum)} cm` : "Sin medidas"}</strong>
+        </div>
+        <div>
+          <span className="eyebrow">Precio base {currentYear}</span>
+          <strong>{currentBase != null ? formatMoney(currentBase) : "—"}</strong>
+        </div>
+        <div>
+          <span className="eyebrow">
+            Con impuesto ({country || "—"} {currentTax}%)
+          </span>
+          <strong>
+            {currentBase != null
+              ? formatMoney(currentBase * (1 + currentTax / 100))
+              : "—"}
+          </strong>
+        </div>
+      </div>
+
+      <div className="ph-controls">
+        <label className="checkline">
+          <input
+            type="checkbox"
+            checked={showTax}
+            onChange={(event) => setShowTax(event.target.checked)}
+          />
+          Mostrar línea con impuesto
+        </label>
+        <label className="sort-control">
+          País (impuesto)
+          <select value={country} onChange={(event) => setCountry(event.target.value)}>
+            {taxCountries(settings).map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {settings.sizeTypes.length === 0 && (
+        <p className="muted small-note">
+          Todavía no hay factores definidos. Ve a «Factores y precios» para añadir los
+          tipos de tamaño y sus factores.
+        </p>
+      )}
+      {sizeSum > 0 && !sizeType && settings.sizeTypes.length > 0 && (
+        <p className="muted small-note">
+          El tamaño de esta obra ({Math.round(sizeSum)} cm) no encaja en ningún tipo.
+          Revisa los rangos en «Factores y precios».
+        </p>
+      )}
+      {sizeSum === 0 && (
+        <p className="muted small-note">
+          Añade el alto y el ancho de la obra para calcular el precio.
+        </p>
+      )}
+
+      {hasData ? (
+        <PriceLineChart
+          series={series}
+          dots={exhibitionDots}
+          onDotClick={onOpenExhibition}
+        />
+      ) : (
+        <p className="muted">Aún no hay datos para mostrar una gráfica.</p>
+      )}
+    </div>
+  );
+}
+
+function SizeTypeCard({
+  type,
+  onUpdate,
+  onRemove
+}: {
+  type: SizeType;
+  onUpdate: (patch: Partial<SizeType>) => void;
+  onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+
+  function updateFactor(id: string, patch: Partial<FactorPeriod>) {
+    onUpdate({
+      factors: type.factors.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    });
+  }
+  function addFactor() {
+    onUpdate({
+      factors: [
+        ...type.factors,
+        { id: `f-${Date.now()}-${type.factors.length}`, from: "", factor: 0 }
+      ]
+    });
+  }
+  function removeFactor(id: string) {
+    onUpdate({ factors: type.factors.filter((p) => p.id !== id) });
+  }
+
+  const rangeLabel = `de ${type.fromSum || 0} a ${
+    type.toSum ? `${type.toSum} cm` : "sin límite"
+  }`;
+  const sortedFactors = [...type.factors].sort(
+    (a, b) => periodMs(a.from) - periodMs(b.from)
+  );
+
+  return (
+    <div className="size-type-card">
+      <div className="size-type-head">
+        <button
+          type="button"
+          className="size-type-toggle"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={open ? "Contraer" : "Expandir"}
+        >
+          {open ? "▾" : "▸"}
+        </button>
+        <div className="size-type-range">
+          <label>
+            de
+            <input
+              inputMode="numeric"
+              value={type.fromSum || ""}
+              placeholder="0"
+              onChange={(event) =>
+                onUpdate({
+                  fromSum: Number(event.target.value.replace(/[^0-9]/g, "")) || 0
+                })
+              }
+            />
+          </label>
+          <label>
+            a
+            <input
+              inputMode="numeric"
+              value={type.toSum || ""}
+              placeholder="sin límite"
+              onChange={(event) =>
+                onUpdate({
+                  toSum: Number(event.target.value.replace(/[^0-9]/g, "")) || 0
+                })
+              }
+            />
+            cm
+          </label>
+          <input
+            className="size-type-label"
+            value={type.label ?? ""}
+            placeholder="Nombre (opcional): p. ej. «Pequeño»"
+            onChange={(event) => onUpdate({ label: event.target.value })}
+          />
+        </div>
+        <button type="button" className="ghost danger small" onClick={onRemove}>
+          Quitar tipo
+        </button>
+      </div>
+
+      {open && (
+        <div className="size-type-body">
+          <p className="muted small-note">
+            Cubre las obras cuyo alto + ancho está {rangeLabel} (ambos extremos
+            incluidos). Añade una fila por cada vez que cambió el factor.
+          </p>
+          <div className="factor-table">
+            <div className="factor-row period-row factor-head">
+              <span>Desde (fecha)</span>
+              <span>Factor</span>
+              <span />
+            </div>
+            {sortedFactors.length === 0 ? (
+              <p className="muted small-note">Aún no hay factores para este tipo.</p>
+            ) : (
+              sortedFactors.map((period) => (
+                <div className="factor-row period-row" key={period.id}>
+                  <DateField
+                    value={period.from ?? ""}
+                    onChange={(value) => updateFactor(period.id, { from: value })}
+                  />
+                  <input
+                    inputMode="decimal"
+                    value={period.factor || ""}
+                    placeholder="Factor"
+                    onChange={(event) =>
+                      updateFactor(period.id, {
+                        factor:
+                          Number(
+                            event.target.value
+                              .replace(/[^0-9.,]/g, "")
+                              .replace(",", ".")
+                          ) || 0
+                      })
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="ghost danger small"
+                    onClick={() => removeFactor(period.id)}
+                  >
+                    Quitar
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <button type="button" className="ghost small" onClick={addFactor}>
+            + Añadir cambio de factor
+          </button>
+          <p className="muted small-note">
+            Deja la fecha vacía para «desde siempre». El factor vale hasta la siguiente
+            fecha.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PricingSettingsPage({
+  inventory,
+  setInventory,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const [sizeTypes, setSizeTypes] = useState<SizeType[]>(
+    inventory.settings.sizeTypes ?? []
+  );
+  const [taxRates, setTaxRates] = useState<TaxRate[]>(
+    inventory.settings.taxRates ?? []
+  );
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const dirty =
+    JSON.stringify(sizeTypes) !==
+      JSON.stringify(inventory.settings.sizeTypes ?? []) ||
+    JSON.stringify(taxRates) !== JSON.stringify(inventory.settings.taxRates ?? []);
+
+  function addType() {
+    setSizeTypes((list) => [
+      ...list,
+      {
+        id: `st-${Date.now()}-${list.length}`,
+        label: "",
+        fromSum: 0,
+        toSum: 0,
+        factors: [
+          { id: `f-${Date.now()}`, from: "", factor: 0 }
+        ]
+      }
+    ]);
+    setSaved(false);
+  }
+  function updateType(id: string, patch: Partial<SizeType>) {
+    setSizeTypes((list) => list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    setSaved(false);
+  }
+  function removeType(id: string) {
+    setSizeTypes((list) => list.filter((t) => t.id !== id));
+    setSaved(false);
+  }
+  function addTax() {
+    setTaxRates((list) => [
+      ...list,
+      { id: `tax-${Date.now()}-${list.length}`, country: "", rate: 0, from: "" }
+    ]);
+    setSaved(false);
+  }
+  function updateTax(id: string, patch: Partial<TaxRate>) {
+    setTaxRates((list) => list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    setSaved(false);
+  }
+  function removeTax(id: string) {
+    setTaxRates((list) => list.filter((t) => t.id !== id));
+    setSaved(false);
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const data = await window.inventoryApi.saveSettings({
+        sizeTypes: sizeTypes.map((t) => ({
+          ...t,
+          fromSum: Number(t.fromSum) || 0,
+          toSum: Number(t.toSum) || 0,
+          factors: t.factors.map((p) => ({ ...p, factor: Number(p.factor) || 0 }))
+        })),
+        taxRates: taxRates.filter((t) => t.country.trim())
+      });
+      setInventory(data);
+      setSizeTypes(data.settings.sizeTypes);
+      setTaxRates(data.settings.taxRates);
+      setSaved(true);
+      onToast("Factores y precios guardados.");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function exportSheet() {
+    setExporting(true);
+    try {
+      const settingsNow: AppSettings = { sizeTypes, taxRates };
+      const countries = taxCountries(settingsNow);
+      const nowMs = Date.now();
+      const headers = [
+        "Nombre",
+        "Serie",
+        "Año",
+        "Ancho (cm)",
+        "Alto (cm)",
+        "Suma (cm)",
+        "Factor",
+        "Base (€)",
+        ...countries.map((c) => `Con impuesto ${c} (€)`)
+      ];
+      const rows = orderArtworks(inventory.artworks, "title").map((art) => {
+        const wCm = toCm(art.width, art.unit);
+        const hCm = toCm(art.height, art.unit);
+        const sum = sizeSumCm(art);
+        const factor = factorForDate(settingsNow, sum, nowMs);
+        const base = factor == null ? null : sum * factor;
+        return [
+          art.title,
+          art.series || "",
+          art.yearMade || "",
+          wCm != null ? Math.round(wCm) : "",
+          hCm != null ? Math.round(hCm) : "",
+          sum > 0 ? Math.round(sum) : "",
+          factor ?? "",
+          base != null ? Math.round(base) : "",
+          ...countries.map((c) =>
+            base != null
+              ? Math.round(base * (1 + taxRateAt(settingsNow, c, nowMs) / 100))
+              : ""
+          )
+        ];
+      });
+      const path = await window.inventoryApi.exportPricingSheet({
+        filename: "precios.xlsx",
+        sheetName: "Precios",
+        headers,
+        rows
+      });
+      if (path) onToast("Hoja de cálculo guardada.");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo exportar.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const orderedTypes = [...sizeTypes].sort(
+    (a, b) => (a.fromSum || 0) - (b.fromSum || 0)
+  );
+
+  return (
+    <section className="list-page pricing-page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Precios</p>
+          <h2>Factores y precios</h2>
+        </div>
+        <div className="form-head-actions">
+          <button
+            type="button"
+            className="ghost"
+            disabled={exporting}
+            onClick={exportSheet}
+          >
+            {exporting ? "Generando…" : "Generar hoja de cálculo"}
+          </button>
+          <button disabled={saving || !dirty} onClick={save}>
+            {saved && !dirty ? "Guardado" : "Guardar cambios"}
+          </button>
+        </div>
+      </div>
+
+      <div className="pricing-block">
+        <div className="related-head">
+          <h3>Tipos por tamaño y factor</h3>
+          <button type="button" className="ghost" onClick={addType}>
+            + Añadir tipo
+          </button>
+        </div>
+        <p className="muted small-note">
+          El precio base = (alto + ancho en cm) × factor. Agrupa las obras por rango de
+          tamaño (un «tipo»). Dentro de cada tipo, el factor puede cambiar con los años,
+          sin repetir filas por año.
+        </p>
+        {orderedTypes.length === 0 ? (
+          <p className="muted small-note">
+            Aún no hay tipos. Empieza con «+ Añadir tipo».
+          </p>
+        ) : (
+          <div className="size-type-list">
+            {orderedTypes.map((type) => (
+              <SizeTypeCard
+                key={type.id}
+                type={type}
+                onUpdate={(patch) => updateType(type.id, patch)}
+                onRemove={() => removeType(type.id)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="pricing-block">
+        <div className="related-head">
+          <h3>Impuestos por país</h3>
+          <button type="button" className="ghost" onClick={addTax}>
+            + Añadir tramo
+          </button>
+        </div>
+        <p className="muted small-note">
+          Puedes añadir varios tramos para un mismo país si el impuesto cambió con el
+          tiempo. Deja la fecha vacía para «desde siempre».
+        </p>
+        <div className="factor-table">
+          <div className="factor-row tax-row factor-head">
+            <span>País</span>
+            <span>Desde (fecha)</span>
+            <span>Impuesto (%)</span>
+            <span />
+          </div>
+          {taxRates.map((tax) => (
+            <div className="factor-row tax-row" key={tax.id}>
+              <input
+                value={tax.country}
+                placeholder="País"
+                onChange={(event) => updateTax(tax.id, { country: event.target.value })}
+              />
+              <DateField
+                value={tax.from ?? ""}
+                onChange={(value) => updateTax(tax.id, { from: value })}
+              />
+              <input
+                inputMode="decimal"
+                value={tax.rate || ""}
+                onChange={(event) =>
+                  updateTax(tax.id, {
+                    rate:
+                      Number(
+                        event.target.value.replace(/[^0-9.,]/g, "").replace(",", ".")
+                      ) || 0
+                  })
+                }
+              />
+              <button
+                type="button"
+                className="ghost danger small"
+                onClick={() => removeTax(tax.id)}
+              >
+                Quitar
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="pricing-block">
+        <div className="related-head">
+          <h3>Hoja de cálculo de precios</h3>
+        </div>
+        <p className="muted small-note">
+          Genera un archivo Excel con nombre, serie, año, medidas, factor, precio base e
+          impuesto por país. Se calcula con los factores de hoy y podrás guardarlo o
+          enviarlo.
+        </p>
+        <button
+          type="button"
+          className="ghost"
+          disabled={exporting}
+          onClick={exportSheet}
+        >
+          {exporting ? "Generando…" : "Generar hoja de cálculo"}
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function PriceListPage({
@@ -5466,16 +6448,19 @@ function PriceListPage({
                   if (!art) return null;
                   const url = customImages[id] || previewImages[id];
                   const frameSize = previewFrameSize(imagesPerPage);
+                  // Inner area (leaves an 8px pad + 1px border) so the frame
+                  // border is always visible around the image, matching the PDF.
+                  const innerSize = Math.max(20, frameSize - 2 * 9);
                   const pageBreakHere =
                     index > 0 && index % imagesPerPage === 0;
                   const wCm = toCm(art.width, art.unit) ?? 0;
                   const hCm = toCm(art.height, art.unit) ?? 0;
-                  let iw = frameSize;
-                  let ih = frameSize;
+                  let iw = innerSize;
+                  let ih = innerSize;
                   if (wCm > 0 && hCm > 0) {
                     const aspect = wCm / hCm;
-                    if (aspect >= 1) ih = Math.round(frameSize / aspect);
-                    else iw = Math.round(frameSize * aspect);
+                    if (aspect >= 1) ih = Math.round(innerSize / aspect);
+                    else iw = Math.round(innerSize * aspect);
                   }
                   return (
                     <Fragment key={id}>
@@ -5894,15 +6879,66 @@ function overdueMovement(
 ): Movement | null {
   if (artwork.editionMode !== "unique") return null;
   const movements = inventory.movements.filter((m) => m.artworkId === artwork.id);
-  const latest = sortMovementsDesc(movements).find(
-    (m) => movementKind(m.type) !== "other"
-  );
-  if (!latest) return null;
-  const kind = movementKind(latest.type);
-  if (kind === "sale" || kind === "gift" || kind === "payment") return null;
-  if (kind === "loan" || kind === "exhibition") {
-    return latest.returned ? null : latest;
+  if (movements.length === 0) return null;
+  const today = Date.now();
+  const sorted = sortMovementsDesc(movements);
+
+  // A sale/gift/payment as the most recent event means the piece is gone: no
+  // retrieval needed.
+  const latestReal = sorted.find((m) => movementKind(m.type) !== "other");
+  if (latestReal) {
+    const kind = movementKind(latestReal.type);
+    if (kind === "sale" || kind === "gift" || kind === "payment") return null;
   }
+
+  const exhibitionWindow = (m: Movement) => {
+    const exh = inventory.exhibitions.find((e) => e.id === m.exhibitionId);
+    return {
+      start: dateToMs(exh?.startDate),
+      end: dateToMs(exh?.endDate || exh?.startDate)
+    };
+  };
+
+  // Currently on show somewhere → it's exactly where it should be, no mark.
+  const onActiveShow = movements.some((m) => {
+    if (movementKind(m.type) !== "exhibition") return false;
+    const { start, end } = exhibitionWindow(m);
+    if (!Number.isFinite(start)) return false;
+    return today >= (start as number) && today <= (end as number) + DAY_MS;
+  });
+  if (onActiveShow) return null;
+
+  // On an open or not-yet-due loan → no mark either.
+  const onActiveLoan = movements.some((m) => {
+    if (movementKind(m.type) !== "loan") return false;
+    if (m.returned) return false;
+    if (m.indefinite) return true;
+    const end = dateToMs(m.endDate);
+    if (!Number.isFinite(end)) return true;
+    return today <= (end as number) + DAY_MS;
+  });
+  if (onActiveLoan) return null;
+
+  // An overdue loan (past its return date and not marked back).
+  const overdueLoan = sorted.find((m) => {
+    if (movementKind(m.type) !== "loan") return false;
+    if (m.returned || m.indefinite) return false;
+    const end = dateToMs(m.endDate);
+    return Number.isFinite(end) && today > (end as number) + DAY_MS;
+  });
+  if (overdueLoan) return overdueLoan;
+
+  // An exhibition that has ended (or was explicitly kept at the gallery) and
+  // was never marked as returned.
+  const endedExhibition = sorted.find((m) => {
+    if (movementKind(m.type) !== "exhibition") return false;
+    if (m.returned) return false;
+    const { end } = exhibitionWindow(m);
+    if (Number.isFinite(end)) return today > (end as number) + DAY_MS;
+    return Boolean(m.keptAtGallery);
+  });
+  if (endedExhibition) return endedExhibition;
+
   return null;
 }
 

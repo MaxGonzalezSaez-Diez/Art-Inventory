@@ -8,6 +8,7 @@ import {
 } from "electron";
 import { readFile, copyFile } from "fs/promises";
 import path from "path";
+import ExcelJS from "exceljs";
 import { InventoryStore } from "./excel/inventoryStore";
 import { ensureLibrary } from "./excel/workbook";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./pricelist";
 import { exportImage, type ImageExportOptions } from "./imageExport";
 import type {
+  AppSettings,
   ArtworkInput,
   ContactInput,
   ExhibitionInput,
@@ -120,6 +122,48 @@ ipcMain.handle(
 );
 ipcMain.handle("exhibition:delete", async (_event, exhibitionId: string) =>
   store().deleteExhibition(exhibitionId)
+);
+ipcMain.handle("settings:save", async (_event, settings: AppSettings) =>
+  store().saveSettings(settings)
+);
+ipcMain.handle(
+  "pricing:exportSheet",
+  async (
+    _event,
+    payload: {
+      filename: string;
+      sheetName: string;
+      headers: string[];
+      rows: Array<Array<string | number>>;
+    }
+  ): Promise<string | null> => {
+    const options = {
+      title: "Guardar hoja de cálculo",
+      defaultPath: payload.filename || "precios.xlsx",
+      filters: [{ name: "Excel", extensions: ["xlsx"] }]
+    };
+    const result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, options)
+      : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return null;
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet(payload.sheetName || "Precios");
+    sheet.addRow(payload.headers);
+    sheet.getRow(1).font = { bold: true };
+    payload.rows.forEach((row) => sheet.addRow(row));
+    sheet.columns.forEach((column) => {
+      let max = 10;
+      column.eachCell?.({ includeEmpty: true }, (cell) => {
+        const len = cell.value == null ? 0 : String(cell.value).length;
+        if (len > max) max = len;
+      });
+      column.width = Math.min(max + 2, 40);
+    });
+    await workbook.xlsx.writeFile(result.filePath);
+    void shell.openPath(result.filePath);
+    return result.filePath;
+  }
 );
 ipcMain.handle("lookup:save", async (_event, input: LookupInput) =>
   store().saveLookup(input)

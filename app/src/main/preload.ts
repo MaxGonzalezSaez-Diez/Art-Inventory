@@ -5,6 +5,7 @@ import type {
 } from "./pricelist";
 import type { ImageExportOptions, ImageExportResult } from "./imageExport";
 import type {
+  AppSettings,
   ArtworkInput,
   ContactInput,
   ExhibitionInput,
@@ -52,6 +53,15 @@ const api = {
       contactId ?? "",
       date ?? ""
     ),
+  saveSettings: (settings: AppSettings): Promise<InventoryData> =>
+    ipcRenderer.invoke("settings:save", settings),
+  exportPricingSheet: (payload: {
+    filename: string;
+    sheetName: string;
+    headers: string[];
+    rows: Array<Array<string | number>>;
+  }): Promise<string | null> =>
+    ipcRenderer.invoke("pricing:exportSheet", payload),
   saveLookup: (input: LookupInput): Promise<InventoryData> =>
     ipcRenderer.invoke("lookup:save", input),
   deleteLookup: (input: LookupInput): Promise<InventoryData> =>

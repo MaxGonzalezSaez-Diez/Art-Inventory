@@ -63,6 +63,7 @@ export interface Movement {
   endDate?: string;
   indefinite?: boolean;
   price?: string;
+  received?: string;
   listedPrice?: string;
   currency?: string;
   notes?: string;
@@ -130,6 +131,38 @@ export interface LookupOption {
   label: string;
 }
 
+// One factor value that becomes effective on a given date (within a size type).
+// `from` is a DD-MM-YYYY date; an empty string means "from the beginning".
+export interface FactorPeriod {
+  id: string;
+  from: string; // DD-MM-YYYY effective date; "" = always
+  factor: number;
+}
+
+// A size band ("type"), defined by the sum of height + width in cm. It applies
+// when fromSum <= (height + width) <= toSum. A toSum of 0 means "no upper
+// limit". Each type keeps its own timeline of factors, so the factor can change
+// over the years (or mid-year) without duplicating rows per year.
+export interface SizeType {
+  id: string;
+  label?: string;
+  fromSum: number; // cm, inclusive
+  toSum: number; // cm, inclusive; 0 = no upper limit
+  factors: FactorPeriod[];
+}
+
+export interface TaxRate {
+  id: string;
+  country: string;
+  rate: number; // percentage, e.g. 21
+  from?: string; // DD-MM-YYYY effective date; "" = always
+}
+
+export interface AppSettings {
+  sizeTypes: SizeType[];
+  taxRates: TaxRate[];
+}
+
 export interface InventoryData {
   libraryPath: string;
   artworks: Artwork[];
@@ -139,6 +172,7 @@ export interface InventoryData {
   contacts: Contact[];
   images: ArtworkImage[];
   lookups: LookupOption[];
+  settings: AppSettings;
 }
 
 export interface EditionInput

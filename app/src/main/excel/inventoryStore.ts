@@ -2,6 +2,7 @@ import { access, copyFile, mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 import type {
+  AppSettings,
   Artwork,
   ArtworkImage,
   ArtworkInput,
@@ -64,7 +65,8 @@ export class InventoryStore {
         exhibitions: rowsToObjects<Exhibition>(workbook, "Exhibitions"),
         contacts: rowsToObjects<Contact>(workbook, "Contacts"),
         images: rowsToObjects<ArtworkImage>(workbook, "Images"),
-        lookups: uniqueLookups(rowsToObjects<LookupOption>(workbook, "Lookups"))
+        lookups: uniqueLookups(rowsToObjects<LookupOption>(workbook, "Lookups")),
+        settings: defaultSettings()
       };
     } catch {
       data = emptyInventory(this.libraryPath);
@@ -354,6 +356,13 @@ export class InventoryStore {
     return this.load();
   }
 
+  async saveSettings(settings: AppSettings): Promise<InventoryData> {
+    const data = await this.load();
+    data.settings = normalizeSettings(settings);
+    await this.persist(data);
+    return this.load();
+  }
+
   async saveLookup(input: LookupInput): Promise<InventoryData> {
     const data = await this.load();
     const label = input.label.trim();
@@ -629,6 +638,7 @@ function buildMovement(
     endDate: isLoan && !draft.indefinite ? validateDate(draft.endDate, "Fecha de fin") : "",
     indefinite: isLoan ? draft.indefinite ?? false : false,
     price: draft.price ?? "",
+    received: draft.received ?? "",
     listedPrice: draft.listedPrice ?? "",
     currency: draft.currency ?? "EUR",
     notes: draft.notes ?? "",
@@ -868,6 +878,48 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+function defaultSettings(): AppSettings {
+  return {
+    sizeTypes: [],
+    taxRates: [
+      { id: "tax-es", country: "España", rate: 21, from: "" },
+      { id: "tax-de", country: "Alemania", rate: 19, from: "" },
+      { id: "tax-none", country: "Sin impuesto", rate: 0, from: "" }
+    ]
+  };
+}
+
+function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
+  const base = defaultSettings();
+  if (!raw) return base;
+  return {
+    sizeTypes: Array.isArray(raw.sizeTypes)
+      ? raw.sizeTypes.map((type, index) => ({
+          id: type.id || `st-${index}`,
+          label: typeof type.label === "string" ? type.label : "",
+          fromSum: Number(type.fromSum) || 0,
+          toSum: Number(type.toSum) || 0,
+          factors: Array.isArray(type.factors)
+            ? type.factors.map((period, pIndex) => ({
+                id: period.id || `st-${index}-f-${pIndex}`,
+                from: String(period.from ?? "").trim(),
+                factor: Number(period.factor) || 0
+              }))
+            : []
+        }))
+      : [],
+    taxRates:
+      Array.isArray(raw.taxRates) && raw.taxRates.length > 0
+        ? raw.taxRates.map((tax, index) => ({
+            id: tax.id || `tax-${index}`,
+            country: String(tax.country ?? "").trim(),
+            rate: Number(tax.rate) || 0,
+            from: String(tax.from ?? "").trim()
+          }))
+        : base.taxRates
+  };
+}
+
 function emptyInventory(libraryPath: string): InventoryData {
   return {
     libraryPath,
@@ -877,7 +929,8 @@ function emptyInventory(libraryPath: string): InventoryData {
     exhibitions: [],
     contacts: [],
     images: [],
-    lookups: [...DEFAULT_LOOKUPS]
+    lookups: [...DEFAULT_LOOKUPS],
+    settings: defaultSettings()
   };
 }
 
@@ -893,7 +946,8 @@ function normalizeRaw(
     exhibitions: raw.exhibitions ?? [],
     contacts: raw.contacts ?? [],
     images: raw.images ?? [],
-    lookups: uniqueLookups(raw.lookups ?? [])
+    lookups: uniqueLookups(raw.lookups ?? []),
+    settings: normalizeSettings(raw.settings)
   };
 }
 
