@@ -115,7 +115,7 @@ export interface Contact {
 
 export interface ArtworkImage {
   id: string;
-  targetType: "artwork" | "edition" | "exhibition";
+  targetType: "artwork" | "edition" | "exhibition" | "expense" | "series" | "application";
   targetId: string;
   category: string;
   relativePath: string;
@@ -123,6 +123,115 @@ export interface ArtworkImage {
   caption?: string;
   originalName?: string;
   createdAt: string;
+}
+
+// Shared meta for a named series. Artwork.series strings link to SeriesInfo.name.
+export interface SeriesText {
+  id: string;
+  topic: string;
+  body: string;
+}
+
+export interface SeriesInfo {
+  id: string;
+  name: string;
+  texts: SeriesText[];
+  notes?: string;
+  /** @deprecated kept for migration from older saves */
+  topic?: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SeriesInfoInput
+  extends Omit<SeriesInfo, "id" | "createdAt" | "updatedAt"> {
+  id?: string;
+}
+
+// Competition / stipend / residency applications.
+export type ApplicationKind = "concurso" | "beca" | "residencia" | "otro";
+
+export interface Application {
+  id: string;
+  /** Internal name for the list / data entry (can include tipo, etc.). */
+  title: string;
+  kind: ApplicationKind;
+  organization?: string;
+  deadline?: string; // DD-MM-YYYY
+  /** Title printed on the PDF cover. */
+  documentTitle?: string;
+  /** Optional gray lines under the PDF title. */
+  coverSubtitle?: string;
+  /** Flexible date or year printed on the PDF cover. */
+  coverDate?: string;
+  coverNote?: string;
+  /** @deprecated cover images removed */
+  coverImageId?: string;
+  /** Flexible text pages (heading + rich HTML body). */
+  sections?: ApplicationTextSection[];
+  /** @deprecated migrated into sections */
+  textAboutWorks?: string;
+  textAboutProject?: string;
+  headingAboutWorks?: string;
+  headingAboutProject?: string;
+  headingWorks?: string;
+  /** Language for artwork type labels and kind labels on the export. */
+  language?: "es" | "en" | "de";
+  /**
+   * How paintings appear in the cover table of contents:
+   * - list: one line per painting (default)
+   * - bySeries: one line per series with count
+   * - worksOnly: single “Obras” line pointing at the first painting page
+   */
+  tocWorksMode?: "list" | "bySeries" | "worksOnly";
+  artworkIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApplicationTextSection {
+  id: string;
+  heading: string;
+  /** Rich HTML from the editor (bold / italic / color / size). */
+  bodyHtml: string;
+}
+
+export interface TextGeneratorExample {
+  id: string;
+  /** Short topic label shown when picking examples. */
+  topic: string;
+  body: string;
+  /** @deprecated migrated into topic */
+  title?: string;
+  /** @deprecated migrated into body */
+  text?: string;
+}
+
+export interface ApplicationInput
+  extends Omit<Application, "id" | "createdAt" | "updatedAt"> {
+  id?: string;
+}
+
+// Money going out: materials, exhibition costs, or other. Receipts are stored
+// as images with targetType "expense".
+export type ExpenseCategory = "material" | "exhibition" | "misc";
+
+export interface Expense {
+  id: string;
+  category: ExpenseCategory;
+  amount: string;
+  date: string; // DD-MM-YYYY
+  note: string;
+  contactId?: string;
+  exhibitionId?: string;
+  receiptImageId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExpenseInput extends Omit<Expense, "id" | "createdAt" | "updatedAt"> {
+  id?: string;
 }
 
 export interface LookupOption {
@@ -172,6 +281,10 @@ export interface InventoryData {
   contacts: Contact[];
   images: ArtworkImage[];
   lookups: LookupOption[];
+  expenses: Expense[];
+  seriesInfo: SeriesInfo[];
+  applications: Application[];
+  textGeneratorExamples: TextGeneratorExample[];
   settings: AppSettings;
 }
 

@@ -6,16 +6,24 @@ import type {
   Artwork,
   ArtworkImage,
   ArtworkInput,
+  Application,
+  ApplicationInput,
+  ApplicationTextSection,
   Contact,
   ContactInput,
   Edition,
   Exhibition,
   ExhibitionInput,
+  Expense,
+  ExpenseInput,
   ImportedImage,
   InventoryData,
   LookupInput,
   LookupOption,
-  Movement
+  Movement,
+  SeriesInfo,
+  SeriesInfoInput,
+  TextGeneratorExample
 } from "../types/inventory";
 import {
   createEmptyWorkbook,
@@ -66,6 +74,10 @@ export class InventoryStore {
         contacts: rowsToObjects<Contact>(workbook, "Contacts"),
         images: rowsToObjects<ArtworkImage>(workbook, "Images"),
         lookups: uniqueLookups(rowsToObjects<LookupOption>(workbook, "Lookups")),
+        expenses: [],
+        seriesInfo: [],
+        applications: [],
+        textGeneratorExamples: [],
         settings: defaultSettings()
       };
     } catch {
@@ -363,6 +375,153 @@ export class InventoryStore {
     return this.load();
   }
 
+  async saveTextGeneratorExamples(
+    examples: TextGeneratorExample[]
+  ): Promise<InventoryData> {
+    const data = await this.load();
+    data.textGeneratorExamples = (examples ?? []).map((example, index) =>
+      hydrateTextGeneratorExample(example, index)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
+  async saveExpense(input: ExpenseInput): Promise<InventoryData> {
+    const data = await this.load();
+    const now = new Date().toISOString();
+    const existing = input.id
+      ? data.expenses.find((expense) => expense.id === input.id)
+      : undefined;
+    const expense: Expense = {
+      id: existing?.id ?? `EXP-${randomUUID().slice(0, 8)}`,
+      category: input.category || "misc",
+      amount: String(input.amount ?? "").trim(),
+      date: validateDate(input.date, "Fecha del gasto") || "",
+      note: String(input.note ?? "").trim(),
+      contactId: input.contactId || "",
+      exhibitionId: input.exhibitionId || "",
+      receiptImageId: input.receiptImageId || existing?.receiptImageId || "",
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    data.expenses = upsertById(data.expenses, expense);
+    await this.persist(data);
+    return this.load();
+  }
+
+  async deleteExpense(expenseId: string): Promise<InventoryData> {
+    const data = await this.load();
+    data.expenses = data.expenses.filter((expense) => expense.id !== expenseId);
+    data.images = data.images.filter(
+      (image) => !(image.targetType === "expense" && image.targetId === expenseId)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
+  async saveSeriesInfo(input: SeriesInfoInput): Promise<InventoryData> {
+    const data = await this.load();
+    const now = new Date().toISOString();
+    const name = String(input.name ?? "").trim();
+    if (!name) throw new Error("La serie necesita un nombre.");
+    const existing = input.id
+      ? data.seriesInfo.find((item) => item.id === input.id)
+      : data.seriesInfo.find(
+          (item) => item.name.toLowerCase() === name.toLowerCase()
+        );
+    const texts = normalizeSeriesTexts(input.texts, input);
+    const record: SeriesInfo = {
+      id: existing?.id ?? `SER-${randomUUID().slice(0, 8)}`,
+      name,
+      texts,
+      notes: String(input.notes ?? "").trim(),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    data.seriesInfo = upsertById(data.seriesInfo, record);
+    await this.persist(data);
+    return this.load();
+  }
+
+  async deleteSeriesInfo(seriesId: string): Promise<InventoryData> {
+    const data = await this.load();
+    data.seriesInfo = data.seriesInfo.filter((item) => item.id !== seriesId);
+    data.images = data.images.filter(
+      (image) => !(image.targetType === "series" && image.targetId === seriesId)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
+  async saveApplication(input: ApplicationInput): Promise<InventoryData> {
+    const data = await this.load();
+    const now = new Date().toISOString();
+    const title = String(input.title ?? "").trim();
+    if (!title) throw new Error("La solicitud necesita un título.");
+    const existing = input.id
+      ? data.applications.find((item) => item.id === input.id)
+      : undefined;
+    const record: Application = {
+      id: existing?.id ?? `APP-${randomUUID().slice(0, 8)}`,
+      title,
+      kind: input.kind || "concurso",
+      organization: String(input.organization ?? "").trim(),
+      deadline: validateDate(input.deadline, "Fecha límite") || "",
+      documentTitle: String(
+        input.documentTitle ?? existing?.documentTitle ?? ""
+      ).trim(),
+      coverSubtitle: String(
+        input.coverSubtitle ?? existing?.coverSubtitle ?? ""
+      ).trim(),
+      coverDate: String(input.coverDate ?? existing?.coverDate ?? "").trim(),
+      coverNote: String(input.coverNote ?? existing?.coverNote ?? "").trim(),
+      coverImageId: "",
+      sections: normalizeApplicationSections(input, existing),
+      textAboutWorks: "",
+      textAboutProject: "",
+      headingAboutWorks: String(
+        input.headingAboutWorks ?? existing?.headingAboutWorks ?? "Sobre las obras"
+      ).trim(),
+      headingAboutProject: String(
+        input.headingAboutProject ??
+          existing?.headingAboutProject ??
+          "Sobre el proyecto"
+      ).trim(),
+      headingWorks: String(
+        input.headingWorks ?? existing?.headingWorks ?? "Obras"
+      ).trim(),
+      language:
+        input.language === "en" || input.language === "de" || input.language === "es"
+          ? input.language
+          : existing?.language || "es",
+      tocWorksMode:
+        input.tocWorksMode === "bySeries" ||
+        input.tocWorksMode === "worksOnly" ||
+        input.tocWorksMode === "list"
+          ? input.tocWorksMode
+          : existing?.tocWorksMode || "list",
+      artworkIds: uniquePreserveOrder(input.artworkIds),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    data.applications = upsertById(data.applications, record);
+    await this.persist(data);
+    return this.load();
+  }
+
+  async deleteApplication(applicationId: string): Promise<InventoryData> {
+    const data = await this.load();
+    data.applications = data.applications.filter(
+      (item) => item.id !== applicationId
+    );
+    data.images = data.images.filter(
+      (image) =>
+        !(image.targetType === "application" && image.targetId === applicationId)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
   async saveLookup(input: LookupInput): Promise<InventoryData> {
     const data = await this.load();
     const label = input.label.trim();
@@ -437,7 +596,7 @@ export class InventoryStore {
 
   async importImage(
     sourcePath: string,
-    targetType: "artwork" | "edition" | "exhibition",
+    targetType: "artwork" | "edition" | "exhibition" | "expense" | "series" | "application",
     targetId: string,
     category = "main"
   ): Promise<ImportedImage> {
@@ -449,7 +608,13 @@ export class InventoryStore {
         ? "images/editions"
         : targetType === "exhibition"
           ? "images/exhibitions"
-          : "images/originals";
+          : targetType === "expense"
+            ? "images/receipts"
+            : targetType === "series"
+              ? "images/series"
+              : targetType === "application"
+                ? "images/applications"
+                : "images/originals";
     const fileName = `${targetId}-${Date.now()}${extension}`;
     const relativePath = path.join(folder, fileName);
     const destination = path.join(this.libraryPath, relativePath);
@@ -467,13 +632,15 @@ export class InventoryStore {
       createdAt: now
     };
 
-    if (category === "main") {
+    if (category === "main" || category === "receipt" || category === "cover") {
       data.images = data.images.filter(
         (item) =>
           !(
             item.targetType === targetType &&
             item.targetId === targetId &&
-            item.category === "main"
+            (item.category === category ||
+              (category === "receipt" && item.category === "main") ||
+              (category === "cover" && item.category === "main"))
           )
       );
     }
@@ -484,6 +651,22 @@ export class InventoryStore {
         artwork.id === targetId
           ? { ...artwork, mainImageId: image.id, updatedAt: now }
           : artwork
+      );
+    }
+
+    if (targetType === "expense") {
+      data.expenses = data.expenses.map((expense) =>
+        expense.id === targetId
+          ? { ...expense, receiptImageId: image.id, updatedAt: now }
+          : expense
+      );
+    }
+
+    if (targetType === "application" && (category === "cover" || category === "main")) {
+      data.applications = data.applications.map((app) =>
+        app.id === targetId
+          ? { ...app, coverImageId: image.id, updatedAt: now }
+          : app
       );
     }
 
@@ -733,11 +916,21 @@ function compactData(data: InventoryData): InventoryData {
       .filter((item) => isMeaningful(item.title, "title"))
       .map((item) => item.id)
   );
+  const expenses = dedupeBy(data.expenses ?? [], (expense) => expense.id);
+  const expenseIds = new Set(expenses.map((expense) => expense.id));
+  const seriesInfo = dedupeBy(data.seriesInfo ?? [], (item) => item.id);
+  const seriesIds = new Set(seriesInfo.map((item) => item.id));
+  const applications = dedupeBy(data.applications ?? [], (item) => item.id);
+  const applicationIds = new Set(applications.map((item) => item.id));
   const cleanImages = dedupeImages(
     data.images.filter((image) => {
       if (image.targetType === "artwork") return artworkIds.has(image.targetId);
       if (image.targetType === "exhibition")
         return exhibitionIdSet.has(image.targetId);
+      if (image.targetType === "expense") return expenseIds.has(image.targetId);
+      if (image.targetType === "series") return seriesIds.has(image.targetId);
+      if (image.targetType === "application")
+        return applicationIds.has(image.targetId);
       return true;
     })
   );
@@ -822,6 +1015,9 @@ function compactData(data: InventoryData): InventoryData {
     exhibitions,
     contacts,
     images: cleanImages,
+    expenses,
+    seriesInfo,
+    applications,
     lookups: uniqueLookups(data.lookups)
   };
 }
@@ -879,8 +1075,32 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 function defaultSettings(): AppSettings {
+  const year = new Date().getFullYear();
+  const from = `01-01-${year}`;
   return {
-    sizeTypes: [],
+    sizeTypes: [
+      {
+        id: "st-pequeno",
+        label: "Pequeño",
+        fromSum: 0,
+        toSum: 100,
+        factors: [{ id: "f-peq", from, factor: 20 }]
+      },
+      {
+        id: "st-mediano",
+        label: "Mediano",
+        fromSum: 101,
+        toSum: 200,
+        factors: [{ id: "f-med", from, factor: 22 }]
+      },
+      {
+        id: "st-grande",
+        label: "Grande",
+        fromSum: 201,
+        toSum: 0,
+        factors: [{ id: "f-gran", from, factor: 24 }]
+      }
+    ],
     taxRates: [
       { id: "tax-es", country: "España", rate: 21, from: "" },
       { id: "tax-de", country: "Alemania", rate: 19, from: "" },
@@ -892,22 +1112,24 @@ function defaultSettings(): AppSettings {
 function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
   const base = defaultSettings();
   if (!raw) return base;
+  const sizeTypes = Array.isArray(raw.sizeTypes)
+    ? raw.sizeTypes.map((type, index) => ({
+        id: type.id || `st-${index}`,
+        label: typeof type.label === "string" ? type.label : "",
+        fromSum: Number(type.fromSum) || 0,
+        toSum: Number(type.toSum) || 0,
+        factors: Array.isArray(type.factors)
+          ? type.factors.map((period, pIndex) => ({
+              id: period.id || `st-${index}-f-${pIndex}`,
+              from: String(period.from ?? "").trim(),
+              factor: Number(period.factor) || 0
+            }))
+          : []
+      }))
+    : [];
   return {
-    sizeTypes: Array.isArray(raw.sizeTypes)
-      ? raw.sizeTypes.map((type, index) => ({
-          id: type.id || `st-${index}`,
-          label: typeof type.label === "string" ? type.label : "",
-          fromSum: Number(type.fromSum) || 0,
-          toSum: Number(type.toSum) || 0,
-          factors: Array.isArray(type.factors)
-            ? type.factors.map((period, pIndex) => ({
-                id: period.id || `st-${index}-f-${pIndex}`,
-                from: String(period.from ?? "").trim(),
-                factor: Number(period.factor) || 0
-              }))
-            : []
-        }))
-      : [],
+    // Seed starter sizes only when the user has never configured any.
+    sizeTypes: sizeTypes.length > 0 ? sizeTypes : base.sizeTypes,
     taxRates:
       Array.isArray(raw.taxRates) && raw.taxRates.length > 0
         ? raw.taxRates.map((tax, index) => ({
@@ -930,6 +1152,10 @@ function emptyInventory(libraryPath: string): InventoryData {
     contacts: [],
     images: [],
     lookups: [...DEFAULT_LOOKUPS],
+    expenses: [],
+    seriesInfo: [],
+    applications: [],
+    textGeneratorExamples: [],
     settings: defaultSettings()
   };
 }
@@ -947,7 +1173,171 @@ function normalizeRaw(
     contacts: raw.contacts ?? [],
     images: raw.images ?? [],
     lookups: uniqueLookups(raw.lookups ?? []),
+    expenses: Array.isArray(raw.expenses) ? raw.expenses : [],
+    seriesInfo: Array.isArray(raw.seriesInfo)
+      ? raw.seriesInfo.map((item, index) => hydrateSeriesInfo(item, index))
+      : [],
+    applications: Array.isArray(raw.applications)
+      ? raw.applications.map((item, index) => hydrateApplication(item, index))
+      : [],
+    textGeneratorExamples: Array.isArray(raw.textGeneratorExamples)
+      ? raw.textGeneratorExamples.map((item, index) =>
+          hydrateTextGeneratorExample(item, index)
+        )
+      : [],
     settings: normalizeSettings(raw.settings)
+  };
+}
+
+function hydrateTextGeneratorExample(
+  item: Partial<TextGeneratorExample>,
+  index: number
+): TextGeneratorExample {
+  return {
+    id: String(item.id || `example-${index}`),
+    topic: String(item.topic ?? item.title ?? "").trim(),
+    body: String(item.body ?? item.text ?? "")
+  };
+}
+
+function uniquePreserveOrder(ids: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids ?? []) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function normalizeApplicationSections(
+  input: ApplicationInput,
+  existing?: Application
+): ApplicationTextSection[] {
+  if (Array.isArray(input.sections) && input.sections.length > 0) {
+    return input.sections.map((section, index) => ({
+      id: section.id || `sec-${index}`,
+      heading: String(section.heading ?? "").trim(),
+      bodyHtml: String(section.bodyHtml ?? "")
+    }));
+  }
+  if (existing?.sections?.length) {
+    return existing.sections.map((section, index) => ({
+      id: section.id || `sec-${index}`,
+      heading: String(section.heading ?? "").trim(),
+      bodyHtml: String(section.bodyHtml ?? "")
+    }));
+  }
+  const legacy: ApplicationTextSection[] = [];
+  const aboutWorks =
+    input.textAboutWorks ?? existing?.textAboutWorks ?? "";
+  const aboutProject =
+    input.textAboutProject ?? existing?.textAboutProject ?? "";
+  if (String(aboutWorks).trim()) {
+    legacy.push({
+      id: "sec-legacy-works",
+      heading: String(
+        input.headingAboutWorks ?? existing?.headingAboutWorks ?? "Sobre las obras"
+      ).trim(),
+      bodyHtml: `<p>${String(aboutWorks)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br/>")}</p>`
+    });
+  }
+  if (String(aboutProject).trim()) {
+    legacy.push({
+      id: "sec-legacy-project",
+      heading: String(
+        input.headingAboutProject ??
+          existing?.headingAboutProject ??
+          "Sobre el proyecto"
+      ).trim(),
+      bodyHtml: `<p>${String(aboutProject)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br/>")}</p>`
+    });
+  }
+  return legacy;
+}
+
+function hydrateApplication(
+  item: Partial<Application>,
+  index: number
+): Application {
+  const sections = normalizeApplicationSections(
+    {
+      title: item.title || "",
+      kind: item.kind || "concurso",
+      sections: item.sections,
+      textAboutWorks: item.textAboutWorks,
+      textAboutProject: item.textAboutProject,
+      headingAboutWorks: item.headingAboutWorks,
+      headingAboutProject: item.headingAboutProject,
+      artworkIds: item.artworkIds || []
+    },
+    undefined
+  );
+  return {
+    id: item.id || `APP-${index}`,
+    title: String(item.title ?? "").trim(),
+    kind: item.kind || "concurso",
+    organization: item.organization || "",
+    deadline: item.deadline || "",
+    documentTitle: item.documentTitle || "",
+    coverSubtitle: item.coverSubtitle || "",
+    coverDate: item.coverDate || "",
+    coverNote: item.coverNote || "",
+    coverImageId: "",
+    sections,
+    textAboutWorks: "",
+    textAboutProject: "",
+    headingAboutWorks: item.headingAboutWorks || "Sobre las obras",
+    headingAboutProject: item.headingAboutProject || "Sobre el proyecto",
+    headingWorks: item.headingWorks || "Obras",
+    language: item.language === "en" || item.language === "de" ? item.language : "es",
+    tocWorksMode:
+      item.tocWorksMode === "bySeries" || item.tocWorksMode === "worksOnly"
+        ? item.tocWorksMode
+        : "list",
+    artworkIds: uniquePreserveOrder(item.artworkIds),
+    createdAt: item.createdAt || new Date().toISOString(),
+    updatedAt: item.updatedAt || new Date().toISOString()
+  };
+}
+
+function normalizeSeriesTexts(
+  texts: SeriesInfo["texts"] | undefined,
+  legacy?: { topic?: string; description?: string }
+): SeriesInfo["texts"] {
+  if (Array.isArray(texts) && texts.length > 0) {
+    return texts.map((text, index) => ({
+      id: text.id || `txt-${index}`,
+      topic: String(text.topic ?? "").trim(),
+      body: String(text.body ?? "")
+    }));
+  }
+  const topic = String(legacy?.topic ?? "").trim();
+  const body = String(legacy?.description ?? "").trim();
+  if (!topic && !body) return [];
+  return [{ id: "txt-legacy", topic: topic || "Texto", body }];
+}
+
+function hydrateSeriesInfo(
+  item: Partial<SeriesInfo>,
+  index: number
+): SeriesInfo {
+  return {
+    id: item.id || `SER-${index}`,
+    name: String(item.name ?? "").trim(),
+    texts: normalizeSeriesTexts(item.texts, item),
+    notes: String(item.notes ?? "").trim(),
+    createdAt: item.createdAt || new Date().toISOString(),
+    updatedAt: item.updatedAt || new Date().toISOString()
   };
 }
 

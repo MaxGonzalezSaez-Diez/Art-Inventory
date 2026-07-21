@@ -270,7 +270,7 @@ function buildHtml(payload: PriceListPayload): string {
 <body>
   ${subHeaderRow}
   <div class="header">
-    <h1>${escapeHtml(payload.header || "Lista de precios")}</h1>
+    <h1>${escapeHtml(payload.header || "Folleto de obras")}</h1>
     ${payload.subtitle ? `<p class="subtitle">${escapeHtml(payload.subtitle)}</p>` : ""}
   </div>
   <hr class="rule" />
@@ -513,7 +513,7 @@ async function buildDocx(payload: PriceListPayload): Promise<Buffer> {
       spacing: { after: 60 },
       children: [
         new TextRun({
-          text: payload.header || "Lista de precios",
+          text: payload.header || "Folleto de obras",
           bold: payload.headerStyle?.bold !== false,
           italics: payload.headerStyle?.italic ?? false,
           size: 40,

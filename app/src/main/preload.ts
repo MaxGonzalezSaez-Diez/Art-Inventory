@@ -6,12 +6,17 @@ import type {
 import type { ImageExportOptions, ImageExportResult } from "./imageExport";
 import type {
   AppSettings,
+  ApplicationInput,
   ArtworkInput,
   ContactInput,
   ExhibitionInput,
+  ExpenseInput,
   InventoryData,
-  LookupInput
+  LookupInput,
+  SeriesInfoInput,
+  TextGeneratorExample
 } from "./types/inventory";
+import type { ApplicationDocFormat, ApplicationPdfPayload } from "./applicationPdf";
 
 const api = {
   getLibraryPath: (): Promise<string> => ipcRenderer.invoke("library:getPath"),
@@ -55,6 +60,12 @@ const api = {
     ),
   saveSettings: (settings: AppSettings): Promise<InventoryData> =>
     ipcRenderer.invoke("settings:save", settings),
+  saveTextGeneratorExamples: (
+    examples: TextGeneratorExample[]
+  ): Promise<InventoryData> =>
+    ipcRenderer.invoke("textGenerator:saveExamples", examples),
+  writeClipboardText: (text: string): Promise<boolean> =>
+    ipcRenderer.invoke("clipboard:writeText", text),
   exportPricingSheet: (payload: {
     filename: string;
     sheetName: string;
@@ -62,6 +73,47 @@ const api = {
     rows: Array<Array<string | number>>;
   }): Promise<string | null> =>
     ipcRenderer.invoke("pricing:exportSheet", payload),
+  saveExpense: (input: ExpenseInput): Promise<InventoryData> =>
+    ipcRenderer.invoke("expense:save", input),
+  deleteExpense: (expenseId: string): Promise<InventoryData> =>
+    ipcRenderer.invoke("expense:delete", expenseId),
+  saveSeriesInfo: (input: SeriesInfoInput): Promise<InventoryData> =>
+    ipcRenderer.invoke("series:save", input),
+  deleteSeriesInfo: (seriesId: string): Promise<InventoryData> =>
+    ipcRenderer.invoke("series:delete", seriesId),
+  saveApplication: (input: ApplicationInput): Promise<InventoryData> =>
+    ipcRenderer.invoke("application:save", input),
+  deleteApplication: (applicationId: string): Promise<InventoryData> =>
+    ipcRenderer.invoke("application:delete", applicationId),
+  generateApplicationPdf: (
+    formatOrPayload: ApplicationDocFormat | ApplicationPdfPayload,
+    payload?: ApplicationPdfPayload
+  ): Promise<string | null> =>
+    ipcRenderer.invoke("application:generatePdf", formatOrPayload, payload),
+  exportFinancialsSheet: (payload: {
+    filename: string;
+    fromDate?: string;
+    toDate?: string;
+    exhibitionTitle?: string;
+    expenseRows: Array<{
+      category: string;
+      date: string;
+      amount: number;
+      note: string;
+      where: string;
+    }>;
+    incomeRows: Array<{
+      date: string;
+      amount: number;
+      how: string;
+      artwork: string;
+      series: string;
+      where: string;
+      received: number | null;
+    }>;
+    totals: { spent: number; earned: number; net: number };
+  }): Promise<string | null> =>
+    ipcRenderer.invoke("financials:exportSheet", payload),
   saveLookup: (input: LookupInput): Promise<InventoryData> =>
     ipcRenderer.invoke("lookup:save", input),
   deleteLookup: (input: LookupInput): Promise<InventoryData> =>
@@ -72,7 +124,13 @@ const api = {
     assignments: Array<{ id: string; value: string }>;
   }): Promise<InventoryData> => ipcRenderer.invoke("lookup:reassign", input),
   importImage: (
-    targetType: "artwork" | "edition" | "exhibition",
+    targetType:
+      | "artwork"
+      | "edition"
+      | "exhibition"
+      | "expense"
+      | "series"
+      | "application",
     targetId: string,
     category: string
   ): Promise<{ image: unknown; inventory: InventoryData } | null> =>

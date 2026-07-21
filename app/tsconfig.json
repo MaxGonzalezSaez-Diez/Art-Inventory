@@ -16,5 +16,5 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src/renderer", "src/main/types"]
+  "include": ["src/renderer", "src/main/types", "src/main/applicationDocumentHtml.ts"]
 }

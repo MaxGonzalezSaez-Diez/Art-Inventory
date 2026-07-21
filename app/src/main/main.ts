@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   shell,
@@ -16,13 +17,22 @@ import {
   type PriceListFormat,
   type PriceListPayload
 } from "./pricelist";
+import {
+  generateApplicationDocument,
+  type ApplicationDocFormat,
+  type ApplicationPdfPayload
+} from "./applicationPdf";
 import { exportImage, type ImageExportOptions } from "./imageExport";
 import type {
   AppSettings,
+  ApplicationInput,
   ArtworkInput,
   ContactInput,
   ExhibitionInput,
-  LookupInput
+  ExpenseInput,
+  LookupInput,
+  SeriesInfoInput,
+  TextGeneratorExample
 } from "./types/inventory";
 
 let mainWindow: BrowserWindow | null = null;
@@ -36,6 +46,12 @@ function store(): InventoryStore {
   if (!libraryPath) libraryPath = defaultLibraryPath();
   return new InventoryStore(libraryPath);
 }
+
+// Must run before app ready so Chromium picks up speech features.
+app.commandLine.appendSwitch(
+  "enable-features",
+  "WebSpeechRecognition,WebSpeechSynthesis"
+);
 
 async function createWindow(): Promise<void> {
   libraryPath = defaultLibraryPath();
@@ -51,9 +67,18 @@ async function createWindow(): Promise<void> {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: false
     }
   });
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (_webContents, permission, callback) => {
+      callback(permission === "media");
+    }
+  );
+  mainWindow.webContents.session.setPermissionCheckHandler(
+    (_webContents, permission) => permission === "media"
+  );
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
@@ -127,6 +152,47 @@ ipcMain.handle("settings:save", async (_event, settings: AppSettings) =>
   store().saveSettings(settings)
 );
 ipcMain.handle(
+  "textGenerator:saveExamples",
+  async (_event, examples: TextGeneratorExample[]) =>
+    store().saveTextGeneratorExamples(examples)
+);
+ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
+  clipboard.writeText(String(text ?? ""));
+  return true;
+});
+ipcMain.handle("expense:save", async (_event, input: ExpenseInput) =>
+  store().saveExpense(input)
+);
+ipcMain.handle("expense:delete", async (_event, expenseId: string) =>
+  store().deleteExpense(expenseId)
+);
+ipcMain.handle("series:save", async (_event, input: SeriesInfoInput) =>
+  store().saveSeriesInfo(input)
+);
+ipcMain.handle("series:delete", async (_event, seriesId: string) =>
+  store().deleteSeriesInfo(seriesId)
+);
+ipcMain.handle("application:save", async (_event, input: ApplicationInput) =>
+  store().saveApplication(input)
+);
+ipcMain.handle("application:delete", async (_event, applicationId: string) =>
+  store().deleteApplication(applicationId)
+);
+ipcMain.handle(
+  "application:generatePdf",
+  async (
+    _event,
+    format: ApplicationDocFormat | ApplicationPdfPayload,
+    maybePayload?: ApplicationPdfPayload
+  ) => {
+    // Accept either (format, payload) or legacy (payload) only.
+    if (typeof format === "string") {
+      return generateApplicationDocument(mainWindow, format, maybePayload!);
+    }
+    return generateApplicationDocument(mainWindow, "pdf", format);
+  }
+);
+ipcMain.handle(
   "pricing:exportSheet",
   async (
     _event,
@@ -160,6 +226,140 @@ ipcMain.handle(
       });
       column.width = Math.min(max + 2, 40);
     });
+    await workbook.xlsx.writeFile(result.filePath);
+    void shell.openPath(result.filePath);
+    return result.filePath;
+  }
+);
+ipcMain.handle(
+  "financials:exportSheet",
+  async (
+    _event,
+    payload: {
+      filename: string;
+      fromDate?: string;
+      toDate?: string;
+      exhibitionTitle?: string;
+      expenseRows: Array<{
+        category: string;
+        date: string;
+        amount: number;
+        note: string;
+        where: string;
+      }>;
+      incomeRows: Array<{
+        date: string;
+        amount: number;
+        how: string;
+        artwork: string;
+        series: string;
+        where: string;
+        received: number | null;
+      }>;
+      totals: { spent: number; earned: number; net: number };
+    }
+  ): Promise<string | null> => {
+    const options = {
+      title: "Guardar resumen de cuentas",
+      defaultPath: payload.filename || "cuentas.xlsx",
+      filters: [{ name: "Excel", extensions: ["xlsx"] }]
+    };
+    const result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, options)
+      : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return null;
+
+    const workbook = new ExcelJS.Workbook();
+    const summary = workbook.addWorksheet("Resumen");
+    summary.addRow(["Resumen de cuentas"]);
+    summary.getRow(1).font = { bold: true, size: 16, color: { argb: "FF2A2620" } };
+    summary.addRow([]);
+    if (payload.fromDate || payload.toDate) {
+      summary.addRow([
+        "Periodo",
+        `${payload.fromDate || "…"} → ${payload.toDate || "…"}`
+      ]);
+    }
+    if (payload.exhibitionTitle) {
+      summary.addRow(["Exposición", payload.exhibitionTitle]);
+    }
+    summary.addRow([]);
+    const spentRow = summary.addRow(["Total gastado (€)", payload.totals.spent]);
+    spentRow.getCell(1).font = { bold: true };
+    spentRow.getCell(2).font = { bold: true, color: { argb: "FFB33A3A" } };
+    spentRow.getCell(2).numFmt = "#,##0.00";
+    const earnedRow = summary.addRow(["Total ganado (€)", payload.totals.earned]);
+    earnedRow.getCell(1).font = { bold: true };
+    earnedRow.getCell(2).font = { bold: true, color: { argb: "FF2F7A4A" } };
+    earnedRow.getCell(2).numFmt = "#,##0.00";
+    const netRow = summary.addRow(["Balance (€)", payload.totals.net]);
+    netRow.getCell(1).font = { bold: true, size: 13 };
+    netRow.getCell(2).font = {
+      bold: true,
+      size: 13,
+      color: { argb: payload.totals.net >= 0 ? "FF2F7A4A" : "FFB33A3A" }
+    };
+    netRow.getCell(2).numFmt = "#,##0.00";
+    summary.getColumn(1).width = 22;
+    summary.getColumn(2).width = 28;
+
+    const expenses = workbook.addWorksheet("Gastos");
+    expenses.addRow(["Categoría", "Fecha", "Importe (€)", "Nota", "Dónde / con quién"]);
+    expenses.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    expenses.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFB33A3A" }
+    };
+    payload.expenseRows.forEach((row) => {
+      const added = expenses.addRow([
+        row.category,
+        row.date,
+        row.amount,
+        row.note,
+        row.where
+      ]);
+      added.getCell(3).numFmt = "#,##0.00";
+      added.getCell(3).font = { color: { argb: "FFB33A3A" } };
+    });
+    expenses.columns.forEach((column, index) => {
+      column.width = [18, 14, 14, 40, 28][index] ?? 16;
+    });
+
+    const income = workbook.addWorksheet("Ingresos");
+    income.addRow([
+      "Fecha",
+      "Importe (€)",
+      "Cómo",
+      "Obra",
+      "Serie",
+      "Dónde / a quién",
+      "Recibido neto (€)"
+    ]);
+    income.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    income.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF2F7A4A" }
+    };
+    payload.incomeRows.forEach((row) => {
+      const added = income.addRow([
+        row.date,
+        row.amount,
+        row.how,
+        row.artwork,
+        row.series,
+        row.where,
+        row.received ?? ""
+      ]);
+      added.getCell(2).numFmt = "#,##0.00";
+      added.getCell(2).font = { color: { argb: "FF2F7A4A" } };
+      if (row.received != null) added.getCell(7).numFmt = "#,##0.00";
+    });
+    income.columns.forEach((column, index) => {
+      column.width = [14, 14, 22, 28, 18, 24, 16][index] ?? 14;
+    });
+
     await workbook.xlsx.writeFile(result.filePath);
     void shell.openPath(result.filePath);
     return result.filePath;
@@ -210,12 +410,23 @@ ipcMain.handle(
   "image:import",
   async (
     _event,
-    targetType: "artwork" | "edition" | "exhibition",
+    targetType:
+      | "artwork"
+      | "edition"
+      | "exhibition"
+      | "expense"
+      | "series"
+      | "application",
     targetId: string,
     category: string
   ) => {
     const options: OpenDialogOptions = {
-      title: "Choose Artwork Image",
+      title:
+        targetType === "expense"
+          ? "Elegir ticket o factura"
+          : targetType === "application"
+            ? "Elegir imagen de portada"
+            : "Elegir imagen",
       properties: ["openFile"],
       filters: [
         {

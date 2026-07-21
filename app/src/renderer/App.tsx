@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type Dispatch,
   type MutableRefObject,
   type ReactNode,
@@ -27,8 +28,20 @@ import type {
   MovementInput,
   FactorPeriod,
   SizeType,
-  TaxRate
+  TaxRate,
+  Expense,
+  ExpenseCategory,
+  ExpenseInput,
+  SeriesInfo,
+  SeriesInfoInput,
+  SeriesText,
+  Application,
+  ApplicationInput,
+  ApplicationKind,
+  ApplicationTextSection,
+  TextGeneratorExample
 } from "../main/types/inventory";
+import { buildApplicationHtml } from "../main/applicationDocumentHtml";
 
 type Page =
   | "library"
@@ -38,7 +51,11 @@ type Page =
   | "contactDetail"
   | "exhibitions"
   | "pricelist"
-  | "pricing";
+  | "pricing"
+  | "financials"
+  | "series"
+  | "applications"
+  | "textGenerator";
 
 interface PriceListPreset {
   exhibitionId?: string;
@@ -95,9 +112,15 @@ export function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(""), 3000);
+    const timer = setTimeout(() => setToast(""), 2800);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(""), 4200);
+    return () => clearTimeout(timer);
+  }, [message]);
 
   async function refresh() {
     try {
@@ -128,6 +151,7 @@ export function App() {
       { page, artworkId: selectedArtworkId, contactId: selectedContactId }
     ]);
     setToast("");
+    setMessage("");
     setPage(next);
   }
 
@@ -144,6 +168,7 @@ export function App() {
       return current.slice(0, -1);
     });
     setToast("");
+    setMessage("");
   }
 
   function startAdd() {
@@ -186,7 +211,10 @@ export function App() {
         </div>
         <nav>
           <NavButton active={page === "library"} onClick={() => guarded(() => goTo("library"))}>
-            <span className="nav-dot dot-obras" /> Obras
+            <span className="nav-dot dot-obras" /> Lista de obras
+          </NavButton>
+          <NavButton active={page === "series"} onClick={() => guarded(() => goTo("series"))}>
+            <span className="nav-dot dot-series" /> Series (metadatos)
           </NavButton>
           <NavButton active={page === "form"} onClick={() => guarded(startAdd)}>
             <span className="nav-dot dot-add" /> Añadir obra
@@ -207,10 +235,28 @@ export function App() {
             <span className="nav-dot dot-exh" /> Exposiciones
           </NavButton>
           <NavButton active={page === "pricelist"} onClick={() => guarded(() => openPriceList(null))}>
-            <span className="nav-dot dot-price" /> Lista de precios
+            <span className="nav-dot dot-price" /> Folleto de obras
           </NavButton>
           <NavButton active={page === "pricing"} onClick={() => guarded(() => goTo("pricing"))}>
             <span className="nav-dot dot-factor" /> Factores y precios
+          </NavButton>
+          <NavButton
+            active={page === "financials"}
+            onClick={() => guarded(() => goTo("financials"))}
+          >
+            <span className="nav-dot dot-money" /> Cuentas
+          </NavButton>
+          <NavButton
+            active={page === "applications"}
+            onClick={() => guarded(() => goTo("applications"))}
+          >
+            <span className="nav-dot dot-app" /> Solicitudes
+          </NavButton>
+          <NavButton
+            active={page === "textGenerator"}
+            onClick={() => guarded(() => goTo("textGenerator"))}
+          >
+            <span className="nav-dot dot-textgen" /> Generador de texto
           </NavButton>
         </nav>
         <div className="library-path">
@@ -223,8 +269,24 @@ export function App() {
       </aside>
 
       <main className="main-panel">
-        {toast && <div className="toast">{toast}</div>}
-        {message && <div className="notice">{message}</div>}
+        {toast && (
+          <div className="toast toast-enter" key={`t-${toast}`}>
+            {toast}
+          </div>
+        )}
+        {message && (
+          <div className="notice notice-enter" key={`m-${message}`}>
+            {message}
+            <button
+              type="button"
+              className="banner-dismiss"
+              aria-label="Cerrar"
+              onClick={() => setMessage("")}
+            >
+              ✕
+            </button>
+          </div>
+        )}
         {!inventory ? (
           <div className="empty-state">Preparando el archivo Excel...</div>
         ) : page === "library" ? (
@@ -329,6 +391,40 @@ export function App() {
             onError={setMessage}
             onToast={setToast}
           />
+        ) : page === "financials" ? (
+          <FinancialsPage
+            inventory={inventory}
+            setInventory={setInventory}
+            onError={setMessage}
+            onToast={setToast}
+          />
+        ) : page === "series" ? (
+          <SeriesPage
+            inventory={inventory}
+            setInventory={setInventory}
+            onError={setMessage}
+            onToast={setToast}
+            onOpenArtwork={(artworkId) =>
+              guarded(() => {
+                setSelectedArtworkId(artworkId);
+                goTo("detail");
+              })
+            }
+          />
+        ) : page === "applications" ? (
+          <ApplicationsPage
+            inventory={inventory}
+            setInventory={setInventory}
+            onError={setMessage}
+            onToast={setToast}
+          />
+        ) : page === "textGenerator" ? (
+          <TextGeneratorPage
+            inventory={inventory}
+            setInventory={setInventory}
+            onError={setMessage}
+            onToast={setToast}
+          />
         ) : (
           <div className="empty-state">Selecciona una obra.</div>
         )}
@@ -397,6 +493,7 @@ export function App() {
 type SortKey =
   | "recent"
   | "title"
+  | "series"
   | "year_desc"
   | "year_asc"
   | "type"
@@ -581,6 +678,7 @@ function LibraryPage({
               <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
                 <option value="recent">Añadidas recientemente</option>
                 <option value="title">Título (A→Z)</option>
+                <option value="series">Serie (A→Z)</option>
                 <option value="year_desc">Año (nuevo→viejo)</option>
                 <option value="year_asc">Año (viejo→nuevo)</option>
                 <option value="type">Tipo</option>
@@ -3079,7 +3177,7 @@ function PickThumb({
   );
 }
 
-type ArtworkSort = "title" | "year" | "size";
+type ArtworkSort = "title" | "year" | "size" | "series";
 
 function orderArtworks(list: Artwork[], sort: ArtworkSort): Artwork[] {
   const copy = [...list];
@@ -3090,15 +3188,36 @@ function orderArtworks(list: Artwork[], sort: ArtworkSort): Artwork[] {
       (toCm(artwork.height, artwork.unit) ?? 0) *
       (toCm(artwork.width, artwork.unit) ?? 0);
     copy.sort((a, b) => area(b) - area(a));
+  } else if (sort === "series") {
+    copy.sort((a, b) => {
+      const bySeries = (a.series || "\uffff").localeCompare(
+        b.series || "\uffff",
+        "es",
+        { sensitivity: "base" }
+      );
+      if (bySeries !== 0) return bySeries;
+      return a.title.localeCompare(b.title, "es", { sensitivity: "base" });
+    });
   } else {
     copy.sort((a, b) => a.title.localeCompare(b.title));
   }
   return copy;
 }
 
+function sortArtworkIdsBySeries(
+  ids: string[],
+  inventory: InventoryData
+): string[] {
+  const artworks = ids
+    .map((id) => inventory.artworks.find((art) => art.id === id))
+    .filter((art): art is Artwork => Boolean(art));
+  return orderArtworks(artworks, "series").map((art) => art.id);
+}
+
 function ArtworkPickerModal({
   inventory,
   excludeIds = [],
+  initialIds = [],
   title = "Añadir obras",
   notice,
   onConfirm,
@@ -3106,12 +3225,13 @@ function ArtworkPickerModal({
 }: {
   inventory: InventoryData;
   excludeIds?: string[];
+  initialIds?: string[];
   title?: string;
   notice?: string;
   onConfirm: (ids: string[]) => void;
   onClose: () => void;
 }) {
-  const [picked, setPicked] = useState<string[]>([]);
+  const [picked, setPicked] = useState<string[]>(initialIds);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<ArtworkSort>("title");
 
@@ -3156,6 +3276,7 @@ function ArtworkPickerModal({
               onChange={(event) => setSort(event.target.value as ArtworkSort)}
             >
               <option value="title">Título (A→Z)</option>
+              <option value="series">Serie (A→Z)</option>
               <option value="year">Año</option>
               <option value="size">Tamaño</option>
             </select>
@@ -4475,7 +4596,7 @@ function ExhibitionForm({
           <button onClick={save}>Guardar</button>
           {exhibition && (
             <button className="ghost" onClick={() => onGeneratePriceList(exhibition.id)}>
-              Generar lista de precios
+              Generar folleto de obras
             </button>
           )}
           <button className="ghost" onClick={onCancel ?? onDone}>
@@ -5183,6 +5304,37 @@ interface ChartDot {
   exhibitionId?: string;
 }
 
+// Pick a readable year step: 1, 2, 5 or 10 depending on how wide the range is.
+function yearTickStep(span: number): number {
+  if (span <= 8) return 1;
+  if (span <= 16) return 2;
+  if (span <= 40) return 5;
+  return 10;
+}
+
+function yearTicks(minX: number, maxX: number): number[] {
+  const span = Math.max(1, maxX - minX);
+  const step = yearTickStep(span);
+  const start = Math.ceil(minX / step) * step;
+  const end = Math.floor(maxX / step) * step;
+  const ticks: number[] = [];
+  for (let y = start; y <= end + 0.001; y += step) ticks.push(Math.round(y));
+  // Always try to keep the first/last data years visible if they fell between steps.
+  if (ticks.length === 0) {
+    ticks.push(Math.round((minX + maxX) / 2));
+  }
+  return ticks;
+}
+
+function niceCeil(value: number): number {
+  if (value <= 0) return 1;
+  const exp = Math.floor(Math.log10(value));
+  const base = Math.pow(10, exp);
+  const norm = value / base;
+  const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return nice * base;
+}
+
 function PriceLineChart({
   series,
   dots,
@@ -5216,22 +5368,27 @@ function PriceLineChart({
     minX -= 1;
     maxX += 1;
   }
-  const maxY = Math.max(...allY) * 1.1 || 1;
+  // Small padding so edge labels aren't clipped against the frame.
+  const xPad = Math.max(0.4, (maxX - minX) * 0.04);
+  minX -= xPad;
+  maxX += xPad;
+
+  const rawMaxY = Math.max(...allY) || 1;
+  const maxY = niceCeil(rawMaxY * 1.12);
 
   const sx = (x: number) =>
     pad.left + ((x - minX) / (maxX - minX)) * (width - pad.left - pad.right);
   const sy = (y: number) =>
     height - pad.bottom - (y / maxY) * (height - pad.top - pad.bottom);
 
-  const yTicks = 4;
-  const xYears: number[] = [];
-  for (let y = Math.ceil(minX); y <= Math.floor(maxX); y++) xYears.push(y);
+  const yTickCount = 4;
+  const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) => (maxY / yTickCount) * i);
+  const xYears = yearTicks(minX, maxX);
 
   return (
     <div className="price-chart">
       <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img">
-        {Array.from({ length: yTicks + 1 }, (_, i) => {
-          const value = (maxY / yTicks) * i;
+        {yTicks.map((value, i) => {
           const y = sy(value);
           return (
             <g key={i}>
@@ -5497,148 +5654,498 @@ function PriceHistoryTab({
   );
 }
 
-function SizeTypeCard({
+function sizeTypeTitle(type: SizeType): string {
+  const range = `de ${type.fromSum || 0} a ${type.toSum ? `${type.toSum} cm` : "sin límite"}`;
+  return type.label?.trim() ? `${type.label.trim()} (${range})` : range;
+}
+
+function currentFactorForType(type: SizeType): number | null {
+  return factorAt(type, Date.now());
+}
+
+function SizeTypeEditModal({
   type,
-  onUpdate,
-  onRemove
+  onSave,
+  onDelete,
+  onClose
 }: {
   type: SizeType;
-  onUpdate: (patch: Partial<SizeType>) => void;
-  onRemove: () => void;
+  onSave: (next: SizeType) => void;
+  onDelete?: () => void;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [draft, setDraft] = useState<SizeType>(() => ({
+    ...type,
+    factors:
+      type.factors.length > 0
+        ? type.factors
+        : [{ id: `f-${Date.now()}`, from: "", factor: 0 }]
+  }));
+  const [adding, setAdding] = useState(false);
+  const [newFactor, setNewFactor] = useState("");
+  const [newFrom, setNewFrom] = useState("");
+  const [error, setError] = useState("");
 
-  function updateFactor(id: string, patch: Partial<FactorPeriod>) {
-    onUpdate({
-      factors: type.factors.map((p) => (p.id === id ? { ...p, ...patch } : p))
-    });
-  }
-  function addFactor() {
-    onUpdate({
-      factors: [
-        ...type.factors,
-        { id: `f-${Date.now()}-${type.factors.length}`, from: "", factor: 0 }
-      ]
-    });
-  }
-  function removeFactor(id: string) {
-    onUpdate({ factors: type.factors.filter((p) => p.id !== id) });
-  }
-
-  const rangeLabel = `de ${type.fromSum || 0} a ${
-    type.toSum ? `${type.toSum} cm` : "sin límite"
-  }`;
-  const sortedFactors = [...type.factors].sort(
+  const sorted = [...draft.factors].sort(
     (a, b) => periodMs(a.from) - periodMs(b.from)
   );
+  const latestId = sorted.length > 0 ? sorted[sorted.length - 1].id : null;
+
+  function updateFactor(id: string, patch: Partial<FactorPeriod>) {
+    setDraft((current) => ({
+      ...current,
+      factors: current.factors.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    }));
+  }
+
+  function removeFactor(id: string) {
+    setDraft((current) => ({
+      ...current,
+      factors: current.factors.filter((p) => p.id !== id)
+    }));
+  }
+
+  function addChange() {
+    const factor =
+      Number(newFactor.replace(/[^0-9.,]/g, "").replace(",", ".")) || 0;
+    if (!newFrom.trim()) {
+      setError("Elige la fecha desde la que vale el nuevo factor.");
+      return;
+    }
+    if (factor <= 0) {
+      setError("Escribe el nuevo factor (un número mayor que 0).");
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      factors: [
+        ...current.factors,
+        { id: `f-${Date.now()}-${current.factors.length}`, from: newFrom, factor }
+      ]
+    }));
+    setNewFactor("");
+    setNewFrom("");
+    setAdding(false);
+    setError("");
+  }
+
+  function save() {
+    if (!draft.label?.trim()) {
+      setError("Pon un nombre al tamaño (por ejemplo Pequeño).");
+      return;
+    }
+    if (draft.factors.length === 0) {
+      setError("Añade al menos un factor.");
+      return;
+    }
+    for (const period of draft.factors) {
+      if (!period.from?.trim()) {
+        setError("Cada factor necesita una fecha de inicio. No dejes fechas vacías.");
+        return;
+      }
+      if (!(period.factor > 0)) {
+        setError("Cada factor debe ser un número mayor que 0.");
+        return;
+      }
+    }
+    onSave(draft);
+  }
 
   return (
-    <div className="size-type-card">
-      <div className="size-type-head">
-        <button
-          type="button"
-          className="size-type-toggle"
-          onClick={() => setOpen((v) => !v)}
-          aria-label={open ? "Contraer" : "Expandir"}
-        >
-          {open ? "▾" : "▸"}
-        </button>
-        <div className="size-type-range">
-          <label>
-            de
-            <input
-              inputMode="numeric"
-              value={type.fromSum || ""}
-              placeholder="0"
-              onChange={(event) =>
-                onUpdate({
-                  fromSum: Number(event.target.value.replace(/[^0-9]/g, "")) || 0
-                })
-              }
-            />
-          </label>
-          <label>
-            a
-            <input
-              inputMode="numeric"
-              value={type.toSum || ""}
-              placeholder="sin límite"
-              onChange={(event) =>
-                onUpdate({
-                  toSum: Number(event.target.value.replace(/[^0-9]/g, "")) || 0
-                })
-              }
-            />
-            cm
-          </label>
-          <input
-            className="size-type-label"
-            value={type.label ?? ""}
-            placeholder="Nombre (opcional): p. ej. «Pequeño»"
-            onChange={(event) => onUpdate({ label: event.target.value })}
-          />
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal modal-wide cuentas-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h3>{type.id.startsWith("st-new") ? "Nuevo tamaño" : "Tamaño"}</h3>
+          <button className="icon-button ghost" type="button" onClick={onClose}>
+            ✕
+          </button>
         </div>
-        <button type="button" className="ghost danger small" onClick={onRemove}>
-          Quitar tipo
-        </button>
-      </div>
-
-      {open && (
-        <div className="size-type-body">
-          <p className="muted small-note">
-            Cubre las obras cuyo alto + ancho está {rangeLabel} (ambos extremos
-            incluidos). Añade una fila por cada vez que cambió el factor.
-          </p>
-          <div className="factor-table">
-            <div className="factor-row period-row factor-head">
-              <span>Desde (fecha)</span>
-              <span>Factor</span>
-              <span />
+        <div className="modal-body">
+          <div className="cuentas-step">
+            <p className="cuentas-q">Nombre</p>
+            <div className="choice-row">
+              {["Pequeño", "Mediano", "Grande"].map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className={`choice-chip${draft.label === name ? " active" : ""}`}
+                  onClick={() => setDraft((c) => ({ ...c, label: name }))}
+                >
+                  {name}
+                </button>
+              ))}
             </div>
-            {sortedFactors.length === 0 ? (
-              <p className="muted small-note">Aún no hay factores para este tipo.</p>
+            <label className="mt-soft">
+              Otro nombre
+              <input
+                value={draft.label ?? ""}
+                placeholder="Ej. Extra grande"
+                onChange={(event) =>
+                  setDraft((c) => ({ ...c, label: event.target.value }))
+                }
+              />
+            </label>
+          </div>
+
+          <div className="cuentas-step">
+            <p className="cuentas-q">Rango en cm (alto + ancho)</p>
+            <div className="size-range-big">
+              <label>
+                Desde
+                <input
+                  inputMode="numeric"
+                  value={draft.fromSum || ""}
+                  placeholder="0"
+                  onChange={(event) =>
+                    setDraft((c) => ({
+                      ...c,
+                      fromSum: Number(event.target.value.replace(/[^0-9]/g, "")) || 0
+                    }))
+                  }
+                />
+              </label>
+              <span className="size-range-sep">→</span>
+              <label>
+                Hasta
+                <input
+                  inputMode="numeric"
+                  value={draft.toSum || ""}
+                  placeholder="100"
+                  onChange={(event) =>
+                    setDraft((c) => ({
+                      ...c,
+                      toSum: Number(event.target.value.replace(/[^0-9]/g, "")) || 0
+                    }))
+                  }
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="cuentas-step">
+            <p className="cuentas-q">Factores en el tiempo</p>
+            <p className="muted small-note">
+              Cada tarjeta dice: «a partir de esta fecha, el factor es este». La más
+              reciente es la que se usa hoy.
+            </p>
+            <div className="factor-card-list">
+              {sorted.map((period) => {
+                const isLatest = period.id === latestId;
+                return (
+                  <div
+                    className={`factor-card${isLatest ? " is-latest" : ""}`}
+                    key={period.id}
+                  >
+                    <div className="factor-card-main">
+                      {isLatest && <span className="factor-card-badge">Se usa ahora</span>}
+                      <label>
+                        A partir de
+                        <DateField
+                          value={period.from ?? ""}
+                          onChange={(value) => updateFactor(period.id, { from: value })}
+                        />
+                      </label>
+                      <label>
+                        Factor
+                        <input
+                          inputMode="decimal"
+                          value={period.factor || ""}
+                          onChange={(event) =>
+                            updateFactor(period.id, {
+                              factor:
+                                Number(
+                                  event.target.value
+                                    .replace(/[^0-9.,]/g, "")
+                                    .replace(",", ".")
+                                ) || 0
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                    {sorted.length > 1 && (
+                      <button
+                        type="button"
+                        className="factor-card-remove"
+                        onClick={() => removeFactor(period.id)}
+                        title="Quitar"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {!adding ? (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  setAdding(true);
+                  setError("");
+                }}
+              >
+                + Cambiar el factor (nueva fecha)
+              </button>
             ) : (
-              sortedFactors.map((period) => (
-                <div className="factor-row period-row" key={period.id}>
-                  <DateField
-                    value={period.from ?? ""}
-                    onChange={(value) => updateFactor(period.id, { from: value })}
-                  />
-                  <input
-                    inputMode="decimal"
-                    value={period.factor || ""}
-                    placeholder="Factor"
-                    onChange={(event) =>
-                      updateFactor(period.id, {
-                        factor:
-                          Number(
-                            event.target.value
-                              .replace(/[^0-9.,]/g, "")
-                              .replace(",", ".")
-                          ) || 0
-                      })
-                    }
-                  />
+              <div className="factor-add-box">
+                <p className="cuentas-q">Nuevo factor</p>
+                <div className="form-grid two">
+                  <label>
+                    ¿Desde qué fecha vale?
+                    <DateField value={newFrom} onChange={setNewFrom} />
+                  </label>
+                  <label>
+                    ¿Cuál es el factor?
+                    <input
+                      inputMode="decimal"
+                      value={newFactor}
+                      placeholder="Ej. 22"
+                      onChange={(event) => setNewFactor(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="choice-row">
+                  <button type="button" onClick={addChange}>
+                    Añadir
+                  </button>
                   <button
                     type="button"
-                    className="ghost danger small"
-                    onClick={() => removeFactor(period.id)}
+                    className="ghost"
+                    onClick={() => {
+                      setAdding(false);
+                      setError("");
+                    }}
                   >
-                    Quitar
+                    Cancelar
                   </button>
                 </div>
-              ))
+              </div>
             )}
           </div>
-          <button type="button" className="ghost small" onClick={addFactor}>
-            + Añadir cambio de factor
-          </button>
-          <p className="muted small-note">
-            Deja la fecha vacía para «desde siempre». El factor vale hasta la siguiente
-            fecha.
-          </p>
+
+          {error && <div className="error-banner">{error}</div>}
         </div>
-      )}
+        <div className="modal-actions">
+          {onDelete && (
+            <button type="button" className="ghost danger" onClick={onDelete}>
+              Eliminar tamaño
+            </button>
+          )}
+          <button type="button" className="ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button type="button" onClick={save}>
+            Guardar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PricingExportModal({
+  inventory,
+  sizeTypes,
+  taxRates,
+  onClose,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  sizeTypes: SizeType[];
+  taxRates: TaxRate[];
+  onClose: () => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const settingsNow: AppSettings = { sizeTypes, taxRates };
+  const countries = taxCountries(settingsNow);
+  const [includeTax, setIncludeTax] = useState(true);
+  const [country, setCountry] = useState(countries[0] ?? "");
+  const [selected, setSelected] = useState<string[]>(
+    inventory.artworks.map((a) => a.id)
+  );
+  const [showPicker, setShowPicker] = useState(false);
+  const [asOfDate, setAsOfDate] = useState(() => {
+    const now = new Date();
+    const d = String(now.getDate()).padStart(2, "0");
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    return `${d}-${m}-${now.getFullYear()}`;
+  });
+  const [busy, setBusy] = useState(false);
+
+  async function generate() {
+    if (selected.length === 0) {
+      onError("Elige al menos una obra.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const atMs = dateToMs(asOfDate);
+      const dateMs = Number.isFinite(atMs) ? (atMs as number) : Date.now();
+      const headers = [
+        "Nombre",
+        "Serie",
+        "Año",
+        "Ancho (cm)",
+        "Alto (cm)",
+        "Suma (cm)",
+        "Factor",
+        "Base (€)"
+      ];
+      if (includeTax && country) headers.push(`Con impuesto ${country} (€)`);
+
+      const arts = orderArtworks(
+        inventory.artworks.filter((a) => selected.includes(a.id)),
+        "title"
+      );
+      const rows = arts.map((art) => {
+        const wCm = toCm(art.width, art.unit);
+        const hCm = toCm(art.height, art.unit);
+        const sum = sizeSumCm(art);
+        const factor = factorForDate(settingsNow, sum, dateMs);
+        const base = factor == null ? null : sum * factor;
+        const row: Array<string | number> = [
+          art.title,
+          art.series || "",
+          art.yearMade || "",
+          wCm != null ? Math.round(wCm) : "",
+          hCm != null ? Math.round(hCm) : "",
+          sum > 0 ? Math.round(sum) : "",
+          factor ?? "",
+          base != null ? Math.round(base) : ""
+        ];
+        if (includeTax && country) {
+          row.push(
+            base != null
+              ? Math.round(base * (1 + taxRateAt(settingsNow, country, dateMs) / 100))
+              : ""
+          );
+        }
+        return row;
+      });
+
+      const path = await window.inventoryApi.exportPricingSheet({
+        filename: "precios.xlsx",
+        sheetName: "Precios",
+        headers,
+        rows
+      });
+      if (path) {
+        onToast("Hoja de cálculo guardada.");
+        onClose();
+      }
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo exportar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Generar hoja de precios</h3>
+          <button className="icon-button ghost" type="button" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body export-wizard">
+          <div className="export-step">
+            <h4>1. ¿Incluir impuesto?</h4>
+            <div className="choice-row">
+              <button
+                type="button"
+                className={`choice-chip${includeTax ? " active" : ""}`}
+                onClick={() => setIncludeTax(true)}
+              >
+                Sí, con impuesto
+              </button>
+              <button
+                type="button"
+                className={`choice-chip${!includeTax ? " active" : ""}`}
+                onClick={() => setIncludeTax(false)}
+              >
+                No, solo precio base
+              </button>
+            </div>
+          </div>
+
+          {includeTax && (
+            <div className="export-step">
+              <h4>2. País del impuesto</h4>
+              {countries.length === 0 ? (
+                <p className="muted small-note">
+                  Aún no hay países. Añádelos abajo en Impuestos.
+                </p>
+              ) : (
+                <select
+                  value={country}
+                  onChange={(event) => setCountry(event.target.value)}
+                >
+                  {countries.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+
+          <div className="export-step">
+            <h4>{includeTax ? "3" : "2"}. ¿Qué obras?</h4>
+            <div className="choice-row">
+              <button
+                type="button"
+                className="choice-chip"
+                onClick={() => setSelected(inventory.artworks.map((a) => a.id))}
+              >
+                Todas ({inventory.artworks.length})
+              </button>
+              <button type="button" className="ghost" onClick={() => setShowPicker(true)}>
+                Elegir… ({selected.length} seleccionadas)
+              </button>
+            </div>
+          </div>
+
+          <div className="export-step">
+            <h4>{includeTax ? "4" : "3"}. ¿Con el factor de qué fecha?</h4>
+            <DateField value={asOfDate} onChange={setAsOfDate} />
+            <p className="muted small-note">
+              Se usa el factor vigente en esa fecha (sirve si cambió a mitad de año).
+            </p>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button type="button" disabled={busy} onClick={generate}>
+            {busy ? "Generando…" : "Generar Excel"}
+          </button>
+        </div>
+        {showPicker && (
+          <ArtworkPickerModal
+            inventory={inventory}
+            excludeIds={[]}
+            initialIds={selected}
+            title="Elegir obras para la hoja"
+            onConfirm={(ids) => {
+              setSelected(ids);
+              setShowPicker(false);
+            }}
+            onClose={() => setShowPicker(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -5662,7 +6169,8 @@ function PricingSettingsPage({
   );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [editing, setEditing] = useState<SizeType | null>(null);
+  const [showExport, setShowExport] = useState(false);
 
   const dirty =
     JSON.stringify(sizeTypes) !==
@@ -5670,28 +6178,19 @@ function PricingSettingsPage({
     JSON.stringify(taxRates) !== JSON.stringify(inventory.settings.taxRates ?? []);
 
   function addType() {
-    setSizeTypes((list) => [
-      ...list,
-      {
-        id: `st-${Date.now()}-${list.length}`,
-        label: "",
-        fromSum: 0,
-        toSum: 0,
-        factors: [
-          { id: `f-${Date.now()}`, from: "", factor: 0 }
-        ]
-      }
-    ]);
-    setSaved(false);
+    const now = new Date();
+    const d = String(now.getDate()).padStart(2, "0");
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const today = `${d}-${m}-${now.getFullYear()}`;
+    setEditing({
+      id: `st-new-${Date.now()}`,
+      label: "Pequeño",
+      fromSum: 0,
+      toSum: 100,
+      factors: [{ id: `f-${Date.now()}`, from: today, factor: 0 }]
+    });
   }
-  function updateType(id: string, patch: Partial<SizeType>) {
-    setSizeTypes((list) => list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-    setSaved(false);
-  }
-  function removeType(id: string) {
-    setSizeTypes((list) => list.filter((t) => t.id !== id));
-    setSaved(false);
-  }
+
   function addTax() {
     setTaxRates((list) => [
       ...list,
@@ -5732,59 +6231,6 @@ function PricingSettingsPage({
     }
   }
 
-  async function exportSheet() {
-    setExporting(true);
-    try {
-      const settingsNow: AppSettings = { sizeTypes, taxRates };
-      const countries = taxCountries(settingsNow);
-      const nowMs = Date.now();
-      const headers = [
-        "Nombre",
-        "Serie",
-        "Año",
-        "Ancho (cm)",
-        "Alto (cm)",
-        "Suma (cm)",
-        "Factor",
-        "Base (€)",
-        ...countries.map((c) => `Con impuesto ${c} (€)`)
-      ];
-      const rows = orderArtworks(inventory.artworks, "title").map((art) => {
-        const wCm = toCm(art.width, art.unit);
-        const hCm = toCm(art.height, art.unit);
-        const sum = sizeSumCm(art);
-        const factor = factorForDate(settingsNow, sum, nowMs);
-        const base = factor == null ? null : sum * factor;
-        return [
-          art.title,
-          art.series || "",
-          art.yearMade || "",
-          wCm != null ? Math.round(wCm) : "",
-          hCm != null ? Math.round(hCm) : "",
-          sum > 0 ? Math.round(sum) : "",
-          factor ?? "",
-          base != null ? Math.round(base) : "",
-          ...countries.map((c) =>
-            base != null
-              ? Math.round(base * (1 + taxRateAt(settingsNow, c, nowMs) / 100))
-              : ""
-          )
-        ];
-      });
-      const path = await window.inventoryApi.exportPricingSheet({
-        filename: "precios.xlsx",
-        sheetName: "Precios",
-        headers,
-        rows
-      });
-      if (path) onToast("Hoja de cálculo guardada.");
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo exportar.");
-    } finally {
-      setExporting(false);
-    }
-  }
-
   const orderedTypes = [...sizeTypes].sort(
     (a, b) => (a.fromSum || 0) - (b.fromSum || 0)
   );
@@ -5795,124 +6241,3425 @@ function PricingSettingsPage({
         <div>
           <p className="eyebrow">Precios</p>
           <h2>Factores y precios</h2>
+          <p className="page-lead">
+            Precio = (alto + ancho) × factor. Ya hay tres tamaños de ejemplo listos;
+            ábrelos y cambia el factor si quieres.
+          </p>
         </div>
         <div className="form-head-actions">
-          <button
-            type="button"
-            className="ghost"
-            disabled={exporting}
-            onClick={exportSheet}
-          >
-            {exporting ? "Generando…" : "Generar hoja de cálculo"}
+          <button type="button" className="ghost" onClick={() => setShowExport(true)}>
+            Generar hoja
           </button>
           <button disabled={saving || !dirty} onClick={save}>
-            {saved && !dirty ? "Guardado" : "Guardar cambios"}
+            {saved && !dirty ? "Guardado" : "Guardar"}
           </button>
         </div>
       </div>
 
       <div className="pricing-block">
         <div className="related-head">
-          <h3>Tipos por tamaño y factor</h3>
-          <button type="button" className="ghost" onClick={addType}>
-            + Añadir tipo
+          <h3>Tamaños</h3>
+          <button type="button" onClick={addType}>
+            + Nuevo tamaño
           </button>
         </div>
-        <p className="muted small-note">
-          El precio base = (alto + ancho en cm) × factor. Agrupa las obras por rango de
-          tamaño (un «tipo»). Dentro de cada tipo, el factor puede cambiar con los años,
-          sin repetir filas por año.
-        </p>
         {orderedTypes.length === 0 ? (
-          <p className="muted small-note">
-            Aún no hay tipos. Empieza con «+ Añadir tipo».
-          </p>
+          <div className="empty-friendly">
+            <p>Todavía no hay tamaños. Empieza con uno, por ejemplo «Pequeño».</p>
+            <button type="button" onClick={addType}>
+              Crear el primero
+            </button>
+          </div>
         ) : (
-          <div className="size-type-list">
-            {orderedTypes.map((type) => (
-              <SizeTypeCard
-                key={type.id}
-                type={type}
-                onUpdate={(patch) => updateType(type.id, patch)}
-                onRemove={() => removeType(type.id)}
-              />
-            ))}
+          <div className="size-tile-list">
+            {orderedTypes.map((type) => {
+              const factor = currentFactorForType(type);
+              const name = type.label?.trim() || "Sin nombre";
+              const range = `${type.fromSum || 0} → ${
+                type.toSum ? `${type.toSum} cm` : "∞"
+              }`;
+              return (
+                <button
+                  type="button"
+                  className="size-tile"
+                  key={type.id}
+                  onClick={() => setEditing(type)}
+                >
+                  <span className="size-tile-name">{name}</span>
+                  <span className="size-tile-range">{range}</span>
+                  <span className="size-tile-factor">
+                    <em>Factor</em>
+                    <strong>{factor != null ? factor : "—"}</strong>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
 
       <div className="pricing-block">
         <div className="related-head">
-          <h3>Impuestos por país</h3>
+          <h3>Impuestos</h3>
           <button type="button" className="ghost" onClick={addTax}>
-            + Añadir tramo
+            + País
           </button>
         </div>
-        <p className="muted small-note">
-          Puedes añadir varios tramos para un mismo país si el impuesto cambió con el
-          tiempo. Deja la fecha vacía para «desde siempre».
-        </p>
-        <div className="factor-table">
-          <div className="factor-row tax-row factor-head">
-            <span>País</span>
-            <span>Desde (fecha)</span>
-            <span>Impuesto (%)</span>
-            <span />
+        {taxRates.length === 0 ? (
+          <p className="muted small-note">Aún no hay impuestos.</p>
+        ) : (
+          <div className="tax-simple-list">
+            {taxRates.map((tax) => (
+              <div className="tax-simple-row" key={tax.id}>
+                <input
+                  value={tax.country}
+                  placeholder="País"
+                  onChange={(event) =>
+                    updateTax(tax.id, { country: event.target.value })
+                  }
+                />
+                <label className="tax-rate-wrap">
+                  %
+                  <input
+                    inputMode="decimal"
+                    value={tax.rate || ""}
+                    onChange={(event) =>
+                      updateTax(tax.id, {
+                        rate:
+                          Number(
+                            event.target.value
+                              .replace(/[^0-9.,]/g, "")
+                              .replace(",", ".")
+                          ) || 0
+                      })
+                    }
+                  />
+                </label>
+                <DateField
+                  value={tax.from ?? ""}
+                  onChange={(value) => updateTax(tax.id, { from: value })}
+                />
+                <button
+                  type="button"
+                  className="ghost danger small"
+                  onClick={() => removeTax(tax.id)}
+                >
+                  Quitar
+                </button>
+              </div>
+            ))}
           </div>
-          {taxRates.map((tax) => (
-            <div className="factor-row tax-row" key={tax.id}>
-              <input
-                value={tax.country}
-                placeholder="País"
-                onChange={(event) => updateTax(tax.id, { country: event.target.value })}
-              />
-              <DateField
-                value={tax.from ?? ""}
-                onChange={(value) => updateTax(tax.id, { from: value })}
-              />
-              <input
-                inputMode="decimal"
-                value={tax.rate || ""}
-                onChange={(event) =>
-                  updateTax(tax.id, {
-                    rate:
-                      Number(
-                        event.target.value.replace(/[^0-9.,]/g, "").replace(",", ".")
-                      ) || 0
-                  })
+        )}
+        <p className="muted small-note">
+          La fecha es opcional: úsala solo si el impuesto cambió en algún momento.
+        </p>
+      </div>
+
+      {editing && (
+        <SizeTypeEditModal
+          type={editing}
+          onClose={() => setEditing(null)}
+          onDelete={
+            sizeTypes.some((t) => t.id === editing.id)
+              ? () => {
+                  setSizeTypes((list) => list.filter((t) => t.id !== editing.id));
+                  setSaved(false);
+                  setEditing(null);
                 }
+              : undefined
+          }
+          onSave={(next) => {
+            const cleanId = next.id.startsWith("st-new")
+              ? `st-${Date.now()}`
+              : next.id;
+            const savedType = { ...next, id: cleanId };
+            setSizeTypes((list) => {
+              const exists = list.some((t) => t.id === savedType.id);
+              return exists
+                ? list.map((t) => (t.id === savedType.id ? savedType : t))
+                : [...list, savedType];
+            });
+            setSaved(false);
+            setEditing(null);
+          }}
+        />
+      )}
+
+      {showExport && (
+        <PricingExportModal
+          inventory={inventory}
+          sizeTypes={sizeTypes}
+          taxRates={taxRates}
+          onClose={() => setShowExport(false)}
+          onError={onError}
+          onToast={onToast}
+        />
+      )}
+    </section>
+  );
+}
+
+function requireApi<K extends keyof typeof window.inventoryApi>(
+  name: K
+): (typeof window.inventoryApi)[K] {
+  const fn = window.inventoryApi?.[name];
+  if (typeof fn !== "function") {
+    throw new Error(
+      "La app necesita reiniciarse para usar esta función. Cierra la ventana y vuelve a abrir «npm run dev»."
+    );
+  }
+  return fn;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  const api = window.inventoryApi?.writeClipboardText;
+  if (typeof api === "function") {
+    await api(text);
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.left = "-9999px";
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand("copy");
+  document.body.removeChild(area);
+  if (!ok) throw new Error("No se pudo copiar al portapapeles.");
+}
+
+function normalizeTextExample(
+  example: TextGeneratorExample
+): TextGeneratorExample {
+  return {
+    id: example.id,
+    topic: String(example.topic ?? example.title ?? "").trim(),
+    body: String(example.body ?? example.text ?? "")
+  };
+}
+
+function seriesTextKey(seriesId: string, textId: string): string {
+  return `${seriesId}::${textId}`;
+}
+
+function expenseCategoryLabel(category: ExpenseCategory): string {
+  switch (category) {
+    case "material":
+      return "Materiales";
+    case "exhibition":
+      return "Exposición";
+    default:
+      return "Varios";
+  }
+}
+
+function ExpenseModal({
+  inventory,
+  setInventory,
+  expense,
+  onClose,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  expense: Expense | null;
+  onClose: () => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const [form, setForm] = useState<ExpenseInput>(() =>
+    expense
+      ? {
+          id: expense.id,
+          category: expense.category,
+          amount: expense.amount,
+          date: expense.date,
+          note: expense.note,
+          contactId: expense.contactId ?? "",
+          exhibitionId: expense.exhibitionId ?? "",
+          receiptImageId: expense.receiptImageId ?? ""
+        }
+      : {
+          category: "material",
+          amount: "",
+          date: (() => {
+            const now = new Date();
+            const d = String(now.getDate()).padStart(2, "0");
+            const m = String(now.getMonth() + 1).padStart(2, "0");
+            return `${d}-${m}-${now.getFullYear()}`;
+          })(),
+          note: "",
+          contactId: "",
+          exhibitionId: "",
+          receiptImageId: ""
+        }
+  );
+  const [saving, setSaving] = useState(false);
+  const [receiptUrl, setReceiptUrl] = useState("");
+
+  useEffect(() => {
+    const imageId = form.receiptImageId || expense?.receiptImageId;
+    const image = inventory.images.find((img) => img.id === imageId);
+    if (!image?.absolutePath) {
+      setReceiptUrl("");
+      return;
+    }
+    let cancelled = false;
+    void window.inventoryApi.imageToDataUrl(image.absolutePath).then((url) => {
+      if (!cancelled) setReceiptUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.receiptImageId, expense?.receiptImageId, inventory.images]);
+
+  function set<K extends keyof ExpenseInput>(key: K, value: ExpenseInput[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function save() {
+    if (!form.amount.trim()) {
+      onError("Escribe cuánto se gastó (el importe).");
+      return;
+    }
+    setSaving(true);
+    try {
+      const data = await requireApi("saveExpense")(form);
+      setInventory(data);
+      onToast("Gasto guardado.");
+      onClose();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function attachReceipt() {
+    try {
+      let expenseId = form.id;
+      if (!expenseId) {
+        if (!form.amount.trim()) {
+          onError("Antes de adjuntar el ticket, escribe el importe.");
+          return;
+        }
+        const data = await requireApi("saveExpense")(form);
+        setInventory(data);
+        const created = [...data.expenses].sort((a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt)
+        )[0];
+        expenseId = created?.id;
+        if (!expenseId) {
+          onError("No se pudo crear el gasto.");
+          return;
+        }
+        setForm((current) => ({ ...current, id: expenseId }));
+      }
+      const result = await requireApi("importImage")("expense", expenseId, "receipt");
+      if (!result) return;
+      setInventory(result.inventory);
+      const image = result.image as { id?: string };
+      if (image?.id) set("receiptImageId", image.id);
+      onToast("Ticket guardado.");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo adjuntar.");
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal modal-wide cuentas-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h3>{expense ? "Editar gasto" : "Añadir un gasto"}</h3>
+          <button type="button" className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="cuentas-step">
+            <p className="cuentas-q">¿De qué tipo es?</p>
+            <div className="cuentas-type-grid">
+              {(
+                [
+                  ["material", "Materiales", "Lienzos, pintura, marcos…"],
+                  ["exhibition", "Exposición", "Transporte, montaje, catálogo…"],
+                  ["misc", "Otros", "Cualquier otro gasto"]
+                ] as Array<[ExpenseCategory, string, string]>
+              ).map(([value, label, hint]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`cuentas-type${form.category === value ? " active" : ""}`}
+                  onClick={() => set("category", value)}
+                >
+                  <strong>{label}</strong>
+                  <span>{hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="cuentas-step">
+            <p className="cuentas-q">¿Cuánto y cuándo?</p>
+            <div className="form-grid two">
+              <label>
+                Importe en euros
+                <div className="money-input">
+                  <input
+                    autoFocus={!expense}
+                    inputMode="decimal"
+                    value={form.amount}
+                    placeholder="0"
+                    onChange={(event) => set("amount", event.target.value)}
+                  />
+                  <span>€</span>
+                </div>
+              </label>
+              <label>
+                Fecha
+                <DateField
+                  value={form.date ?? ""}
+                  onChange={(value) => set("date", value)}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="cuentas-step">
+            <p className="cuentas-q">¿En qué se gastó?</p>
+            <label>
+              Nota breve
+              <input
+                value={form.note}
+                placeholder="Ej. tubos de óleo, transporte a Madrid…"
+                onChange={(event) => set("note", event.target.value)}
               />
-              <button
-                type="button"
-                className="ghost danger small"
-                onClick={() => removeTax(tax.id)}
-              >
-                Quitar
+            </label>
+          </div>
+
+          {form.category === "exhibition" && (
+            <div className="cuentas-step">
+              <p className="cuentas-q">¿Con qué exposición? (opcional)</p>
+              <div className="form-grid two">
+                <label>
+                  Exposición
+                  <select
+                    value={form.exhibitionId ?? ""}
+                    onChange={(event) => set("exhibitionId", event.target.value)}
+                  >
+                    <option value="">Ninguna</option>
+                    {inventory.exhibitions.map((exhibition) => (
+                      <option key={exhibition.id} value={exhibition.id}>
+                        {exhibition.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Galería o persona
+                  <select
+                    value={form.contactId ?? ""}
+                    onChange={(event) => set("contactId", event.target.value)}
+                  >
+                    <option value="">Ninguna</option>
+                    {inventory.contacts.map((contact) => (
+                      <option key={contact.id} value={contact.id}>
+                        {contact.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+          )}
+
+          <div className="cuentas-step">
+            <p className="cuentas-q">Ticket o factura (opcional)</p>
+            <div className="receipt-box">
+              {receiptUrl ? (
+                <img className="receipt-thumb" src={receiptUrl} alt="Ticket" />
+              ) : (
+                <p className="muted">Todavía no hay foto del ticket.</p>
+              )}
+              <button type="button" className="ghost" onClick={attachReceipt}>
+                {receiptUrl ? "Cambiar foto" : "Hacer foto / elegir imagen"}
               </button>
             </div>
-          ))}
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button type="button" disabled={saving} onClick={save}>
+            {saving ? "Guardando…" : "Guardar gasto"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FinancialExportModal({
+  inventory,
+  onClose,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  onClose: () => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [exhibitionId, setExhibitionId] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function inRange(date?: string): boolean {
+    const ms = dateToMs(date ?? "");
+    if (!Number.isFinite(ms)) return !fromDate && !toDate;
+    const fromMs = dateToMs(fromDate);
+    const toMs = dateToMs(toDate);
+    if (Number.isFinite(fromMs) && (ms as number) < (fromMs as number)) return false;
+    if (Number.isFinite(toMs) && (ms as number) > (toMs as number)) return false;
+    return true;
+  }
+
+  async function generate() {
+    setBusy(true);
+    try {
+      const expenses = (inventory.expenses ?? []).filter((expense) => {
+        if (exhibitionId && expense.exhibitionId !== exhibitionId) return false;
+        return inRange(expense.date);
+      });
+      const sales = inventory.movements.filter((movement) => {
+        if (movementKind(movement.type) !== "sale") return false;
+        if (exhibitionId && movement.exhibitionId !== exhibitionId) return false;
+        return inRange(movement.date);
+      });
+
+      const contactName = (id?: string) =>
+        inventory.contacts.find((c) => c.id === id)?.name ?? "";
+      const exhibitionTitle = exhibitionId
+        ? inventory.exhibitions.find((e) => e.id === exhibitionId)?.title ?? ""
+        : "";
+
+      const expenseRows = expenses.map((expense) => ({
+        category: expenseCategoryLabel(expense.category),
+        date: expense.date || "",
+        amount: parseMoney(expense.amount) ?? 0,
+        note: expense.note,
+        where:
+          contactName(expense.contactId) ||
+          inventory.exhibitions.find((e) => e.id === expense.exhibitionId)?.title ||
+          ""
+      }));
+      const incomeRows = sales.map((sale) => {
+        const art = inventory.artworks.find((a) => a.id === sale.artworkId);
+        const contextLabel =
+          sale.context === "gallery"
+            ? "Venta en galería"
+            : sale.context === "exhibition"
+              ? "Venta en exposición"
+              : "Venta directa";
+        return {
+          date: sale.date || "",
+          amount: parseMoney(sale.price) ?? 0,
+          how: contextLabel,
+          artwork: art?.title ?? sale.artworkId,
+          series: art?.series ?? "",
+          where:
+            sale.exhibitionTitle ||
+            contactName(sale.contactId) ||
+            sale.contactName ||
+            "",
+          received: parseMoney(sale.received)
+        };
+      });
+      const spent = expenseRows.reduce((sum, row) => sum + row.amount, 0);
+      const earned = incomeRows.reduce((sum, row) => sum + row.amount, 0);
+
+      const path = await requireApi("exportFinancialsSheet")({
+        filename: "cuentas.xlsx",
+        fromDate: fromDate || undefined,
+        toDate: toDate || undefined,
+        exhibitionTitle: exhibitionTitle || undefined,
+        expenseRows,
+        incomeRows,
+        totals: { spent, earned, net: earned - spent }
+      });
+      if (path) {
+        onToast("Resumen guardado.");
+        onClose();
+      }
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo exportar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Hacer un resumen en Excel</h3>
+          <button type="button" className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body export-wizard">
+          <p className="muted small-note">
+            Elige qué incluir. Si no tocas nada, se incluyen todos los gastos y ventas.
+          </p>
+          <div className="export-step">
+            <h4>1. ¿Qué periodo?</h4>
+            <div className="form-grid two">
+              <label>
+                Desde
+                <DateField value={fromDate} onChange={setFromDate} />
+              </label>
+              <label>
+                Hasta
+                <DateField value={toDate} onChange={setToDate} />
+              </label>
+            </div>
+            <button
+              type="button"
+              className="ghost small"
+              onClick={() => {
+                setFromDate("");
+                setToDate("");
+              }}
+            >
+              Todo el tiempo
+            </button>
+          </div>
+          <div className="export-step">
+            <h4>2. ¿Solo una exposición?</h4>
+            <select
+              value={exhibitionId}
+              onChange={(event) => setExhibitionId(event.target.value)}
+            >
+              <option value="">No, todas</option>
+              {inventory.exhibitions.map((exhibition) => (
+                <option key={exhibition.id} value={exhibition.id}>
+                  {exhibition.title}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button type="button" disabled={busy} onClick={generate}>
+            {busy ? "Creando…" : "Crear Excel"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function yearFromDate(value?: string): number | null {
+  if (!value) return null;
+  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value.trim());
+  if (match) return Number(match[3]);
+  const y = Number(String(value).replace(/[^0-9]/g, "").slice(0, 4));
+  return Number.isFinite(y) && y > 1900 ? y : null;
+}
+
+function FinancialsPage({
+  inventory,
+  setInventory,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const thisYear = new Date().getFullYear();
+  const [editing, setEditing] = useState<Expense | null | "new">(null);
+  const [showExport, setShowExport] = useState(false);
+  const [category, setCategory] = useState<"all" | ExpenseCategory>("all");
+  const [year, setYear] = useState<"all" | number>(thisYear);
+  const [exhibitionId, setExhibitionId] = useState("");
+  const [contactId, setContactId] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [periodMode, setPeriodMode] = useState<"year" | "range">("year");
+  const [showMore, setShowMore] = useState(false);
+  const [hideMoney, setHideMoney] = useState(() => {
+    try {
+      return localStorage.getItem("cuentas-hide-money") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+
+  function toggleHideMoney() {
+    setHideMoney((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem("cuentas-hide-money", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+
+  function moneyLabel(value: number): string {
+    return hideMoney ? "••••" : formatMoney(value);
+  }
+
+  const allExpenses = inventory.expenses ?? [];
+  const yearOptions = uniqueNumbers(
+    [
+      thisYear,
+      thisYear - 1,
+      thisYear - 2,
+      ...allExpenses.map((e) => yearFromDate(e.date)),
+      ...inventory.movements
+        .filter((m) => movementKind(m.type) === "sale")
+        .map((m) => yearFromDate(m.date))
+    ].filter((y): y is number => y != null)
+  ).sort((a, b) => b - a);
+
+  function matchesWindow(date?: string): boolean {
+    if (periodMode === "range") {
+      const ms = dateToMs(date ?? "");
+      if (!Number.isFinite(ms)) return !fromDate && !toDate;
+      const fromMs = dateToMs(fromDate);
+      const toMs = dateToMs(toDate);
+      if (Number.isFinite(fromMs) && (ms as number) < (fromMs as number)) return false;
+      if (Number.isFinite(toMs) && (ms as number) > (toMs as number)) return false;
+      return true;
+    }
+    if (year === "all") return true;
+    return yearFromDate(date) === year;
+  }
+
+  const expenses = [...allExpenses]
+    .filter((expense) => {
+      if (category !== "all" && expense.category !== category) return false;
+      if (exhibitionId && expense.exhibitionId !== exhibitionId) return false;
+      if (contactId && expense.contactId !== contactId) return false;
+      return matchesWindow(expense.date);
+    })
+    .sort((a, b) => {
+      const aMs = dateToMs(a.date);
+      const bMs = dateToMs(b.date);
+      if (Number.isFinite(aMs) && Number.isFinite(bMs))
+        return (bMs as number) - (aMs as number);
+      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+    });
+
+  const sales = inventory.movements.filter((movement) => {
+    if (movementKind(movement.type) !== "sale") return false;
+    if (exhibitionId && movement.exhibitionId !== exhibitionId) return false;
+    if (contactId && movement.contactId !== contactId) return false;
+    return matchesWindow(movement.date);
+  });
+
+  const spent = expenses.reduce((sum, e) => sum + (parseMoney(e.amount) ?? 0), 0);
+  const earned = sales.reduce((sum, m) => sum + (parseMoney(m.price) ?? 0), 0);
+
+  const windowLabel =
+    periodMode === "range"
+      ? fromDate || toDate
+        ? `${fromDate || "…"} → ${toDate || "…"}`
+        : "Rango de fechas"
+      : year === "all"
+        ? "Todo el tiempo"
+        : year === thisYear
+          ? `Este año (${year})`
+          : String(year);
+
+  async function remove(id: string) {
+    try {
+      const data = await requireApi("deleteExpense")(id);
+      setInventory(data);
+      setConfirmId(null);
+      onToast("Gasto eliminado.");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo eliminar.");
+    }
+  }
+
+  function clearExtra() {
+    setCategory("all");
+    setExhibitionId("");
+    setContactId("");
+  }
+
+  return (
+    <section className="list-page financials-page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Dinero</p>
+          <h2>Cuentas</h2>
+          <p className="page-lead">
+            Anota gastos aquí. Las ventas salen solas de los movimientos de las obras.
+          </p>
+        </div>
+        <label className="checkline hide-money-toggle">
+          <input type="checkbox" checked={hideMoney} onChange={toggleHideMoney} />
+          Ocultar importes
+        </label>
+      </div>
+
+      <div className="cuentas-toolbar">
+        <label className="cuentas-select">
+          Año
+          <select
+            value={periodMode === "range" ? "range" : year === "all" ? "all" : String(year)}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === "range") {
+                setPeriodMode("range");
+                return;
+              }
+              setPeriodMode("year");
+              setYear(value === "all" ? "all" : Number(value));
+            }}
+          >
+            <option value={String(thisYear)}>Este año ({thisYear})</option>
+            {yearOptions
+              .filter((y) => y !== thisYear)
+              .map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
+                </option>
+              ))}
+            <option value="all">Todo el tiempo</option>
+            <option value="range">Elegir fechas…</option>
+          </select>
+        </label>
+
+        <label className="cuentas-select">
+          Tipo de gasto
+          <select
+            value={category}
+            onChange={(event) =>
+              setCategory(event.target.value as "all" | ExpenseCategory)
+            }
+          >
+            <option value="all">Todos</option>
+            <option value="material">Materiales</option>
+            <option value="exhibition">Exposición</option>
+            <option value="misc">Otros</option>
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className={`ghost${showMore ? " is-on" : ""}`}
+          onClick={() => setShowMore((v) => !v)}
+        >
+          {showMore ? "Menos filtros" : "Más filtros"}
+        </button>
+      </div>
+
+      {periodMode === "range" && (
+        <div className="cuentas-range-row">
+          <label>
+            Desde
+            <DateField value={fromDate} onChange={setFromDate} />
+          </label>
+          <label>
+            Hasta
+            <DateField value={toDate} onChange={setToDate} />
+          </label>
+        </div>
+      )}
+
+      {showMore && (
+        <div className="cuentas-more-filters">
+          <label>
+            Exposición
+            <select
+              value={exhibitionId}
+              onChange={(event) => setExhibitionId(event.target.value)}
+            >
+              <option value="">Todas</option>
+              {inventory.exhibitions.map((exhibition) => (
+                <option key={exhibition.id} value={exhibition.id}>
+                  {exhibition.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Persona / galería
+            <select
+              value={contactId}
+              onChange={(event) => setContactId(event.target.value)}
+            >
+              <option value="">Todas</option>
+              {inventory.contacts.map((contact) => (
+                <option key={contact.id} value={contact.id}>
+                  {contact.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {(category !== "all" || exhibitionId || contactId) && (
+            <button type="button" className="ghost small" onClick={clearExtra}>
+              Limpiar
+            </button>
+          )}
+        </div>
+      )}
+
+      <p className="cuentas-window-label">
+        Viendo: <strong>{windowLabel}</strong>
+      </p>
+
+      <div className="money-totals money-totals-two">
+        <div className="money-card spent">
+          <span>Gastado</span>
+          <strong>{moneyLabel(spent)}</strong>
+        </div>
+        <div className="money-card earned">
+          <span>Ganado</span>
+          <strong>{moneyLabel(earned)}</strong>
         </div>
       </div>
 
-      <div className="pricing-block">
-        <div className="related-head">
-          <h3>Hoja de cálculo de precios</h3>
-        </div>
-        <p className="muted small-note">
-          Genera un archivo Excel con nombre, serie, año, medidas, factor, precio base e
-          impuesto por país. Se calcula con los factores de hoy y podrás guardarlo o
-          enviarlo.
-        </p>
-        <button
-          type="button"
-          className="ghost"
-          disabled={exporting}
-          onClick={exportSheet}
-        >
-          {exporting ? "Generando…" : "Generar hoja de cálculo"}
+      <div className="cuentas-actions">
+        <button type="button" className="cuentas-primary" onClick={() => setEditing("new")}>
+          + Añadir un gasto
+        </button>
+        <button type="button" className="ghost" onClick={() => setShowExport(true)}>
+          Hacer resumen en Excel
         </button>
       </div>
+
+      <div className="pricing-block cuentas-list-block">
+        <div className="related-head">
+          <h3>Tus gastos ({expenses.length})</h3>
+        </div>
+
+        {expenses.length === 0 ? (
+          <div className="empty-friendly">
+            <p>
+              {allExpenses.length === 0
+                ? "Todavía no hay gastos. Empieza con «Añadir un gasto»."
+                : "No hay gastos en este periodo."}
+            </p>
+            {allExpenses.length === 0 && (
+              <button type="button" onClick={() => setEditing("new")}>
+                Añadir el primero
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="expense-list">
+            {expenses.map((expense) => {
+              const where =
+                inventory.exhibitions.find((e) => e.id === expense.exhibitionId)
+                  ?.title ||
+                inventory.contacts.find((c) => c.id === expense.contactId)?.name ||
+                "";
+              return (
+                <div className="expense-card" key={expense.id}>
+                  <button
+                    type="button"
+                    className="expense-card-main"
+                    onClick={() => setEditing(expense)}
+                  >
+                    <span className="expense-cat-pill">
+                      {expenseCategoryLabel(expense.category)}
+                    </span>
+                    <strong className="expense-note">
+                      {expense.note || "Sin descripción"}
+                    </strong>
+                    <span className="muted expense-meta">
+                      {expense.date || "Sin fecha"}
+                      {where ? ` · ${where}` : ""}
+                    </span>
+                    <strong className="expense-amount">
+                      {moneyLabel(parseMoney(expense.amount) ?? 0)}
+                    </strong>
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost danger small"
+                    onClick={() => setConfirmId(expense.id)}
+                  >
+                    Borrar
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {editing !== null && (
+        <ExpenseModal
+          inventory={inventory}
+          setInventory={setInventory}
+          expense={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onError={onError}
+          onToast={onToast}
+        />
+      )}
+      {showExport && (
+        <FinancialExportModal
+          inventory={inventory}
+          onClose={() => setShowExport(false)}
+          onError={onError}
+          onToast={onToast}
+        />
+      )}
+      {confirmId && (
+        <div className="modal-backdrop" onClick={() => setConfirmId(null)}>
+          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>¿Borrar este gasto?</h3>
+            </div>
+            <p className="confirm-message">Se quitará de las cuentas.</p>
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={() => setConfirmId(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="ghost danger"
+                onClick={() => remove(confirmId)}
+              >
+                Sí, borrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
+  );
+}
+
+
+/* art type translations for the price list -------------------------------- */
+
+type PriceLang = "es" | "de" | "en";
+
+const PRICE_LANGS: Array<[PriceLang, string]> = [
+  ["es", "Español"],
+  ["de", "Deutsch"],
+  ["en", "English"]
+];
+
+const ART_TYPE_I18N: Record<string, Record<PriceLang, string>> = {
+  oil_canvas: { es: "Óleo sobre lienzo", de: "Öl auf Leinwand", en: "Oil on canvas" },
+  acrylic_canvas: {
+    es: "Acrílico sobre lienzo",
+    de: "Acryl auf Leinwand",
+    en: "Acrylic on canvas"
+  },
+  painting: { es: "Pintura", de: "Malerei", en: "Painting" },
+  watercolor: { es: "Acuarela", de: "Aquarell", en: "Watercolour" },
+  sculpture: { es: "Escultura", de: "Skulptur", en: "Sculpture" },
+  drawing: { es: "Dibujo", de: "Zeichnung", en: "Drawing" },
+  print: { es: "Grabado", de: "Druck", en: "Print" },
+  mixed_media: { es: "Técnica mixta", de: "Mischtechnik", en: "Mixed media" },
+  other: { es: "Otro", de: "Sonstiges", en: "Other" }
+};
+
+function artTypeLabel(
+  inventory: InventoryData,
+  value: string | undefined,
+  lang: PriceLang
+): string {
+  if (!value) return "";
+  const translated = ART_TYPE_I18N[value]?.[lang];
+  if (translated) return translated;
+  return labelFor(inventory, "artworkType", value);
+}
+
+
+const APP_HEADING_DEFAULTS: Record<
+  PriceLang,
+  {
+    works: string;
+    aboutWorks: string;
+    aboutProject: string;
+    emptyImage: string;
+    seriesPrefix: string;
+    noSeries: string;
+    sizeLabel: string;
+    yearLabel: string;
+    typeLabel: string;
+    tocLabel: string;
+    sectionsLabel: string;
+    workSingular: string;
+    workPlural: string;
+  }
+> = {
+  es: {
+    works: "Obras",
+    aboutWorks: "Sobre las obras",
+    aboutProject: "Sobre el proyecto",
+    emptyImage: "Sin imagen",
+    seriesPrefix: "Serie",
+    noSeries: "sin serie",
+    sizeLabel: "Tamaño",
+    yearLabel: "Año",
+    typeLabel: "Técnica",
+    tocLabel: "Índice",
+    sectionsLabel: "Textos",
+    workSingular: "cuadro",
+    workPlural: "cuadros"
+  },
+  en: {
+    works: "Works",
+    aboutWorks: "About the works",
+    aboutProject: "About the project",
+    emptyImage: "No image",
+    seriesPrefix: "Series",
+    noSeries: "no series",
+    sizeLabel: "Size",
+    yearLabel: "Year",
+    typeLabel: "Technique",
+    tocLabel: "Contents",
+    sectionsLabel: "Texts",
+    workSingular: "work",
+    workPlural: "works"
+  },
+  de: {
+    works: "Werke",
+    aboutWorks: "Über die Werke",
+    aboutProject: "Über das Projekt",
+    emptyImage: "Kein Bild",
+    seriesPrefix: "Serie",
+    noSeries: "ohne Serie",
+    sizeLabel: "Größe",
+    yearLabel: "Jahr",
+    typeLabel: "Technik",
+    tocLabel: "Inhalt",
+    sectionsLabel: "Texte",
+    workSingular: "Werk",
+    workPlural: "Werke"
+  }
+};
+
+function moveIdInList(ids: string[], index: number, dir: -1 | 1): string[] {
+  const next = [...ids];
+  const j = index + dir;
+  if (j < 0 || j >= next.length) return ids;
+  const tmp = next[index];
+  next[index] = next[j];
+  next[j] = tmp;
+  return next;
+}
+
+function OrderButtons({
+  index,
+  total,
+  onMove
+}: {
+  index: number;
+  total: number;
+  onMove: (dir: -1 | 1) => void;
+}) {
+  return (
+    <span className="order-btns">
+      <button
+        type="button"
+        className="ghost small order-btn"
+        disabled={index === 0}
+        title="Subir"
+        onClick={() => onMove(-1)}
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        className="ghost small order-btn"
+        disabled={index >= total - 1}
+        title="Bajar"
+        onClick={() => onMove(1)}
+      >
+        ↓
+      </button>
+    </span>
+  );
+}
+
+function RichTextField({
+  value,
+  onChange,
+  placeholder
+}: {
+  value: string;
+  onChange: (html: string) => void;
+  placeholder?: string;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const initialRef = useRef(value || "");
+  const savedRangeRef = useRef<globalThis.Range | null>(null);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    const doc = iframe.contentDocument;
+    if (!doc) return;
+
+    doc.open();
+    doc.write(`<!DOCTYPE html><html><head><style>
+      html, body {
+        background: #fff;
+        color: #2a2620;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 15px;
+        line-height: 1.45;
+        margin: 0;
+        min-height: 100%;
+      }
+      body {
+        outline: none;
+        padding: 0.65rem 0.75rem;
+      }
+      body:empty:before {
+        color: #9a9286;
+        content: attr(data-placeholder);
+        pointer-events: none;
+      }
+    </style></head><body contenteditable="true" data-placeholder="${(
+      placeholder || "Escribe aquí…"
+    ).replace(/"/g, "&quot;")}"></body></html>`);
+    doc.close();
+
+    const body = doc.body;
+    body.innerHTML = initialRef.current || "";
+
+    const emit = () => onChangeRef.current(body.innerHTML);
+    const rememberSelection = () => {
+      const selection = doc.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      if (body.contains(range.commonAncestorContainer)) {
+        savedRangeRef.current = range.cloneRange();
+      }
+    };
+    body.addEventListener("input", emit);
+    body.addEventListener("blur", emit);
+    body.addEventListener("keyup", rememberSelection);
+    body.addEventListener("mouseup", rememberSelection);
+    doc.addEventListener("selectionchange", rememberSelection);
+
+    return () => {
+      body.removeEventListener("input", emit);
+      body.removeEventListener("blur", emit);
+      body.removeEventListener("keyup", rememberSelection);
+      body.removeEventListener("mouseup", rememberSelection);
+      doc.removeEventListener("selectionchange", rememberSelection);
+    };
+  }, []);
+
+  function withDoc(fn: (doc: Document, body: HTMLElement) => void) {
+    const doc = iframeRef.current?.contentDocument;
+    const body = doc?.body;
+    if (!doc || !body) return;
+    body.focus();
+    const savedRange = savedRangeRef.current;
+    if (savedRange && body.contains(savedRange.commonAncestorContainer)) {
+      const selection = doc.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(savedRange);
+    }
+    fn(doc, body);
+    const selection = doc.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      savedRangeRef.current = selection.getRangeAt(0).cloneRange();
+    }
+    onChangeRef.current(body.innerHTML);
+  }
+
+  function run(cmd: string, arg?: string) {
+    withDoc((doc) => {
+      doc.execCommand("styleWithCSS", false, "true");
+      doc.execCommand(cmd, false, arg);
+    });
+  }
+
+  function applySize(size: string) {
+    withDoc((doc) => {
+      const sel = doc.getSelection();
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        doc.execCommand("fontSize", false, "3");
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const span = doc.createElement("span");
+      span.style.fontSize = size;
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+    });
+  }
+
+  return (
+    <div className="rich-editor">
+      <div className="rich-toolbar">
+        <button
+          type="button"
+          className="toggle-chip"
+          title="Negrita"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            run("bold");
+          }}
+        >
+          <strong>N</strong>
+        </button>
+        <button
+          type="button"
+          className="toggle-chip"
+          title="Cursiva"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            run("italic");
+          }}
+        >
+          <em>C</em>
+        </button>
+        <button
+          type="button"
+          className="toggle-chip"
+          title="Subrayado"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            run("underline");
+          }}
+        >
+          <span style={{ textDecoration: "underline" }}>S</span>
+        </button>
+        <select
+          className="rich-font"
+          defaultValue=""
+          title="Fuente"
+          onMouseDown={(e) => e.stopPropagation()}
+          onChange={(event) => {
+            const v = event.target.value;
+            if (v) run("fontName", v);
+            event.target.value = "";
+          }}
+        >
+          <option value="" disabled>
+            Fuente
+          </option>
+          {PRICELIST_FONTS.map((font) => (
+            <option key={font} value={font}>
+              {font}
+            </option>
+          ))}
+        </select>
+        <select
+          className="rich-size"
+          defaultValue=""
+          onMouseDown={(e) => e.stopPropagation()}
+          onChange={(event) => {
+            const v = event.target.value;
+            if (v) applySize(v);
+            event.target.value = "";
+          }}
+        >
+          <option value="" disabled>
+            Tamaño
+          </option>
+          <option value="12px">Pequeño</option>
+          <option value="16px">Normal</option>
+          <option value="20px">Grande</option>
+          <option value="26px">Muy grande</option>
+        </select>
+        <input
+          type="color"
+          className="color-chip"
+          title="Color"
+          defaultValue="#2a2620"
+          onMouseDown={(e) => e.preventDefault()}
+          onChange={(event) => run("foreColor", event.target.value)}
+        />
+      </div>
+      <iframe className="rich-frame" title="Editor de texto" ref={iframeRef} />
+    </div>
+  );
+}
+
+function sectionsFromApplication(
+  application: Application | null,
+  lang: PriceLang
+): ApplicationTextSection[] {
+  if (application?.sections?.length) {
+    return application.sections.map((s) => ({ ...s }));
+  }
+  const out: ApplicationTextSection[] = [];
+  if (application?.textAboutWorks?.trim()) {
+    out.push({
+      id: "sec-legacy-works",
+      heading: application.headingAboutWorks || APP_HEADING_DEFAULTS[lang].aboutWorks,
+      bodyHtml: `<p>${application.textAboutWorks
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br/>")}</p>`
+    });
+  }
+  if (application?.textAboutProject?.trim()) {
+    out.push({
+      id: "sec-legacy-project",
+      heading:
+        application.headingAboutProject || APP_HEADING_DEFAULTS[lang].aboutProject,
+      bodyHtml: `<p>${application.textAboutProject
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br/>")}</p>`
+    });
+  }
+  return out;
+}
+
+function applicationKindLabel(kind: ApplicationKind, lang: PriceLang = "es"): string {
+  const map: Record<ApplicationKind, Record<PriceLang, string>> = {
+    concurso: { es: "Concurso", en: "Competition", de: "Wettbewerb" },
+    beca: { es: "Beca / stipendio", en: "Grant / stipend", de: "Stipendium" },
+    residencia: { es: "Residencia", en: "Residency", de: "Residenz" },
+    otro: { es: "Otro", en: "Other", de: "Sonstiges" }
+  };
+  return map[kind]?.[lang] ?? map.concurso.es;
+}
+
+function isDefaultAppHeading(
+  value: string | undefined,
+  field: "works" | "aboutWorks" | "aboutProject"
+): boolean {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return true;
+  return (Object.values(APP_HEADING_DEFAULTS) as Array<(typeof APP_HEADING_DEFAULTS)["es"]>).some(
+    (d) => d[field] === trimmed
+  );
+}
+
+
+function SeriesPage({
+  inventory,
+  setInventory,
+  onError,
+  onToast,
+  onOpenArtwork
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+  onOpenArtwork: (artworkId: string) => void;
+}) {
+  // Series come from paintings (plus any already saved metadata).
+  const names = uniqueValues([
+    ...inventory.artworks.map((a) => a.series),
+    ...inventory.seriesInfo.map((s) => s.name)
+  ]).sort((a, b) => a.localeCompare(b, "es"));
+  const [selectedName, setSelectedName] = useState<string | null>(names[0] ?? null);
+
+  const info =
+    inventory.seriesInfo.find(
+      (s) => s.name.toLowerCase() === (selectedName ?? "").toLowerCase()
+    ) ?? null;
+  const works = inventory.artworks.filter(
+    (a) => (a.series ?? "").toLowerCase() === (selectedName ?? "").toLowerCase()
+  );
+
+  return (
+    <section className="list-page series-page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Colecciones</p>
+          <h2>Series (metadatos)</h2>
+          <p className="page-lead">
+            Las series aparecen solas cuando las usas en una obra. Aquí añades textos y
+            documentos compartidos.
+          </p>
+        </div>
+      </div>
+
+      <div className="series-layout">
+        <aside className="series-sidebar">
+          <div className="series-name-list">
+            {names.length === 0 ? (
+              <p className="muted small-note">
+                Aún no hay series. Pon un nombre de serie al guardar una obra.
+              </p>
+            ) : (
+              names.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className={`series-name-btn${
+                    selectedName === name ? " active" : ""
+                  }`}
+                  onClick={() => setSelectedName(name)}
+                >
+                  {name}
+                  <span className="muted">
+                    {
+                      inventory.artworks.filter(
+                        (a) => (a.series ?? "").toLowerCase() === name.toLowerCase()
+                      ).length
+                    }
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </aside>
+
+        <div className="series-detail">
+          {!selectedName ? (
+            <div className="empty-friendly">
+              <p>Elige una serie a la izquierda.</p>
+            </div>
+          ) : (
+            <SeriesDetailPanel
+              name={selectedName}
+              info={info}
+              works={works}
+              inventory={inventory}
+              setInventory={setInventory}
+              onError={onError}
+              onToast={onToast}
+              onOpenArtwork={onOpenArtwork}
+            />
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SeriesDetailPanel({
+  name,
+  info,
+  works,
+  inventory,
+  setInventory,
+  onError,
+  onToast,
+  onOpenArtwork
+}: {
+  name: string;
+  info: SeriesInfo | null;
+  works: Artwork[];
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+  onOpenArtwork: (artworkId: string) => void;
+}) {
+  const [texts, setTexts] = useState<SeriesText[]>(info?.texts ?? []);
+  const [notes, setNotes] = useState(info?.notes ?? "");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setTexts(info?.texts ?? []);
+    setNotes(info?.notes ?? "");
+    setOpenId(null);
+  }, [info?.id, name]);
+
+  const docs = inventory.images.filter(
+    (image) => image.targetType === "series" && image.targetId === info?.id
+  );
+
+  async function save(nextTexts = texts, nextNotes = notes) {
+    setSaving(true);
+    try {
+      const data = await requireApi("saveSeriesInfo")({
+        id: info?.id,
+        name,
+        texts: nextTexts,
+        notes: nextNotes
+      });
+      setInventory(data);
+      onToast("Serie guardada.");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addText() {
+    const id = `txt-${Date.now()}`;
+    const next = [...texts, { id, topic: "Nuevo texto", body: "" }];
+    setTexts(next);
+    setOpenId(id);
+  }
+
+  function updateText(id: string, patch: Partial<SeriesText>) {
+    setTexts((list) => list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+
+  function removeText(id: string) {
+    const next = texts.filter((t) => t.id !== id);
+    setTexts(next);
+    if (openId === id) setOpenId(null);
+  }
+
+  async function addDocument() {
+    let seriesId = info?.id;
+    if (!seriesId) {
+      const data = await requireApi("saveSeriesInfo")({
+        name,
+        texts,
+        notes
+      });
+      setInventory(data);
+      seriesId = data.seriesInfo.find(
+        (s) => s.name.toLowerCase() === name.toLowerCase()
+      )?.id;
+      if (!seriesId) {
+        onError("No se pudo crear la serie.");
+        return;
+      }
+    }
+    const result = await requireApi("importImage")("series", seriesId, "document");
+    if (!result) return;
+    setInventory(result.inventory);
+    onToast("Documento añadido.");
+  }
+
+  return (
+    <div className="series-panel">
+      <div className="related-head">
+        <h3>{name}</h3>
+        <button type="button" disabled={saving} onClick={() => void save()}>
+          {saving ? "Guardando…" : "Guardar"}
+        </button>
+      </div>
+
+      <div className="series-texts-head">
+        <h4>Textos</h4>
+        <button type="button" className="ghost" onClick={addText}>
+          + Añadir texto
+        </button>
+      </div>
+      <p className="muted small-note">
+        Cada texto tiene un tema. Solo ves el tema y el principio; ábrelo para editar.
+      </p>
+
+      {texts.length === 0 ? (
+        <div className="empty-friendly">
+          <p>Todavía no hay textos en esta serie.</p>
+          <button type="button" onClick={addText}>
+            Añadir el primero
+          </button>
+        </div>
+      ) : (
+        <div className="series-text-list">
+          {texts.map((text) => {
+            const open = openId === text.id;
+            const preview =
+              text.body.trim().slice(0, 90) +
+              (text.body.trim().length > 90 ? "…" : "");
+            return (
+              <div className={`series-text-card${open ? " open" : ""}`} key={text.id}>
+                <button
+                  type="button"
+                  className="series-text-summary"
+                  onClick={() => setOpenId(open ? null : text.id)}
+                >
+                  <strong>{text.topic || "Sin tema"}</strong>
+                  {!open && preview && (
+                    <span className="muted series-text-preview">{preview}</span>
+                  )}
+                  <span className="series-text-chevron">{open ? "▾" : "▸"}</span>
+                </button>
+                {open && (
+                  <div className="series-text-body">
+                    <label>
+                      Tema
+                      <input
+                        value={text.topic}
+                        placeholder="Ej. Idea principal, contexto histórico…"
+                        onChange={(event) =>
+                          updateText(text.id, { topic: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Texto
+                      <textarea
+                        rows={5}
+                        value={text.body}
+                        placeholder="Escribe aquí…"
+                        onChange={(event) =>
+                          updateText(text.id, { body: event.target.value })
+                        }
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="ghost danger small"
+                      onClick={() => removeText(text.id)}
+                    >
+                      Quitar este texto
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="series-docs">
+        <div className="related-head">
+          <h4>Documentos</h4>
+          <button type="button" className="ghost" onClick={addDocument}>
+            + Añadir documento
+          </button>
+        </div>
+        {docs.length === 0 ? (
+          <p className="muted small-note">Sin documentos todavía.</p>
+        ) : (
+          <ul className="doc-list">
+            {docs.map((doc) => (
+              <li key={doc.id}>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() =>
+                    doc.absolutePath &&
+                    void window.inventoryApi.openDocument(doc.absolutePath)
+                  }
+                >
+                  {doc.originalName || doc.caption || "Documento"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="series-works">
+        <h4>Obras en esta serie ({works.length})</h4>
+        {works.length === 0 ? (
+          <p className="muted small-note">Ninguna obra usa este nombre todavía.</p>
+        ) : (
+          <div className="expense-list">
+            {works.map((art) => (
+              <button
+                key={art.id}
+                type="button"
+                className="series-work-row"
+                onClick={() => onOpenArtwork(art.id)}
+              >
+                <strong>{art.title}</strong>
+                <span className="muted">{art.yearMade || ""}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: {
+    resultIndex: number;
+    results: ArrayLike<{
+      isFinal?: boolean;
+      0?: { transcript?: string };
+    }>;
+  }) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+function TextGeneratorPage({
+  inventory,
+  setInventory,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showPicker, setShowPicker] = useState(false);
+  const [instruction, setInstruction] = useState(
+    "Escribe un primer borrador claro, profesional y personal (unas 180–250 palabras) para presentar estas obras. No inventes datos. Conserva la voz de la artista y usa los ejemplos solo como referencia de tono."
+  );
+  const [freeText, setFreeText] = useState(
+    "Quiero un texto que una noche, agua y color. Hablar de proceso sin sonar académico. Mencionar que trabajo por capas y que me importa la atmósfera más que el detalle. Si falta algún dato, marcarlo entre corchetes."
+  );
+  const [responseLanguage, setResponseLanguage] = useState<"es" | "en" | "de">(
+    "es"
+  );
+  const [referenceLinks, setReferenceLinks] = useState<
+    Array<{ id: string; url: string; note: string }>
+  >([]);
+  const [dictationLanguage, setDictationLanguage] = useState("es-ES");
+  const [listening, setListening] = useState(false);
+  const [examples, setExamples] = useState<TextGeneratorExample[]>(() =>
+    (inventory.textGeneratorExamples ?? []).map(normalizeTextExample)
+  );
+  const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>([]);
+  const [selectedSeriesTextKeys, setSelectedSeriesTextKeys] = useState<string[]>(
+    []
+  );
+  const [seriesOpen, setSeriesOpen] = useState(false);
+  const [showOtherSeries, setShowOtherSeries] = useState(false);
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const [editingExampleId, setEditingExampleId] = useState<string | null>(null);
+  const [savingExamples, setSavingExamples] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const autoSeriesKeysRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    setExamples((inventory.textGeneratorExamples ?? []).map(normalizeTextExample));
+  }, [inventory.textGeneratorExamples]);
+
+  const selectedArtworks = selectedIds
+    .map((id) => inventory.artworks.find((artwork) => artwork.id === id))
+    .filter((artwork): artwork is Artwork => Boolean(artwork));
+  const selectedSeriesNames = uniqueValues(
+    selectedArtworks.map((artwork) => artwork.series)
+  );
+
+  const seriesForPrompt = useMemo(() => {
+    const fromWorks = selectedSeriesNames
+      .map((name) =>
+        inventory.seriesInfo.find(
+          (series) => series.name.toLowerCase() === name.toLowerCase()
+        )
+      )
+      .filter((series): series is SeriesInfo => Boolean(series));
+    const ids = new Set(fromWorks.map((series) => series.id));
+    const extras = inventory.seriesInfo.filter((series) => !ids.has(series.id));
+    return { linked: fromWorks, other: extras };
+  }, [inventory.seriesInfo, selectedSeriesNames]);
+
+  // Auto-include newly linked series texts once; never re-force after the user unchecks.
+  useEffect(() => {
+    const linkedKeys = seriesForPrompt.linked.flatMap((series) =>
+      (series.texts ?? []).map((text) => seriesTextKey(series.id, text.id))
+    );
+    const available = new Set(
+      [...seriesForPrompt.linked, ...seriesForPrompt.other].flatMap((series) =>
+        (series.texts ?? []).map((text) => seriesTextKey(series.id, text.id))
+      )
+    );
+    const fresh = linkedKeys.filter((key) => !autoSeriesKeysRef.current.has(key));
+    for (const key of linkedKeys) autoSeriesKeysRef.current.add(key);
+    setSelectedSeriesTextKeys((current) => {
+      const kept = current.filter((key) => available.has(key));
+      if (fresh.length === 0) return kept;
+      return [...new Set([...kept, ...fresh])];
+    });
+  }, [seriesForPrompt.linked, seriesForPrompt.other]);
+
+  const responseLanguageLine =
+    responseLanguage === "en"
+      ? "Write the entire draft in English."
+      : responseLanguage === "de"
+        ? "Schreibe den gesamten Entwurf auf Deutsch."
+        : "Escribe el borrador íntegramente en español.";
+
+  const generatedText = useMemo(() => {
+    const blocks: string[] = [
+      "ENCARGO",
+      instruction.trim() || "Redacta un primer borrador usando solo estos datos."
+    ];
+
+    if (freeText.trim()) {
+      blocks.push("NOTAS LIBRES DE LA ARTISTA", freeText.trim());
+    }
+
+    if (selectedArtworks.length > 0) {
+      blocks.push(
+        "OBRAS SELECCIONADAS",
+        selectedArtworks
+          .map((artwork, index) => {
+            const lines = [
+              `${index + 1}. ${artwork.title}`,
+              `Serie: ${artwork.series || "sin serie"}`,
+              `Técnica / tipo: ${labelFor(
+                inventory,
+                "artworkType",
+                artwork.type
+              )}`,
+              `Tamaño: ${formatSize(artwork) || "sin medidas"}`,
+              `Año: ${artwork.yearMade || "sin año"}`
+            ];
+            if (artwork.notes?.trim()) {
+              lines.push(`Notas de la obra: ${artwork.notes.trim()}`);
+            }
+            return lines.join("\n");
+          })
+          .join("\n\n")
+      );
+    }
+
+    const selectedTexts = inventory.seriesInfo
+      .map((series) => {
+        const texts = (series.texts ?? []).filter((text) =>
+          selectedSeriesTextKeys.includes(seriesTextKey(series.id, text.id))
+        );
+        if (texts.length === 0) return null;
+        const lines = [`SERIE: ${series.name}`];
+        for (const text of texts) {
+          lines.push(
+            [text.topic ? `Tema: ${text.topic}` : "", text.body]
+              .filter(Boolean)
+              .join("\n")
+          );
+        }
+        if (series.notes?.trim()) lines.push(`Notas: ${series.notes.trim()}`);
+        return lines.join("\n\n");
+      })
+      .filter(Boolean);
+
+    if (selectedTexts.length > 0) {
+      blocks.push(
+        "INFORMACIÓN / TEXTOS DE LAS SERIES",
+        selectedTexts.join("\n\n---\n\n")
+      );
+    }
+
+    const pickedExamples = examples.filter(
+      (example) =>
+        selectedExampleIds.includes(example.id) &&
+        (example.topic.trim() || example.body.trim())
+    );
+    if (pickedExamples.length > 0) {
+      blocks.push(
+        "EJEMPLOS DE TEXTOS / REFERENCIAS DE ESTILO",
+        pickedExamples
+          .map(
+            (example, index) =>
+              `EJEMPLO ${index + 1}${
+                example.topic ? ` — ${example.topic}` : ""
+              }\n${example.body}`
+          )
+          .join("\n\n---\n\n")
+      );
+    }
+
+    const usableLinks = referenceLinks.filter((link) => link.url.trim());
+    if (usableLinks.length > 0) {
+      blocks.push(
+        "ENLACES DE REFERENCIA",
+        "Abre y consulta estas direcciones. Úsalas como contexto; no inventes lo que no aparezca ahí.",
+        usableLinks
+          .map((link, index) => {
+            const note = link.note.trim();
+            return `${index + 1}. ${link.url.trim()}${
+              note ? `\n   Nota: ${note}` : ""
+            }`;
+          })
+          .join("\n")
+      );
+    }
+
+    blocks.push(
+      "IDIOMA DE LA RESPUESTA",
+      responseLanguageLine,
+      "INDICACIÓN FINAL",
+      "Devuelve un borrador listo para revisar. Si falta información importante, señálala entre corchetes en vez de inventarla."
+    );
+    return blocks.filter(Boolean).join("\n\n");
+  }, [
+    instruction,
+    freeText,
+    selectedArtworks,
+    selectedSeriesTextKeys,
+    selectedExampleIds,
+    examples,
+    referenceLinks,
+    inventory,
+    responseLanguageLine
+  ]);
+
+  function stopMicStream() {
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+  }
+
+  async function startDictation() {
+    const speechWindow = window as typeof window & {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+    const Recognition =
+      speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      onError(
+        "El dictado por voz no está disponible en esta versión de Electron. Escribe o pega las notas en el cuadro."
+      );
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      onError(
+        "No hay acceso al micrófono. Escribe o pega las notas en el cuadro."
+      );
+      return;
+    }
+
+    try {
+      stopMicStream();
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
+        audio: true
+      });
+    } catch {
+      onError(
+        "Permiso de micrófono denegado. Actívalo en Preferencias del Sistema → Privacidad → Micrófono."
+      );
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = dictationLanguage;
+    recognition.onresult = (event) => {
+      const pieces: string[] = [];
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        if (!result || result.isFinal === false) continue;
+        const transcript = result[0]?.transcript?.trim();
+        if (transcript) pieces.push(transcript);
+      }
+      if (pieces.length === 0) return;
+      setFreeText((current) =>
+        [current.trim(), pieces.join(" ")].filter(Boolean).join(current.trim() ? " " : "")
+      );
+    };
+    recognition.onerror = (event) => {
+      setListening(false);
+      stopMicStream();
+      recognitionRef.current = null;
+      const code = event.error || "error";
+      if (code === "not-allowed" || code === "service-not-allowed") {
+        onError("Micrófono no permitido. Revisa los permisos del sistema.");
+      } else if (code !== "aborted" && code !== "no-speech") {
+        onError(`Dictado interrumpido (${code}). Puedes seguir escribiendo a mano.`);
+      }
+    };
+    recognition.onend = () => {
+      setListening(false);
+      stopMicStream();
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+      setListening(true);
+    } catch {
+      stopMicStream();
+      recognitionRef.current = null;
+      onError("No se pudo iniciar el dictado. Prueba otra vez o escribe a mano.");
+    }
+  }
+
+  function stopDictation() {
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    recognitionRef.current = null;
+    stopMicStream();
+    setListening(false);
+  }
+
+  useEffect(
+    () => () => {
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      recognitionRef.current = null;
+      micStreamRef.current?.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
+    },
+    []
+  );
+
+  function addExample() {
+    const id = `example-${Date.now()}`;
+    setExamples((current) => [...current, { id, topic: "", body: "" }]);
+    setSelectedExampleIds((current) => [...current, id]);
+    setExamplesOpen(true);
+    setEditingExampleId(id);
+  }
+
+  function addReferenceLink() {
+    setReferenceLinks((current) => [
+      ...current,
+      { id: `link-${Date.now()}`, url: "", note: "" }
+    ]);
+  }
+
+  async function saveExamples() {
+    setSavingExamples(true);
+    try {
+      const cleaned = examples.map(normalizeTextExample);
+      const data = await requireApi("saveTextGeneratorExamples")(cleaned);
+      setInventory(data);
+      setExamples((data.textGeneratorExamples ?? []).map(normalizeTextExample));
+      onToast("Biblioteca de ejemplos guardada.");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudieron guardar.");
+    } finally {
+      setSavingExamples(false);
+    }
+  }
+
+  function toggleExample(id: string) {
+    setSelectedExampleIds((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    );
+  }
+
+  function toggleSeriesText(key: string) {
+    setSelectedSeriesTextKeys((current) =>
+      current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [...current, key]
+    );
+  }
+
+  async function copyPrompt() {
+    if (
+      !selectedArtworks.length &&
+      !freeText.trim() &&
+      selectedExampleIds.length === 0 &&
+      selectedSeriesTextKeys.length === 0 &&
+      !referenceLinks.some((link) => link.url.trim())
+    ) {
+      onError("Añade al menos una obra, una nota, un enlace, un texto de serie o un ejemplo.");
+      return;
+    }
+    setCopying(true);
+    try {
+      await copyTextToClipboard(generatedText);
+      onToast("Texto copiado. Ya puedes pegarlo en ChatGPT.");
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo copiar. Selecciona el texto a la derecha y cópialo con ⌘C."
+      );
+    } finally {
+      setCopying(false);
+    }
+  }
+
+  function renderSeriesTextPicker(series: SeriesInfo, linked: boolean) {
+    const texts = series.texts ?? [];
+    return (
+      <div className="textgen-series-block" key={series.id}>
+        <div className="textgen-series-head">
+          <strong>{series.name}</strong>
+          {linked ? (
+            <span className="muted small-note">de las obras elegidas</span>
+          ) : (
+            <span className="muted small-note">otra serie</span>
+          )}
+        </div>
+        {texts.length === 0 ? (
+          <p className="muted small-note">
+            Esta serie aún no tiene textos. Añádelos en la pestaña Series.
+          </p>
+        ) : (
+          <div className="textgen-check-list">
+            {texts.map((text) => {
+              const key = seriesTextKey(series.id, text.id);
+              return (
+                <label className="textgen-check" key={key}>
+                  <input
+                    type="checkbox"
+                    checked={selectedSeriesTextKeys.includes(key)}
+                    onChange={() => toggleSeriesText(key)}
+                  />
+                  <span>
+                    <strong>{text.topic || "Sin tema"}</strong>
+                    <span className="muted">
+                      {text.body.trim().slice(0, 80) || "Sin texto"}
+                      {text.body.trim().length > 80 ? "…" : ""}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <section className="list-page text-generator-page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Ayuda para redactar</p>
+          <h2>Generador de texto</h2>
+          <p className="page-lead">
+            Reúne obras, textos de series, notas y ejemplos. Copia el resultado y
+            pégalo en ChatGPT.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="cuentas-primary"
+          disabled={copying}
+          onClick={() => void copyPrompt()}
+        >
+          {copying ? "Copiando…" : "Copiar todo"}
+        </button>
+      </div>
+
+      <div className="textgen-layout">
+        <div className="textgen-config">
+          <div className="pl-block">
+            <div className="pl-block-head">
+              <span className="pl-block-title">1. Obras</span>
+              <div className="row-actions">
+                {selectedArtworks.length > 1 && (
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={() =>
+                      setSelectedIds((current) =>
+                        sortArtworkIdsBySeries(current, inventory)
+                      )
+                    }
+                  >
+                    Ordenar por serie
+                  </button>
+                )}
+                <button type="button" onClick={() => setShowPicker(true)}>
+                  + Elegir obras
+                </button>
+              </div>
+            </div>
+            {selectedArtworks.length === 0 ? (
+              <p className="muted small-note">No hay obras seleccionadas.</p>
+            ) : (
+              <div className="textgen-work-list">
+                {selectedArtworks.map((artwork, index) => (
+                  <div className="textgen-work" key={artwork.id}>
+                    <OrderButtons
+                      index={index}
+                      total={selectedArtworks.length}
+                      onMove={(direction) =>
+                        setSelectedIds((current) =>
+                          moveIdInList(current, index, direction)
+                        )
+                      }
+                    />
+                    <div>
+                      <strong>{artwork.title}</strong>
+                      <span className="muted">
+                        {[
+                          artwork.series || "sin serie",
+                          artwork.yearMade,
+                          formatSize(artwork)
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost danger small"
+                      onClick={() =>
+                        setSelectedIds((current) =>
+                          current.filter((id) => id !== artwork.id)
+                        )
+                      }
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="pl-block">
+            <div className="pl-block-head">
+              <button
+                type="button"
+                className="textgen-collapse-toggle"
+                onClick={() => setSeriesOpen((open) => !open)}
+              >
+                <span className="pl-block-title">
+                  2. Textos de las series
+                  {selectedSeriesTextKeys.length > 0
+                    ? ` (${selectedSeriesTextKeys.length})`
+                    : ""}
+                </span>
+                <span className="muted">{seriesOpen ? "▲" : "▼"}</span>
+              </button>
+            </div>
+            {!seriesOpen ? (
+              <p className="muted small-note">
+                Cerrado. Ábrelo solo si quieres añadir o quitar textos de serie.
+              </p>
+            ) : seriesForPrompt.linked.length === 0 &&
+              seriesForPrompt.other.length === 0 ? (
+              <p className="muted small-note">
+                Todavía no hay series con metadatos. Créalos en la pestaña Series.
+              </p>
+            ) : (
+              <div className="textgen-series-list">
+                {seriesForPrompt.linked.map((series) =>
+                  renderSeriesTextPicker(series, true)
+                )}
+                {selectedSeriesNames
+                  .filter(
+                    (name) =>
+                      !seriesForPrompt.linked.some(
+                        (series) =>
+                          series.name.toLowerCase() === name.toLowerCase()
+                      )
+                  )
+                  .map((name) => (
+                    <div className="textgen-series-block" key={`missing-${name}`}>
+                      <strong>{name}</strong>
+                      <p className="muted small-note">
+                        No hay ficha de serie. Créala en Series para añadir textos.
+                      </p>
+                    </div>
+                  ))}
+                {seriesForPrompt.other.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={() => setShowOtherSeries((value) => !value)}
+                    >
+                      {showOtherSeries
+                        ? "Ocultar otras series"
+                        : `Mostrar otras series (${seriesForPrompt.other.length})`}
+                    </button>
+                    {showOtherSeries &&
+                      seriesForPrompt.other.map((series) =>
+                        renderSeriesTextPicker(series, false)
+                      )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="pl-block">
+            <div className="pl-block-head">
+              <span className="pl-block-title">3. Encargo y notas</span>
+              <div className="textgen-dictation">
+                <select
+                  value={dictationLanguage}
+                  onChange={(event) => setDictationLanguage(event.target.value)}
+                  disabled={listening}
+                  aria-label="Idioma del dictado"
+                >
+                  <option value="es-ES">Dictado ES</option>
+                  <option value="en-US">Dictado EN</option>
+                  <option value="de-DE">Dictado DE</option>
+                </select>
+                <button
+                  type="button"
+                  className={listening ? "danger-solid" : "ghost"}
+                  onClick={() =>
+                    void (listening ? stopDictation() : startDictation())
+                  }
+                >
+                  {listening ? "■ Parar" : "● Dictar"}
+                </button>
+              </div>
+            </div>
+            <label className="field">
+              Qué quieres escribir
+              <textarea
+                rows={3}
+                value={instruction}
+                onChange={(event) => setInstruction(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              Notas libres (escribe, pega o dicta)
+              <textarea
+                rows={5}
+                value={freeText}
+                placeholder="Ideas sueltas. No hace falta que estén ordenadas."
+                onChange={(event) => setFreeText(event.target.value)}
+              />
+            </label>
+            {listening && (
+              <p className="recording-note">Escuchando… habla con calma.</p>
+            )}
+            <label className="field">
+              Idioma de la respuesta
+              <select
+                value={responseLanguage}
+                onChange={(event) =>
+                  setResponseLanguage(event.target.value as "es" | "en" | "de")
+                }
+              >
+                <option value="es">Español</option>
+                <option value="en">English</option>
+                <option value="de">Deutsch</option>
+              </select>
+            </label>
+            <p className="muted small-note">
+              El texto copiado pedirá a ChatGPT que responda en este idioma.
+            </p>
+            <div className="pl-block-head" style={{ marginTop: "0.35rem" }}>
+              <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
+                Enlaces de referencia
+              </span>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={addReferenceLink}
+              >
+                + Enlace
+              </button>
+            </div>
+            <p className="muted small-note">
+              ChatGPT recibirá la instrucción de consultar estas direcciones.
+            </p>
+            {referenceLinks.length === 0 ? (
+              <p className="muted small-note">Ningún enlace todavía.</p>
+            ) : (
+              <div className="textgen-link-list">
+                {referenceLinks.map((link) => (
+                  <div className="textgen-link-row" key={link.id}>
+                    <input
+                      value={link.url}
+                      placeholder="https://…"
+                      onChange={(event) =>
+                        setReferenceLinks((current) =>
+                          current.map((item) =>
+                            item.id === link.id
+                              ? { ...item, url: event.target.value }
+                              : item
+                          )
+                        )
+                      }
+                    />
+                    <input
+                      value={link.note}
+                      placeholder="Para qué sirve (opcional)"
+                      onChange={(event) =>
+                        setReferenceLinks((current) =>
+                          current.map((item) =>
+                            item.id === link.id
+                              ? { ...item, note: event.target.value }
+                              : item
+                          )
+                        )
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="ghost danger small"
+                      onClick={() =>
+                        setReferenceLinks((current) =>
+                          current.filter((item) => item.id !== link.id)
+                        )
+                      }
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="pl-block">
+            <div className="pl-block-head">
+              <button
+                type="button"
+                className="textgen-collapse-toggle"
+                onClick={() => setExamplesOpen((open) => !open)}
+              >
+                <span className="pl-block-title">
+                  4. Biblioteca de ejemplos
+                  {selectedExampleIds.length > 0
+                    ? ` (${selectedExampleIds.length})`
+                    : ""}
+                </span>
+                <span className="muted">{examplesOpen ? "▲" : "▼"}</span>
+              </button>
+              {examplesOpen && (
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={addExample}
+                  >
+                    + Ejemplo
+                  </button>
+                  <button
+                    type="button"
+                    className="small"
+                    disabled={savingExamples}
+                    onClick={() => void saveExamples()}
+                  >
+                    {savingExamples ? "…" : "Guardar"}
+                  </button>
+                </div>
+              )}
+            </div>
+            {!examplesOpen ? (
+              <p className="muted small-note">
+                Cerrado. Ábrelo para marcar o editar ejemplos de estilo.
+              </p>
+            ) : examples.length === 0 ? (
+              <p className="muted small-note">
+                Aún no hay ejemplos. Pulsa «+ Ejemplo» arriba a la derecha.
+              </p>
+            ) : (
+              <div className="textgen-example-list">
+                {examples.map((example) => {
+                  const isEditing = editingExampleId === example.id;
+                  return (
+                    <div
+                      className={`textgen-example${isEditing ? " is-editing" : ""}`}
+                      key={example.id}
+                    >
+                      <div className="textgen-example-head">
+                        <label className="textgen-check textgen-check-inline">
+                          <input
+                            type="checkbox"
+                            checked={selectedExampleIds.includes(example.id)}
+                            onChange={() => toggleExample(example.id)}
+                          />
+                          <span>
+                            <strong>{example.topic || "Sin tema"}</strong>
+                          </span>
+                        </label>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="ghost small"
+                            onClick={() =>
+                              setEditingExampleId(isEditing ? null : example.id)
+                            }
+                          >
+                            {isEditing ? "Cerrar" : "Editar"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost danger small"
+                            onClick={() => {
+                              setExamples((current) =>
+                                current.filter((item) => item.id !== example.id)
+                              );
+                              setSelectedExampleIds((current) =>
+                                current.filter((id) => id !== example.id)
+                              );
+                              if (editingExampleId === example.id) {
+                                setEditingExampleId(null);
+                              }
+                            }}
+                          >
+                            Borrar
+                          </button>
+                        </div>
+                      </div>
+                      {!isEditing && example.body.trim() && (
+                        <p className="muted small-note textgen-example-preview">
+                          {example.body.trim().slice(0, 110)}
+                          {example.body.trim().length > 110 ? "…" : ""}
+                        </p>
+                      )}
+                      {isEditing && (
+                        <div className="textgen-example-edit">
+                          <input
+                            value={example.topic}
+                            placeholder="Tema (ej. declaración de artista)"
+                            onChange={(event) =>
+                              setExamples((current) =>
+                                current.map((item) =>
+                                  item.id === example.id
+                                    ? { ...item, topic: event.target.value }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                          <textarea
+                            rows={6}
+                            value={example.body}
+                            placeholder="Pega aquí el texto de ejemplo…"
+                            onChange={(event) =>
+                              setExamples((current) =>
+                                current.map((item) =>
+                                  item.id === example.id
+                                    ? { ...item, body: event.target.value }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="textgen-preview-pane">
+          <div className="textgen-preview-head">
+            <div>
+              <span className="pl-block-title">Texto preparado</span>
+              <p className="muted small-note">
+                Solo incluye lo que hayas marcado arriba.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={copying}
+              onClick={() => void copyPrompt()}
+            >
+              {copying ? "…" : "Copiar"}
+            </button>
+          </div>
+          <textarea
+            className="textgen-output"
+            readOnly
+            value={generatedText}
+            aria-label="Texto preparado para ChatGPT"
+          />
+        </div>
+      </div>
+
+      {showPicker && (
+        <ArtworkPickerModal
+          inventory={inventory}
+          initialIds={selectedIds}
+          title="Elegir obras para el generador"
+          onConfirm={(ids) => {
+            const kept = selectedIds.filter((id) => ids.includes(id));
+            const added = ids.filter((id) => !selectedIds.includes(id));
+            setSelectedIds([...kept, ...added]);
+            setShowPicker(false);
+          }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+    </section>
+  );
+}
+
+function ApplicationsPage({
+  inventory,
+  setInventory,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const [editing, setEditing] = useState<Application | null | "new">(null);
+  const list = [...(inventory.applications ?? [])].sort((a, b) =>
+    (b.updatedAt || "").localeCompare(a.updatedAt || "")
+  );
+
+  return (
+    <section className="list-page applications-page">
+      {editing !== null ? (
+        <ApplicationEditor
+          inventory={inventory}
+          setInventory={setInventory}
+          application={editing === "new" ? null : editing}
+          onBack={() => setEditing(null)}
+          onError={onError}
+          onToast={onToast}
+        />
+      ) : (
+        <>
+          <div className="page-head">
+            <div>
+              <p className="eyebrow">Presentaciones</p>
+              <h2>Solicitudes</h2>
+              <p className="page-lead">
+                Concursos, becas y residencias. Elige obras, escribe el texto y genera PDF
+                o Word.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="cuentas-primary"
+              onClick={() => setEditing("new")}
+            >
+              + Nueva solicitud
+            </button>
+          </div>
+          {list.length === 0 ? (
+            <div className="empty-friendly">
+              <p>Todavía no hay solicitudes.</p>
+              <button type="button" onClick={() => setEditing("new")}>
+                Crear la primera
+              </button>
+            </div>
+          ) : (
+            <div className="app-card-list">
+              {list.map((app) => (
+                <button
+                  key={app.id}
+                  type="button"
+                  className="app-card"
+                  onClick={() => setEditing(app)}
+                >
+                  <span className="expense-cat-pill">
+                    {applicationKindLabel(app.kind)}
+                  </span>
+                  <strong>{app.title}</strong>
+                  <span className="muted">
+                    {app.organization || "Sin organización"}
+                    {app.deadline ? ` · límite ${app.deadline}` : ""}
+                    {` · ${app.artworkIds.length} obras`}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function ApplicationEditor({
+  inventory,
+  setInventory,
+  application,
+  onBack,
+  onError,
+  onToast
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  application: Application | null;
+  onBack: () => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+}) {
+  const initialLang: PriceLang =
+    application?.language === "en" || application?.language === "de"
+      ? application.language
+      : "es";
+  const defaults = APP_HEADING_DEFAULTS[initialLang];
+
+  const [form, setForm] = useState<ApplicationInput>(() =>
+    application
+      ? {
+          id: application.id,
+          title: application.title,
+          kind: application.kind,
+          organization: application.organization ?? "",
+          deadline: application.deadline ?? "",
+          documentTitle: application.documentTitle || application.title,
+          coverSubtitle: application.coverSubtitle ?? "",
+          coverDate: application.coverDate ?? "",
+          coverNote: application.coverNote ?? "",
+          sections: sectionsFromApplication(application, initialLang),
+          headingWorks: application.headingWorks || defaults.works,
+          language: initialLang,
+          tocWorksMode: application.tocWorksMode || "list",
+          artworkIds: [...application.artworkIds]
+        }
+      : {
+          title: "",
+          kind: "concurso",
+          organization: "",
+          deadline: "",
+          documentTitle: "",
+          coverSubtitle: "",
+          coverDate: "",
+          coverNote: "",
+          sections: [],
+          headingWorks: defaults.works,
+          language: "es",
+          tocWorksMode: "list",
+          artworkIds: []
+        }
+  );
+  const [showPicker, setShowPicker] = useState(false);
+  const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
+  const [previewHtml, setPreviewHtml] = useState("");
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
+  const previewScrollRef = useRef(0);
+  const [openSectionId, setOpenSectionId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [fontTitle, setFontTitle] = useState("Georgia");
+  const [fontBody, setFontBody] = useState("Georgia");
+  const [frameBorderColor, setFrameBorderColor] = useState("#d0c9bb");
+  const [framePadding, setFramePadding] = useState(8);
+
+  const language = (form.language as PriceLang) || "es";
+  const sections = form.sections ?? [];
+
+  const selectedArts = (form.artworkIds ?? [])
+    .map((id) => inventory.artworks.find((art) => art.id === id))
+    .filter((art): art is Artwork => Boolean(art));
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next: Record<string, string> = {};
+      for (const art of selectedArts) {
+        const image = inventory.images.find(
+          (img) =>
+            img.targetType === "artwork" &&
+            img.targetId === art.id &&
+            img.category === "main"
+        );
+        if (image?.absolutePath) {
+          next[art.id] = await window.inventoryApi.imageToDataUrl(image.absolutePath);
+        }
+      }
+      if (!cancelled) setPreviewImages(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedArts.map((a) => a.id).join("|"), inventory.images]);
+
+  function set<K extends keyof ApplicationInput>(key: K, value: ApplicationInput[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function setSections(next: ApplicationTextSection[]) {
+    set("sections", next);
+  }
+
+  function changeLanguage(next: PriceLang) {
+    setForm((current) => {
+      const patch: ApplicationInput = { ...current, language: next };
+      const defs = APP_HEADING_DEFAULTS[next];
+      if (isDefaultAppHeading(current.headingWorks, "works")) {
+        patch.headingWorks = defs.works;
+      }
+      return patch;
+    });
+  }
+
+  function addSection() {
+    const id = `sec-${Date.now()}`;
+    setSections([
+      ...sections,
+      {
+        id,
+        heading: APP_HEADING_DEFAULTS[language].aboutWorks,
+        bodyHtml: ""
+      }
+    ]);
+    setOpenSectionId(id);
+  }
+
+  function updateSection(id: string, patch: Partial<ApplicationTextSection>) {
+    setSections(sections.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
+
+  function removeSection(id: string) {
+    setSections(sections.filter((s) => s.id !== id));
+    if (openSectionId === id) setOpenSectionId(null);
+  }
+
+  async function persist(): Promise<Application | null> {
+    if (!form.title.trim()) {
+      onError("Pon un nombre a la solicitud (para tu lista).");
+      return null;
+    }
+    setBusy(true);
+    try {
+      const data = await requireApi("saveApplication")(form);
+      setInventory(data);
+      const saved =
+        data.applications.find((a) => a.id === form.id) ||
+        [...data.applications].sort((a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt)
+        )[0] ||
+        null;
+      if (saved) {
+        setForm((current) => ({
+          ...current,
+          id: saved.id,
+          sections: sectionsFromApplication(saved, language)
+        }));
+      }
+      onToast("Solicitud guardada.");
+      return saved;
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function buildPayload() {
+    const rows = selectedArts.map((art) => ({
+      title: art.title,
+      series: art.series ?? "",
+      material: artTypeLabel(inventory, art.type, language),
+      size: formatSize(art),
+      year: art.yearMade ?? "",
+      imageDataUrl: previewImages[art.id] || undefined
+    }));
+    const defs = APP_HEADING_DEFAULTS[language];
+    return {
+      title: (form.documentTitle || form.title || "").trim() || "Solicitud",
+      coverSubtitle: form.coverSubtitle,
+      coverDate: form.coverDate,
+      coverNote: form.coverNote,
+      organization: form.organization,
+      sections: sections.map((s) => ({
+        heading: s.heading,
+        bodyHtml: s.bodyHtml
+      })),
+      headingWorks: form.headingWorks || defs.works,
+      seriesPrefix: defs.seriesPrefix,
+      noSeriesLabel: defs.noSeries,
+      sizeLabel: defs.sizeLabel,
+      yearLabel: defs.yearLabel,
+      typeLabel: defs.typeLabel,
+      tocLabel: defs.tocLabel,
+      sectionsLabel: defs.sectionsLabel,
+      emptyImageLabel: defs.emptyImage,
+      tocWorksMode: form.tocWorksMode || "list",
+      workSingularLabel: defs.workSingular,
+      workPluralLabel: defs.workPlural,
+      style: {
+        fontTitle,
+        fontBody,
+        titleColor: "#1a1a1a",
+        titleBold: true,
+        titleItalic: false,
+        metaColor: "#7a7368",
+        frameBorderColor,
+        framePadding
+      },
+      rows
+    };
+  }
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setPreviewHtml(buildApplicationHtml(buildPayload()));
+    }, 220);
+    return () => window.clearTimeout(handle);
+  }, [
+    form.title,
+    form.documentTitle,
+    form.coverSubtitle,
+    form.coverDate,
+    form.coverNote,
+    form.organization,
+    form.headingWorks,
+    form.tocWorksMode,
+    language,
+    JSON.stringify(sections),
+    selectedArts.map((a) => a.id).join("|"),
+    JSON.stringify(previewImages),
+    fontTitle,
+    fontBody,
+    frameBorderColor,
+    framePadding
+  ]);
+
+  useEffect(() => {
+    const iframe = previewFrameRef.current;
+    if (!iframe || !previewHtml) return;
+    const win = iframe.contentWindow;
+    const doc = iframe.contentDocument;
+    if (!doc || !win) return;
+    try {
+      previewScrollRef.current =
+        win.scrollY || doc.documentElement.scrollTop || doc.body?.scrollTop || 0;
+    } catch {
+      /* ignore */
+    }
+    doc.open();
+    doc.write(previewHtml);
+    doc.close();
+    const y = previewScrollRef.current;
+    const restore = () => {
+      try {
+        win.scrollTo(0, y);
+        if (doc.documentElement) doc.documentElement.scrollTop = y;
+        if (doc.body) doc.body.scrollTop = y;
+      } catch {
+        /* ignore */
+      }
+    };
+    restore();
+    requestAnimationFrame(restore);
+    window.setTimeout(restore, 60);
+    window.setTimeout(restore, 220);
+  }, [previewHtml]);
+
+  async function exportDoc(format: "pdf" | "docx") {
+    await persist();
+    setExportBusy(true);
+    try {
+      const path = await requireApi("generateApplicationPdf")(format, buildPayload());
+      if (path) onToast(format === "docx" ? "Word generado." : "PDF generado.");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "No se pudo generar.");
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  return (
+    <div className="application-editor">
+      <div className="form-head">
+        <div>
+          <p className="eyebrow">Solicitud</p>
+          <h2>{form.title || "Nueva solicitud"}</h2>
+        </div>
+        <div className="form-head-actions">
+          <button type="button" className="ghost" onClick={onBack}>
+            Volver
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            disabled={exportBusy}
+            onClick={() => void exportDoc("pdf")}
+          >
+            {exportBusy ? "…" : "PDF"}
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            disabled={exportBusy}
+            onClick={() => void exportDoc("docx")}
+          >
+            Word
+          </button>
+          <button type="button" disabled={busy} onClick={() => void persist()}>
+            {busy ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
+
+      <div className="app-layout">
+        <div className="app-config">
+          <div className="pl-block">
+            <span className="pl-block-title">1. Ficha (solo para ti)</span>
+            <div className="form-grid two">
+              <label>
+                Nombre en la lista
+                <input
+                  value={form.title}
+                  placeholder="Ej. Beca Berlin 2026 · borrador"
+                  onChange={(event) => set("title", event.target.value)}
+                />
+              </label>
+              <label>
+                Tipo
+                <select
+                  value={form.kind}
+                  onChange={(event) =>
+                    set("kind", event.target.value as ApplicationKind)
+                  }
+                >
+                  <option value="concurso">Concurso</option>
+                  <option value="beca">Beca / stipendio</option>
+                  <option value="residencia">Residencia</option>
+                  <option value="otro">Otro</option>
+                </select>
+              </label>
+              <label>
+                Fecha límite
+                <DateField
+                  value={form.deadline ?? ""}
+                  onChange={(value) => set("deadline", value)}
+                />
+              </label>
+              <label>
+                Idioma del PDF
+                <select
+                  value={language}
+                  onChange={(event) =>
+                    changeLanguage(event.target.value as PriceLang)
+                  }
+                >
+                  {PRICE_LANGS.map(([code, name]) => (
+                    <option key={code} value={code}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div className="pl-block">
+            <span className="pl-block-title">2. Portada del PDF</span>
+            <p className="muted small-note">
+              Sin imagen. Título, textos opcionales e índice automático.
+            </p>
+            <label className="field">
+              Título en el PDF
+              <input
+                value={form.documentTitle ?? ""}
+                placeholder="Título que verá el jurado"
+                onChange={(event) => set("documentTitle", event.target.value)}
+              />
+            </label>
+            <label className="field">
+              Línea bajo el título (opcional)
+              <input
+                value={form.coverSubtitle ?? ""}
+                placeholder="Subtítulo o lema"
+                onChange={(event) => set("coverSubtitle", event.target.value)}
+              />
+            </label>
+            <label className="field">
+              Organización (opcional)
+              <input
+                value={form.organization ?? ""}
+                onChange={(event) => set("organization", event.target.value)}
+              />
+            </label>
+            <label className="field">
+              Fecha o año en portada (opcional)
+              <input
+                value={form.coverDate ?? ""}
+                placeholder="Ej. Madrid · 2026"
+                onChange={(event) => set("coverDate", event.target.value)}
+              />
+            </label>
+            <label className="field">
+              Nota extra en portada (opcional)
+              <textarea
+                rows={2}
+                value={form.coverNote ?? ""}
+                placeholder="Ciudad, año, contacto…"
+                onChange={(event) => set("coverNote", event.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="pl-block">
+            <div className="pl-block-head">
+              <span className="pl-block-title">3. Obras (orden = PDF)</span>
+              <div className="row-actions">
+                {selectedArts.length > 1 && (
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={() =>
+                      set(
+                        "artworkIds",
+                        sortArtworkIdsBySeries(form.artworkIds ?? [], inventory)
+                      )
+                    }
+                  >
+                    Ordenar por serie
+                  </button>
+                )}
+                <button type="button" className="small" onClick={() => setShowPicker(true)}>
+                  + Elegir obras
+                </button>
+              </div>
+            </div>
+            <label className="field">
+              Etiqueta del grupo de obras
+              <input
+                value={form.headingWorks ?? ""}
+                placeholder={APP_HEADING_DEFAULTS[language].works}
+                onChange={(event) => set("headingWorks", event.target.value)}
+              />
+            </label>
+            <label className="field">
+              Índice de obras (portada)
+              <select
+                value={form.tocWorksMode || "list"}
+                onChange={(event) =>
+                  set(
+                    "tocWorksMode",
+                    event.target.value as ApplicationInput["tocWorksMode"]
+                  )
+                }
+              >
+                <option value="list">Una línea por obra</option>
+                <option value="bySeries">Agrupar por serie (N cuadros)</option>
+                <option value="worksOnly">
+                  Solo «{form.headingWorks || APP_HEADING_DEFAULTS[language].works}»
+                  → primera página
+                </option>
+              </select>
+            </label>
+            <p className="muted small-note">
+              Con muchas obras, «por serie» o «solo el título» dejan el índice
+              limpio.
+            </p>
+            {selectedArts.length === 0 ? (
+              <p className="muted small-note">Todavía no has elegido obras.</p>
+            ) : (
+              <div className="expense-list">
+                {selectedArts.map((art, index) => (
+                  <div className="expense-card" key={art.id}>
+                    <OrderButtons
+                      index={index}
+                      total={selectedArts.length}
+                      onMove={(dir) =>
+                        set(
+                          "artworkIds",
+                          moveIdInList(form.artworkIds ?? [], index, dir)
+                        )
+                      }
+                    />
+                    <div className="expense-card-main" style={{ cursor: "default" }}>
+                      <strong className="expense-note">{art.title}</strong>
+                      <span className="muted expense-meta">
+                        {art.series || APP_HEADING_DEFAULTS[language].noSeries}
+                        {art.yearMade ? ` · ${art.yearMade}` : ""}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost danger small"
+                      onClick={() =>
+                        set(
+                          "artworkIds",
+                          (form.artworkIds ?? []).filter((id) => id !== art.id)
+                        )
+                      }
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="pl-block">
+            <div className="pl-block-head">
+              <span className="pl-block-title">4. Textos</span>
+              <button type="button" className="small" onClick={addSection}>
+                + Añadir sección
+              </button>
+            </div>
+            {sections.length === 0 ? (
+              <div className="empty-friendly">
+                <p>Añade secciones (encabezado + texto).</p>
+                <button type="button" onClick={addSection}>
+                  + Primera sección
+                </button>
+              </div>
+            ) : (
+              <div className="app-section-list">
+                {sections.map((section, index) => {
+                  const open = openSectionId === section.id;
+                  const preview = (section.bodyHtml || "")
+                    .replace(/<[^>]+>/g, " ")
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .slice(0, 80);
+                  return (
+                    <div
+                      className={`app-section-card${open ? " open" : ""}`}
+                      key={section.id}
+                    >
+                      <button
+                        type="button"
+                        className="app-section-summary"
+                        onClick={() =>
+                          setOpenSectionId(open ? null : section.id)
+                        }
+                      >
+                        <strong>
+                          {section.heading || `Sección ${index + 1}`}
+                        </strong>
+                        {!open && preview && (
+                          <span className="muted app-section-preview">
+                            {preview}
+                            {preview.length >= 80 ? "…" : ""}
+                          </span>
+                        )}
+                        <span className="series-text-chevron">
+                          {open ? "▾" : "▸"}
+                        </span>
+                      </button>
+                      {open && (
+                        <div className="app-section-body">
+                          <label className="field">
+                            Encabezado
+                            <input
+                              value={section.heading}
+                              onChange={(event) =>
+                                updateSection(section.id, {
+                                  heading: event.target.value
+                                })
+                              }
+                            />
+                          </label>
+                          <div className="field">
+                            <span>Texto</span>
+                            <RichTextField
+                              key={section.id}
+                              value={section.bodyHtml}
+                              onChange={(html) =>
+                                updateSection(section.id, { bodyHtml: html })
+                              }
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className="ghost danger small"
+                            onClick={() => removeSection(section.id)}
+                          >
+                            Quitar sección
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="pl-style-block">
+            <span className="pl-block-title">Tipografías y marco</span>
+            <div className="form-row">
+              <label className="field">
+                Título
+                <select
+                  value={fontTitle}
+                  onChange={(event) => setFontTitle(event.target.value)}
+                >
+                  {PRICELIST_FONTS.map((font) => (
+                    <option key={font} value={font}>
+                      {font}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                Texto
+                <select
+                  value={fontBody}
+                  onChange={(event) => setFontBody(event.target.value)}
+                >
+                  {PRICELIST_FONTS.map((font) => (
+                    <option key={font} value={font}>
+                      {font}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="form-row">
+              <label className="field">
+                Borde del marco
+                <input
+                  type="color"
+                  className="color-chip"
+                  value={frameBorderColor}
+                  onChange={(event) => setFrameBorderColor(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                Margen dentro del marco
+                <div className="range-inline">
+                  <input
+                    type="range"
+                    min={0}
+                    max={40}
+                    value={framePadding}
+                    onChange={(event) => setFramePadding(Number(event.target.value))}
+                  />
+                  <span className="range-value">{framePadding}px</span>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div className="pl-preview-pane">
+          <span className="pl-fp-label muted">
+            Vista previa del PDF ({selectedArts.length} obras)
+          </span>
+          <iframe
+            ref={previewFrameRef}
+            className="app-pdf-frame"
+            title="Vista previa de la solicitud"
+          />
+        </div>
+      </div>
+
+      {showPicker && (
+        <ArtworkPickerModal
+          inventory={inventory}
+          excludeIds={[]}
+          initialIds={form.artworkIds ?? []}
+          title="Elegir obras para la solicitud"
+          onConfirm={(ids) => {
+            const current = form.artworkIds ?? [];
+            const kept = current.filter((id) => ids.includes(id));
+            const added = ids.filter((id) => !current.includes(id));
+            set("artworkIds", [...kept, ...added]);
+            setShowPicker(false);
+          }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -5932,6 +9679,7 @@ function PriceListPage({
   );
   const [exhibitionId, setExhibitionId] = useState(preset?.exhibitionId ?? "");
   const [freeSelected, setFreeSelected] = useState<string[]>(preset?.artworkIds ?? []);
+  const [exhibitionOrder, setExhibitionOrder] = useState<string[]>([]);
   const [header, setHeader] = useState("");
   const [subtitle, setSubtitle] = useState("");
   const [leftHeader, setLeftHeader] = useState("");
@@ -5972,7 +9720,21 @@ function PriceListPage({
       .map((movement) => movement.artworkId);
   }, [exhibitionId, inventory.movements]);
 
-  const selectedIds = mode === "exhibition" ? exhibitionArtworkIds : freeSelected;
+  useEffect(() => {
+    if (mode !== "exhibition") return;
+    setExhibitionOrder((prev) => {
+      const keep = prev.filter((id) => exhibitionArtworkIds.includes(id));
+      const add = exhibitionArtworkIds.filter((id) => !keep.includes(id));
+      return [...keep, ...add];
+    });
+  }, [mode, exhibitionArtworkIds.join(",")]);
+
+  const selectedIds = mode === "exhibition" ? exhibitionOrder : freeSelected;
+
+  function setSelectedIds(next: string[]) {
+    if (mode === "exhibition") setExhibitionOrder(next);
+    else setFreeSelected(next);
+  }
 
   useEffect(() => {
     if (mode === "exhibition" && exhibitionId) {
@@ -6071,7 +9833,7 @@ function PriceListPage({
         });
       }
       const savedPath = await window.inventoryApi.generatePriceList(format, {
-        header: header || "Lista de precios",
+        header: header || "Folleto de obras",
         subtitle,
         leftHeader,
         rightHeader,
@@ -6101,7 +9863,7 @@ function PriceListPage({
       <div className="page-head">
         <div>
           <p className="eyebrow">Documentos</p>
-          <h2>Generar lista de precios</h2>
+          <h2>Generar folleto de obras</h2>
         </div>
         <div className="form-head-actions">
           <button disabled={busy} onClick={() => generate("pdf")}>
@@ -6168,13 +9930,25 @@ function PriceListPage({
 
           {selectedIds.length > 0 && (
             <div className="pl-block">
-              <span className="pl-block-title">Precio e imagen de cada obra</span>
+              <span className="pl-block-title">
+                Precio, imagen y orden de cada obra
+              </span>
+              <p className="muted small-note">
+                Usa ↑ ↓ para elegir el orden del folleto.
+              </p>
               <div className="pl-row-list">
-                {selectedIds.map((id) => {
+                {selectedIds.map((id, index) => {
                   const art = artworkById.get(id);
                   if (!art) return null;
                   return (
                     <div className="pl-row-item" key={id}>
+                      <OrderButtons
+                        index={index}
+                        total={selectedIds.length}
+                        onMove={(dir) =>
+                          setSelectedIds(moveIdInList(selectedIds, index, dir))
+                        }
+                      />
                       <span className="pl-row-title" title={art.title}>
                         {art.title}
                       </span>
@@ -6421,7 +10195,7 @@ function PriceListPage({
                   fontStyle: headerItalic ? "italic" : "normal"
                 }}
               >
-                {header || "Lista de precios"}
+                {header || "Folleto de obras"}
               </div>
               {subtitle && (
                 <div
@@ -6661,6 +10435,16 @@ function sortArtworks(
   switch (sort) {
     case "title":
       return copy.sort((a, b) => a.title.localeCompare(b.title));
+    case "series":
+      return copy.sort((a, b) => {
+        const bySeries = (a.series || "\uffff").localeCompare(
+          b.series || "\uffff",
+          "es",
+          { sensitivity: "base" }
+        );
+        if (bySeries !== 0) return bySeries;
+        return a.title.localeCompare(b.title, "es", { sensitivity: "base" });
+      });
     case "year_desc":
       return copy.sort((a, b) => parseNum(b.yearMade) - parseNum(a.yearMade) || 0);
     case "year_asc":
@@ -6940,43 +10724,6 @@ function overdueMovement(
   if (endedExhibition) return endedExhibition;
 
   return null;
-}
-
-/* art type translations for the price list -------------------------------- */
-
-type PriceLang = "es" | "de" | "en";
-
-const PRICE_LANGS: Array<[PriceLang, string]> = [
-  ["es", "Español"],
-  ["de", "Deutsch"],
-  ["en", "English"]
-];
-
-const ART_TYPE_I18N: Record<string, Record<PriceLang, string>> = {
-  oil_canvas: { es: "Óleo sobre lienzo", de: "Öl auf Leinwand", en: "Oil on canvas" },
-  acrylic_canvas: {
-    es: "Acrílico sobre lienzo",
-    de: "Acryl auf Leinwand",
-    en: "Acrylic on canvas"
-  },
-  painting: { es: "Pintura", de: "Malerei", en: "Painting" },
-  watercolor: { es: "Acuarela", de: "Aquarell", en: "Watercolour" },
-  sculpture: { es: "Escultura", de: "Skulptur", en: "Sculpture" },
-  drawing: { es: "Dibujo", de: "Zeichnung", en: "Drawing" },
-  print: { es: "Grabado", de: "Druck", en: "Print" },
-  mixed_media: { es: "Técnica mixta", de: "Mischtechnik", en: "Mixed media" },
-  other: { es: "Otro", de: "Sonstiges", en: "Other" }
-};
-
-function artTypeLabel(
-  inventory: InventoryData,
-  value: string | undefined,
-  lang: PriceLang
-): string {
-  if (!value) return "";
-  const translated = ART_TYPE_I18N[value]?.[lang];
-  if (translated) return translated;
-  return labelFor(inventory, "artworkType", value);
 }
 
 function formatEuro(value: string): string {
