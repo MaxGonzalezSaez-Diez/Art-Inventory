@@ -65,6 +65,8 @@ export interface Movement {
   price?: string;
   received?: string;
   listedPrice?: string;
+  /** Whether VAT/tax was charged on this sale. Default true for legacy rows. */
+  taxCharged?: boolean;
   currency?: string;
   notes?: string;
   createdAt: string;
@@ -152,6 +154,26 @@ export interface SeriesInfoInput
 // Competition / stipend / residency applications.
 export type ApplicationKind = "concurso" | "beca" | "residencia" | "otro";
 
+export interface CoverLineStyle {
+  font?: string;
+  sizePt?: number;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+export interface ApplicationCoverStyles {
+  /** Línea por encima del título */
+  above?: CoverLineStyle;
+  /** Título */
+  title?: CoverLineStyle;
+  /** Línea por debajo (izquierda) */
+  below?: CoverLineStyle;
+  /** A la derecha de la línea por debajo */
+  belowRight?: CoverLineStyle;
+  /** Segunda línea */
+  second?: CoverLineStyle;
+}
+
 export interface Application {
   id: string;
   /** Internal name for the list / data entry (can include tipo, etc.). */
@@ -161,11 +183,14 @@ export interface Application {
   deadline?: string; // DD-MM-YYYY
   /** Title printed on the PDF cover. */
   documentTitle?: string;
-  /** Optional gray lines under the PDF title. */
+  /** Optional line above the PDF title. */
   coverSubtitle?: string;
-  /** Flexible date or year printed on the PDF cover. */
+  /** Flexible date or year printed on the PDF cover (right of line below). */
   coverDate?: string;
+  /** Second line under the title row. */
   coverNote?: string;
+  /** Per-line font / size for the PDF cover. */
+  coverStyles?: ApplicationCoverStyles;
   /** @deprecated cover images removed */
   coverImageId?: string;
   /** Flexible text pages (heading + rich HTML body). */
@@ -185,6 +210,10 @@ export interface Application {
    * - worksOnly: single “Obras” line pointing at the first painting page
    */
   tocWorksMode?: "list" | "bySeries" | "worksOnly";
+  /** Name shown in PDF/Word header/footer (artist). */
+  headerArtistName?: string;
+  /** Competition / call name shown in PDF/Word header/footer. */
+  headerCompetition?: string;
   artworkIds: string[];
   createdAt: string;
   updatedAt: string;

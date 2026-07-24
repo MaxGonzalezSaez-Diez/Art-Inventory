@@ -13,77 +13,260 @@ import { randomUUID } from "crypto";
 
 export type ImageExportFormat = "jpg" | "png" | "pdf";
 
+/**
+ * How to handle DPI / print sizing:
+ * - metadata: only write DPI into the file; keep all pixels
+ * - print: resize so the image has enough pixels for printWidthCm × printHeightCm at dpi
+ * - none: leave DPI alone (still allows format / max file size)
+ */
+export type ImageExportDpiMode = "none" | "metadata" | "print";
+
 export interface ImageExportOptions {
   sourcePath: string;
   format: ImageExportFormat;
-  targetKB?: number; // desired maximum file size
-  maxDimension?: number; // longest side in pixels
+  targetKB?: number;
+  dpiMode?: ImageExportDpiMode;
+  /** Used for metadata and print modes. */
+  dpi?: number;
+  /** Physical print size in centimetres (print mode). */
+  printWidthCm?: number;
+  printHeightCm?: number;
   suggestedName?: string;
 }
 
 export interface ImageExportResult {
   path: string;
   bytes: number;
+  width: number;
+  height: number;
+  dpi?: number;
 }
 
-const MICRON_PER_PX = 264.5833; // 1px at 96dpi in microns
+export interface ImageProbe {
+  width: number;
+  height: number;
+}
 
-function resizeToMax(image: NativeImage, maxDim?: number): NativeImage {
-  if (!maxDim || maxDim <= 0) return image;
+export function probeImage(sourcePath: string): ImageProbe | null {
+  const image = nativeImage.createFromPath(sourcePath);
+  if (image.isEmpty()) return null;
+  return image.getSize();
+}
+
+function micronPerPxAt(dpi: number): number {
+  return 25400 / Math.max(1, dpi);
+}
+
+function cmToPx(cm: number, dpi: number): number {
+  return Math.round((cm / 2.54) * dpi);
+}
+
+function crc32Png(buf: Buffer): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i += 1) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function setPngDpi(buffer: Buffer, dpi: number): Buffer {
+  if (buffer.length < 8 || buffer.toString("ascii", 1, 4) !== "PNG") return buffer;
+  const ppm = Math.round(dpi / 0.0254);
+  const type = Buffer.from("pHYs");
+  const data = Buffer.alloc(9);
+  data.writeUInt32BE(ppm, 0);
+  data.writeUInt32BE(ppm, 4);
+  data[8] = 1;
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(9, 0);
+  const crcBuf = Buffer.concat([type, data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32Png(crcBuf), 0);
+  const physChunk = Buffer.concat([len, type, data, crc]);
+
+  const parts: Buffer[] = [buffer.subarray(0, 8)];
+  let offset = 8;
+  let inserted = false;
+  while (offset + 8 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const chunkType = buffer.toString("ascii", offset + 4, offset + 8);
+    const chunkEnd = offset + 12 + length;
+    if (chunkEnd > buffer.length) break;
+    const chunk = buffer.subarray(offset, chunkEnd);
+    if (chunkType === "pHYs") {
+      offset = chunkEnd;
+      continue;
+    }
+    parts.push(chunk);
+    if (chunkType === "IHDR" && !inserted) {
+      parts.push(physChunk);
+      inserted = true;
+    }
+    offset = chunkEnd;
+    if (chunkType === "IEND") break;
+  }
+  if (!inserted) parts.push(physChunk);
+  return Buffer.concat(parts);
+}
+
+function setJpegDpi(buffer: Buffer, dpi: number): Buffer {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return buffer;
+  let i = 2;
+  while (i + 4 < buffer.length && buffer[i] === 0xff) {
+    const marker = buffer[i + 1];
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      i += 2;
+      continue;
+    }
+    const len = buffer.readUInt16BE(i + 2);
+    if (i + 2 + len > buffer.length) break;
+    if (
+      marker === 0xe0 &&
+      len >= 16 &&
+      buffer.toString("ascii", i + 4, i + 8) === "JFIF"
+    ) {
+      const out = Buffer.from(buffer);
+      out[i + 11] = 1;
+      out.writeUInt16BE(dpi, i + 12);
+      out.writeUInt16BE(dpi, i + 14);
+      return out;
+    }
+    i += 2 + len;
+  }
+
+  const app0 = Buffer.alloc(18);
+  app0[0] = 0xff;
+  app0[1] = 0xe0;
+  app0.writeUInt16BE(16, 2);
+  app0.write("JFIF\0", 4, "ascii");
+  app0[9] = 1;
+  app0[10] = 1;
+  app0[11] = 1;
+  app0.writeUInt16BE(dpi, 12);
+  app0.writeUInt16BE(dpi, 14);
+  app0[16] = 0;
+  app0[17] = 0;
+  return Buffer.concat([buffer.subarray(0, 2), app0, buffer.subarray(2)]);
+}
+
+function applyDpiMetadata(
+  buffer: Buffer,
+  format: "jpg" | "png",
+  dpi?: number
+): Buffer {
+  if (!dpi || dpi <= 0) return buffer;
+  return format === "png" ? setPngDpi(buffer, dpi) : setJpegDpi(buffer, dpi);
+}
+
+/** Fit image inside a pixel box, preserving aspect ratio (never crops). */
+function resizeToFitBox(
+  image: NativeImage,
+  boxW: number,
+  boxH: number
+): NativeImage {
   const { width, height } = image.getSize();
-  if (width <= maxDim && height <= maxDim) return image;
-  return width >= height
-    ? image.resize({ width: maxDim })
-    : image.resize({ height: maxDim });
+  if (width <= 0 || height <= 0) return image;
+  const scale = Math.min(boxW / width, boxH / height);
+  const newW = Math.max(1, Math.round(width * scale));
+  const newH = Math.max(1, Math.round(height * scale));
+  if (newW === width && newH === height) return image;
+  return image.resize({ width: newW, height: newH });
 }
 
-// Try increasingly aggressive JPEG quality (and then downscaling) until the
-// encoded buffer fits under the requested size. Returns the smallest tried if
-// the target can't be reached.
-const JPEG_QUALITIES = [92, 85, 78, 70, 62, 55, 48, 40, 32, 25, 18, 12];
+function prepareImage(
+  source: NativeImage,
+  options: ImageExportOptions
+): { image: NativeImage; dpi?: number } {
+  const mode = options.dpiMode ?? "none";
+  const dpi =
+    options.dpi && options.dpi > 0 ? Math.round(options.dpi) : undefined;
+
+  if (mode === "print") {
+    if (!dpi) throw new Error("Indica el DPI para preparar la impresión.");
+    const wCm = Number(options.printWidthCm);
+    const hCm = Number(options.printHeightCm);
+    if (!(wCm > 0) || !(hCm > 0)) {
+      throw new Error("Indica el ancho y el alto de impresión en cm.");
+    }
+    const boxW = cmToPx(wCm, dpi);
+    const boxH = cmToPx(hCm, dpi);
+    return { image: resizeToFitBox(source, boxW, boxH), dpi };
+  }
+
+  if (mode === "metadata") {
+    if (!dpi) throw new Error("Indica el DPI a marcar en el archivo.");
+    return { image: source, dpi };
+  }
+
+  return { image: source, dpi: undefined };
+}
+
+const JPEG_QUALITIES = [95, 92, 88, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 12];
 
 function encodeRaster(
   source: NativeImage,
   format: "jpg" | "png",
-  targetBytes: number | undefined,
-  maxDim: number | undefined
-): Buffer {
-  let image = resizeToMax(source, maxDim);
+  targetBytes: number | undefined
+): { buffer: Buffer; width: number; height: number } {
+  let image = source;
 
   if (format === "png") {
     let buffer = image.toPNG();
     while (targetBytes && buffer.length > targetBytes && image.getSize().width > 100) {
-      image = image.resize({ width: Math.round(image.getSize().width * 0.8) });
+      image = image.resize({ width: Math.round(image.getSize().width * 0.85) });
       buffer = image.toPNG();
     }
-    return buffer;
+    const size = image.getSize();
+    return { buffer, width: size.width, height: size.height };
   }
 
-  if (!targetBytes) return image.toJPEG(92);
+  if (!targetBytes) {
+    const buffer = image.toJPEG(92);
+    const size = image.getSize();
+    return { buffer, width: size.width, height: size.height };
+  }
 
   let best = image.toJPEG(92);
-  if (best.length <= targetBytes) return best;
+  if (best.length <= targetBytes) {
+    const size = image.getSize();
+    return { buffer: best, width: size.width, height: size.height };
+  }
+
   for (const quality of JPEG_QUALITIES) {
     const buffer = image.toJPEG(quality);
     if (buffer.length < best.length) best = buffer;
-    if (buffer.length <= targetBytes) return buffer;
+    if (buffer.length <= targetBytes) {
+      const size = image.getSize();
+      return { buffer, width: size.width, height: size.height };
+    }
   }
+
   while (image.getSize().width > 140) {
-    image = image.resize({ width: Math.round(image.getSize().width * 0.8) });
+    image = image.resize({ width: Math.round(image.getSize().width * 0.85) });
     for (const quality of JPEG_QUALITIES) {
       const buffer = image.toJPEG(quality);
       if (buffer.length < best.length) best = buffer;
-      if (buffer.length <= targetBytes) return buffer;
+      if (buffer.length <= targetBytes) {
+        const size = image.getSize();
+        return { buffer, width: size.width, height: size.height };
+      }
     }
   }
-  return best;
+
+  const size = image.getSize();
+  return { buffer: best, width: size.width, height: size.height };
 }
 
-// One-page PDF that is exactly the size of the (already-sized) image.
 async function renderImagePdf(
   jpeg: Buffer,
-  size: { width: number; height: number }
+  size: { width: number; height: number },
+  dpi: number
 ): Promise<Buffer> {
+  const micron = micronPerPxAt(dpi);
   const dataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
   const html = `<!doctype html><html><head><meta charset="utf-8" /><style>
     html,body{margin:0;padding:0;}
@@ -103,8 +286,8 @@ async function renderImagePdf(
       printBackground: true,
       margins: { top: 0, bottom: 0, left: 0, right: 0 },
       pageSize: {
-        width: Math.round(size.width * MICRON_PER_PX),
-        height: Math.round(size.height * MICRON_PER_PX)
+        width: Math.round(size.width * micron),
+        height: Math.round(size.height * micron)
       }
     });
   } finally {
@@ -127,11 +310,12 @@ export async function exportImage(
   parentWindow: BrowserWindow | null,
   options: ImageExportOptions
 ): Promise<ImageExportResult | null> {
-  const image = nativeImage.createFromPath(options.sourcePath);
-  if (image.isEmpty()) {
+  const source = nativeImage.createFromPath(options.sourcePath);
+  if (source.isEmpty()) {
     throw new Error("No se pudo leer la imagen seleccionada.");
   }
 
+  const prepared = prepareImage(source, options);
   const base = sanitizeName(
     options.suggestedName || path.basename(options.sourcePath)
   );
@@ -149,20 +333,40 @@ export async function exportImage(
     : await dialog.showSaveDialog(dialogOptions);
   if (result.canceled || !result.filePath) return null;
 
-  const targetBytes = options.targetKB ? Math.round(options.targetKB * 1024) : undefined;
+  const targetBytes = options.targetKB
+    ? Math.round(options.targetKB * 1024)
+    : undefined;
 
   let buffer: Buffer;
+  let width: number;
+  let height: number;
+
   if (options.format === "pdf") {
-    const sized = resizeToMax(image, options.maxDimension);
-    // Leave a little headroom for the PDF container overhead.
-    const headroom = targetBytes ? Math.max(8 * 1024, targetBytes - 12 * 1024) : undefined;
-    const jpeg = encodeRaster(sized, "jpg", headroom, undefined);
-    buffer = await renderImagePdf(jpeg, sized.getSize());
+    const headroom = targetBytes
+      ? Math.max(8 * 1024, targetBytes - 12 * 1024)
+      : undefined;
+    const encoded = encodeRaster(prepared.image, "jpg", headroom);
+    width = encoded.width;
+    height = encoded.height;
+    buffer = await renderImagePdf(
+      encoded.buffer,
+      { width, height },
+      prepared.dpi ?? 96
+    );
   } else {
-    buffer = encodeRaster(image, options.format, targetBytes, options.maxDimension);
+    const encoded = encodeRaster(prepared.image, options.format, targetBytes);
+    width = encoded.width;
+    height = encoded.height;
+    buffer = applyDpiMetadata(encoded.buffer, options.format, prepared.dpi);
   }
 
   await writeFile(result.filePath, buffer);
   shell.showItemInFolder(result.filePath);
-  return { path: result.filePath, bytes: buffer.length };
+  return {
+    path: result.filePath,
+    bytes: buffer.length,
+    width,
+    height,
+    dpi: prepared.dpi
+  };
 }

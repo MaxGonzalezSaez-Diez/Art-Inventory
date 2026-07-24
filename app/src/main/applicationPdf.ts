@@ -1,18 +1,25 @@
 import { BrowserWindow, dialog, shell, type SaveDialogOptions } from "electron";
 import { writeFile, unlink } from "fs/promises";
-import { execFile } from "child_process";
 import { tmpdir } from "os";
 import path from "path";
 import { randomUUID } from "crypto";
 import {
   AlignmentType,
+  BorderStyle,
   Document,
   HeadingLevel,
+  Footer,
   ImageRun,
   Packer,
   PageBreak,
+  PageNumber,
   Paragraph,
-  TextRun
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+  VerticalAlign
 } from "docx";
 import {
   buildApplicationHtml,
@@ -20,18 +27,12 @@ import {
   richHtmlToPlainText,
   type ApplicationPdfPayload
 } from "./applicationDocumentHtml";
+import { makeGeneratedFileEditable } from "./makeFileEditable";
 
 export type { ApplicationPdfPayload, ApplicationPdfRow, ApplicationPdfStyle, ApplicationPdfSection } from "./applicationDocumentHtml";
 export { buildApplicationHtml } from "./applicationDocumentHtml";
 
 export type ApplicationDocFormat = "pdf" | "docx";
-
-function clearQuarantine(filePath: string): Promise<void> {
-  if (process.platform !== "darwin") return Promise.resolve();
-  return new Promise((resolve) => {
-    execFile("xattr", ["-d", "com.apple.quarantine", filePath], () => resolve());
-  });
-}
 
 function dataUrlToBuffer(dataUrl?: string): { type: "png" | "jpg"; data: Buffer } | null {
   if (!dataUrl) return null;
@@ -108,8 +109,82 @@ function resolveSections(payload: ApplicationPdfPayload) {
   return legacy;
 }
 
+function framedImage(
+  img: { type: "png" | "jpg"; data: Buffer },
+  title: string,
+  index: number,
+  frameBorderColor: string,
+  frameBorderWidth: number,
+  frameInset: number,
+  showFrame: boolean
+): Table {
+  // ~95% of A4 content width (~6.2" usable → ~5.9" square).
+  const outerPx = 440;
+  const borderPx = showFrame ? Math.max(1, Math.min(5, frameBorderWidth)) : 0;
+  const insetPx = Math.max(0, Math.min(40, frameInset));
+  const innerMax = Math.max(40, outerPx - borderPx * 2 - insetPx * 2);
+  const size = readImageSize(img.data, img.type) || { width: 1000, height: 1000 };
+  const fitted = fitInSquare(size.width, size.height, innerMax);
+  const cellTwip = outerPx * 15;
+  const padTwip = insetPx * 15;
+  const hex = frameBorderColor.replace("#", "").toUpperCase() || "D0C9BB";
+  const border = showFrame
+    ? {
+        style: BorderStyle.SINGLE,
+        // docx border size is in 1/8 pt
+        size: Math.max(4, Math.min(40, Math.round(borderPx * 8))),
+        color: hex,
+        space: 0
+      }
+    : { style: BorderStyle.NONE, size: 0, color: "FFFFFF", space: 0 };
+  return new Table({
+    alignment: AlignmentType.CENTER,
+    width: { size: cellTwip, type: WidthType.DXA },
+    columnWidths: [cellTwip],
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            borders: {
+              top: border,
+              bottom: border,
+              left: border,
+              right: border
+            },
+            width: { size: cellTwip, type: WidthType.DXA },
+            verticalAlign: VerticalAlign.CENTER,
+            margins: {
+              top: padTwip,
+              bottom: padTwip,
+              left: padTwip,
+              right: padTwip
+            },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new ImageRun({
+                    type: img.type,
+                    data: img.data,
+                    transformation: fitted,
+                    altText: {
+                      title,
+                      description: title,
+                      name: `work-${index}`
+                    }
+                  })
+                ]
+              })
+            ]
+          })
+        ]
+      })
+    ]
+  });
+}
+
 async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
-  const children: Paragraph[] = [];
+  const children: Array<Paragraph | Table> = [];
   const emptyLabel = payload.emptyImageLabel?.trim() || "Sin imagen";
   const seriesPrefix = payload.seriesPrefix?.trim() || "Serie";
   const noSeriesLabel = payload.noSeriesLabel?.trim() || "sin serie";
@@ -118,48 +193,132 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
   const typeLabel = payload.typeLabel?.trim() || "Técnica";
   const worksHeading = payload.headingWorks?.trim() || "Obras";
   const tocLabel = payload.tocLabel?.trim() || "Índice";
+  const sectionsLabel = payload.sectionsLabel?.trim() || "Textos";
   const documentSections = resolveSections(payload);
-
-  children.push(
-    new Paragraph({
-      spacing: { after: 200 },
-      children: [
-        new TextRun({ text: payload.title || "Solicitud", bold: true, size: 48 })
-      ]
-    })
+  const frameBorder = (payload.style?.frameBorderColor || "#d0c9bb").replace("#", "");
+  const frameBorderWidth = Math.max(
+    1,
+    Math.min(5, Math.round(Number(payload.style?.frameBorderWidth ?? 3)))
   );
-  for (const line of [
-    payload.coverSubtitle,
-    payload.organization,
-    payload.coverDate,
-    payload.coverNote
-  ]) {
-    if (!line?.trim()) continue;
+  const framePadding = Math.max(
+    0,
+    Math.min(40, Number(payload.style?.framePadding ?? 12))
+  );
+  const showFrame = payload.style?.showFrame !== false;
+
+  // —— Cover (matches PDF: above, title, below+right, second, TOC) ——
+  const coverStyles = payload.coverStyles ?? {};
+  const bodyFont = payload.style?.fontBody || "Georgia";
+  const titleFont = payload.style?.fontTitle || "Georgia";
+  const titleColorHex = (payload.style?.titleColor || "#1a1a1a").replace("#", "");
+  const metaColorHex = "7A7368";
+
+  function coverRun(
+    text: string,
+    line: typeof coverStyles.title | undefined,
+    defaults: {
+      font: string;
+      sizeHalfPoints: number;
+      bold?: boolean;
+      italic?: boolean;
+      color: string;
+      uppercase?: boolean;
+    }
+  ) {
+    return new TextRun({
+      text: defaults.uppercase ? text.toUpperCase() : text,
+      font: line?.font?.trim() || defaults.font,
+      size:
+        line?.sizePt != null && Number.isFinite(line.sizePt)
+          ? Math.round(line.sizePt * 2)
+          : defaults.sizeHalfPoints,
+      bold: line?.bold ?? defaults.bold ?? false,
+      italics: line?.italic ?? defaults.italic ?? false,
+      color: defaults.color
+    });
+  }
+
+  if (payload.coverSubtitle?.trim()) {
     children.push(
       new Paragraph({
-        spacing: { after: 80 },
-        children: [new TextRun({ text: line.trim(), size: 24, color: "7A7368" })]
+        spacing: { after: 120 },
+        children: [
+          coverRun(payload.coverSubtitle.trim(), coverStyles.above, {
+            font: bodyFont,
+            sizeHalfPoints: 20,
+            bold: true,
+            color: metaColorHex,
+            uppercase: true
+          })
+        ]
       })
     );
   }
   children.push(
     new Paragraph({
-      spacing: { before: 300, after: 140 },
-      children: [new TextRun({ text: tocLabel.toUpperCase(), size: 20, color: "7A7368" })]
+      spacing: { after: 200 },
+      children: [
+        coverRun(payload.title || "Solicitud", coverStyles.title, {
+          font: titleFont,
+          sizeHalfPoints: 56,
+          bold: payload.style?.titleBold !== false,
+          italic: Boolean(payload.style?.titleItalic),
+          color: titleColorHex
+        })
+      ]
     })
   );
+  const belowText = payload.organization?.trim() || "";
+  if (belowText) {
+    children.push(
+      new Paragraph({
+        spacing: { after: 80 },
+        children: [
+          coverRun(belowText, coverStyles.below, {
+            font: bodyFont,
+            sizeHalfPoints: 23,
+            color: metaColorHex
+          })
+        ]
+      })
+    );
+  }
+  if (payload.coverNote?.trim()) {
+    children.push(
+      new Paragraph({
+        spacing: { before: 120, after: 80 },
+        children: [
+          coverRun(payload.coverNote.trim(), coverStyles.second, {
+            font: bodyFont,
+            sizeHalfPoints: 21,
+            color: metaColorHex
+          })
+        ]
+      })
+    );
+  }
+  children.push(
+    new Paragraph({
+      spacing: { before: 360, after: 140 },
+      border: {
+        top: { color: "D8D2C6", size: 6, space: 12, style: BorderStyle.SINGLE }
+      },
+      children: [
+        new TextRun({
+          text: tocLabel.toUpperCase(),
+          size: 18,
+          color: "7A7368",
+          bold: true
+        })
+      ]
+    })
+  );
+
   let tocPage = 2;
+  const sectionToc: Array<{ title: string; pageNum: number }> = [];
   documentSections.forEach((section) => {
     if (section.heading?.trim()) {
-      children.push(
-        new Paragraph({
-          spacing: { after: 50 },
-          children: [
-            new TextRun({ text: section.heading.trim(), size: 21, color: "7A7368" }),
-            new TextRun({ text: `    ${tocPage}`, size: 21, color: "9A9286" })
-          ]
-        })
-      );
+      sectionToc.push({ title: section.heading.trim(), pageNum: tocPage });
     }
     tocPage += 1;
   });
@@ -176,40 +335,86 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
     singular: payload.workSingularLabel?.trim() || "cuadro",
     plural: payload.workPluralLabel?.trim() || "cuadros"
   });
-  if (payload.tocWorksMode !== "worksOnly" && workTocEntries.length > 0) {
+
+  if (sectionToc.length > 0) {
     children.push(
       new Paragraph({
-        spacing: { before: 120, after: 60 },
+        spacing: { after: 60 },
         children: [
           new TextRun({
-            text: worksHeading.toUpperCase(),
-            size: 18,
-            color: "9A9286"
+            text: sectionsLabel.toUpperCase(),
+            size: 16,
+            color: "9A9286",
+            bold: true
           })
         ]
       })
     );
+    for (const entry of sectionToc) {
+      children.push(
+        new Paragraph({
+          spacing: { after: 50 },
+          children: [
+            new TextRun({ text: entry.title, size: 21, color: "7A7368" }),
+            new TextRun({ text: `    ${entry.pageNum}`, size: 21, color: "9A9286" })
+          ]
+        })
+      );
+    }
   }
-  for (const entry of workTocEntries) {
-    children.push(
-      new Paragraph({
-        spacing: { after: 50 },
-        children: [
-          new TextRun({ text: entry.title, size: 21, color: "7A7368" }),
-          new TextRun({ text: `    ${entry.pageNum}`, size: 21, color: "9A9286" })
-        ]
-      })
-    );
+  if (workTocEntries.length > 0) {
+    if (payload.tocWorksMode !== "worksOnly") {
+      children.push(
+        new Paragraph({
+          spacing: { before: 120, after: 60 },
+          children: [
+            new TextRun({
+              text: worksHeading.toUpperCase(),
+              size: 16,
+              color: "9A9286",
+              bold: true
+            })
+          ]
+        })
+      );
+    }
+    for (const entry of workTocEntries) {
+      children.push(
+        new Paragraph({
+          spacing: { after: 50 },
+          children: [
+            new TextRun({ text: entry.title, size: 21, color: "7A7368" }),
+            new TextRun({ text: `    ${entry.pageNum}`, size: 21, color: "9A9286" })
+          ]
+        })
+      );
+    }
   }
   children.push(new Paragraph({ children: [new PageBreak()] }));
 
+  // —— Text sections ——
   for (const section of documentSections) {
     if (section.heading?.trim()) {
       children.push(
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
           spacing: { after: 200 },
-          children: [new TextRun({ text: section.heading.trim(), bold: true, size: 32 })]
+          border: {
+            bottom: {
+              color: "E0D9CD",
+              size: 6,
+              space: 6,
+              style: BorderStyle.SINGLE
+            }
+          },
+          children: [
+            new TextRun({
+              text: section.heading.trim(),
+              bold: true,
+              size: 32,
+              font: payload.style?.fontTitle || "Georgia"
+            })
+          ]
         })
       );
     }
@@ -222,13 +427,20 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
         children.push(
           new Paragraph({
             spacing: { after: 160 },
-            children: [new TextRun({ text: block, size: 24 })]
+            children: [
+              new TextRun({
+                text: block,
+                size: 24,
+                font: payload.style?.fontBody || "Georgia"
+              })
+            ]
           })
         );
       });
     children.push(new Paragraph({ children: [new PageBreak()] }));
   }
 
+  // —— Work pages (same order / labels as PDF) ——
   payload.rows.forEach((row, index) => {
     children.push(
       new Paragraph({
@@ -236,7 +448,7 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
         children: [
           new TextRun({
             text: worksHeading.toUpperCase(),
-            size: 18,
+            size: 16,
             color: "9A9286"
           })
         ]
@@ -245,78 +457,48 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
     children.push(
       new Paragraph({
         spacing: { after: 40 },
-        children: [new TextRun({ text: row.title, bold: true, size: 36 })]
-      })
-    );
-    children.push(
-      new Paragraph({
-        spacing: { after: 20 },
         children: [
           new TextRun({
-            text: `${seriesPrefix}: ${row.series?.trim() || noSeriesLabel}`,
-            size: 22,
-            color: "7A7368"
+            text: row.title,
+            bold: true,
+            size: 32,
+            font: payload.style?.fontTitle || "Georgia"
           })
         ]
       })
     );
-    children.push(
-      new Paragraph({
-        spacing: { after: 20 },
-        children: [
-          new TextRun({
-            text: `${typeLabel}: ${row.material?.trim() || "—"}`,
-            size: 22,
-            color: "7A7368"
-          })
-        ]
-      })
-    );
-    children.push(
-      new Paragraph({
-        spacing: { after: 20 },
-        children: [
-          new TextRun({
-            text: `${sizeLabel}: ${row.size?.trim() || "—"}`,
-            size: 22,
-            color: "7A7368"
-          })
-        ]
-      })
-    );
-    children.push(
-      new Paragraph({
-        spacing: { after: 120 },
-        children: [
-          new TextRun({
-            text: `${yearLabel}: ${row.year?.trim() || "—"}`,
-            size: 22,
-            color: "7A7368"
-          })
-        ]
-      })
-    );
-    const img = dataUrlToBuffer(row.imageDataUrl);
-    if (img) {
-      const size = readImageSize(img.data, img.type) || { width: 1000, height: 1000 };
-      const fitted = fitInSquare(size.width, size.height, 520);
+    for (const line of [
+      `${seriesPrefix}: ${row.series?.trim() || noSeriesLabel}`,
+      `${typeLabel}: ${row.material?.trim() || "—"}`,
+      `${sizeLabel}: ${row.size?.trim() || "—"}`,
+      `${yearLabel}: ${row.year?.trim() || "—"}`
+    ]) {
       children.push(
         new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 80 },
+          spacing: { after: 20 },
           children: [
-            new ImageRun({
-              type: img.type,
-              data: img.data,
-              transformation: fitted,
-              altText: {
-                title: row.title,
-                description: row.title,
-                name: `work-${index}`
-              }
+            new TextRun({
+              text: line,
+              size: 21,
+              color: "7A7368",
+              font: payload.style?.fontBody || "Georgia"
             })
           ]
         })
+      );
+    }
+    const img = dataUrlToBuffer(row.imageDataUrl);
+    if (img) {
+      children.push(
+        framedImage(
+          img,
+          row.title,
+          index,
+          `#${frameBorder}`,
+          frameBorderWidth,
+          framePadding,
+          showFrame
+        )
       );
     } else {
       children.push(
@@ -333,7 +515,47 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
   });
 
   const doc = new Document({
-    sections: [{ children }]
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: {
+              top: 720,
+              bottom: 720,
+              left: 850,
+              right: 850
+            }
+          }
+        },
+        footers: {
+          default: new Footer({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new TextRun({
+                    text: payload.headerArtistName?.trim()
+                      ? `${payload.headerArtistName.trim()}  ·  `
+                      : "",
+                    size: 16,
+                    color: "A39B8F"
+                  }),
+                  new TextRun({ children: [PageNumber.CURRENT], size: 16, color: "A39B8F" }),
+                  new TextRun({
+                    text: payload.headerCompetition?.trim()
+                      ? `  ·  ${payload.headerCompetition.trim()}`
+                      : "",
+                    size: 16,
+                    color: "A39B8F"
+                  })
+                ]
+              })
+            ]
+          })
+        },
+        children
+      }
+    ]
   });
   return Packer.toBuffer(doc);
 }
@@ -360,7 +582,7 @@ export async function generateApplicationDocument(
   if (format === "docx") {
     const buffer = await buildDocx(payload);
     await writeFile(result.filePath, buffer);
-    await clearQuarantine(result.filePath);
+    await makeGeneratedFileEditable(result.filePath);
     void shell.openPath(result.filePath);
     return result.filePath;
   }
@@ -370,14 +592,59 @@ export async function generateApplicationDocument(
   await writeFile(tempHtml, html, "utf8");
   const win = new BrowserWindow({
     show: false,
+    width: 794,
+    height: 1123,
     webPreferences: { offscreen: true }
   });
   try {
     await win.loadFile(tempHtml);
+    await win.webContents.executeJavaScript(`
+      (async () => {
+        await Promise.all(
+          Array.from(document.images || []).map((img) =>
+            img.complete
+              ? Promise.resolve()
+              : new Promise((resolve) => {
+                  img.addEventListener("load", resolve, { once: true });
+                  img.addEventListener("error", resolve, { once: true });
+                })
+          )
+        );
+        // Match print page geometry in the offscreen window so frame squares
+        // can be measured, then lock each frame-box to an explicit square.
+        const style = document.createElement("style");
+        style.textContent = \`
+          @media screen {
+            body { background:#fff !important; padding:0 !important; display:block !important; width:794px !important; }
+            .page {
+              transform:none !important; margin:0 !important; box-shadow:none !important;
+              width:794px !important; height:1023px !important; max-height:1023px !important;
+              min-height:1023px !important; padding:0 0 42px !important; overflow:hidden !important;
+            }
+            .page-main, .work-main {
+              display:flex !important; flex-direction:column !important;
+              height:100% !important; min-height:0 !important;
+            }
+            .frame-box::before { display:none !important; padding-top:0 !important; }
+          }
+        \`;
+        document.head.appendChild(style);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        if (typeof window.__preparePrintLayout === "function") {
+          window.__preparePrintLayout();
+        }
+        await new Promise((r) => setTimeout(r, 50));
+        if (typeof window.__preparePrintLayout === "function") {
+          window.__preparePrintLayout();
+        }
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      })();
+    `);
     const pdf = await win.webContents.printToPDF({
       printBackground: true,
-      pageSize: "A4",
-      margins: { marginType: "none" }
+      preferCSSPageSize: true,
+      margins: { marginType: "none" },
+      displayHeaderFooter: false
     });
     await writeFile(result.filePath, pdf);
     void shell.openPath(result.filePath);

@@ -1,19 +1,9 @@
 import { BrowserWindow, dialog, shell, type SaveDialogOptions } from "electron";
 import { writeFile, unlink } from "fs/promises";
-import { execFile } from "child_process";
 import { tmpdir } from "os";
 import path from "path";
 import { randomUUID } from "crypto";
-
-// macOS Word opens files with the `com.apple.quarantine` attribute in read-only
-// Protected View. Files written by an unsigned Electron app can inherit it, so
-// strip it (best effort) before opening the document for editing.
-function clearQuarantine(filePath: string): Promise<void> {
-  if (process.platform !== "darwin") return Promise.resolve();
-  return new Promise((resolve) => {
-    execFile("xattr", ["-d", "com.apple.quarantine", filePath], () => resolve());
-  });
-}
+import { makeGeneratedFileEditable } from "./makeFileEditable";
 import {
   AlignmentType,
   BorderStyle,
@@ -601,7 +591,7 @@ export async function generatePriceList(
   const buffer =
     format === "pdf" ? await renderPdf(payload) : await buildDocx(payload);
   await writeFile(result.filePath, buffer);
-  await clearQuarantine(result.filePath);
+  await makeGeneratedFileEditable(result.filePath);
   void shell.openPath(result.filePath);
   return result.filePath;
 }

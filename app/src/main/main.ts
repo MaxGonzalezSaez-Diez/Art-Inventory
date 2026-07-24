@@ -7,7 +7,9 @@ import {
   shell,
   type OpenDialogOptions
 } from "electron";
-import { readFile, copyFile } from "fs/promises";
+import { readFile, copyFile, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import { randomUUID } from "crypto";
 import path from "path";
 import ExcelJS from "exceljs";
 import { InventoryStore } from "./excel/inventoryStore";
@@ -22,7 +24,7 @@ import {
   type ApplicationDocFormat,
   type ApplicationPdfPayload
 } from "./applicationPdf";
-import { exportImage, type ImageExportOptions } from "./imageExport";
+import { exportImage, probeImage, type ImageExportOptions } from "./imageExport";
 import type {
   AppSettings,
   ApplicationInput,
@@ -254,7 +256,8 @@ ipcMain.handle(
         artwork: string;
         series: string;
         where: string;
-        received: number | null;
+        salePrice: number | null;
+        taxCharged?: boolean;
       }>;
       totals: { spent: number; earned: number; net: number };
     }
@@ -288,7 +291,7 @@ ipcMain.handle(
     spentRow.getCell(1).font = { bold: true };
     spentRow.getCell(2).font = { bold: true, color: { argb: "FFB33A3A" } };
     spentRow.getCell(2).numFmt = "#,##0.00";
-    const earnedRow = summary.addRow(["Total ganado (€)", payload.totals.earned]);
+    const earnedRow = summary.addRow(["Total recibido (€)", payload.totals.earned]);
     earnedRow.getCell(1).font = { bold: true };
     earnedRow.getCell(2).font = { bold: true, color: { argb: "FF2F7A4A" } };
     earnedRow.getCell(2).numFmt = "#,##0.00";
@@ -329,12 +332,13 @@ ipcMain.handle(
     const income = workbook.addWorksheet("Ingresos");
     income.addRow([
       "Fecha",
-      "Importe (€)",
+      "Recibido (€)",
       "Cómo",
       "Obra",
       "Serie",
       "Dónde / a quién",
-      "Recibido neto (€)"
+      "Precio de venta (€)",
+      "Impuesto"
     ]);
     income.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
     income.getRow(1).fill = {
@@ -350,14 +354,15 @@ ipcMain.handle(
         row.artwork,
         row.series,
         row.where,
-        row.received ?? ""
+        row.salePrice ?? "",
+        row.taxCharged === false ? "No" : "Sí"
       ]);
       added.getCell(2).numFmt = "#,##0.00";
       added.getCell(2).font = { color: { argb: "FF2F7A4A" } };
-      if (row.received != null) added.getCell(7).numFmt = "#,##0.00";
+      if (row.salePrice != null) added.getCell(7).numFmt = "#,##0.00";
     });
     income.columns.forEach((column, index) => {
-      column.width = [14, 14, 22, 28, 18, 24, 16][index] ?? 14;
+      column.width = [14, 14, 22, 28, 18, 24, 16, 12][index] ?? 14;
     });
 
     await workbook.xlsx.writeFile(result.filePath);
@@ -449,6 +454,10 @@ ipcMain.handle(
   async (_event, options: ImageExportOptions) => exportImage(mainWindow, options)
 );
 
+ipcMain.handle("image:probe", async (_event, sourcePath: string) =>
+  probeImage(sourcePath)
+);
+
 // Pick an image file without importing it yet (used while the artwork has no
 // id). Returns the path plus a data URL for an instant preview.
 ipcMain.handle("image:pickPath", async () => {
@@ -481,6 +490,44 @@ ipcMain.handle(
     category: string
   ) => store().importImage(sourcePath, targetType, targetId, category)
 );
+
+ipcMain.handle(
+  "image:importDataUrl",
+  async (
+    _event,
+    dataUrl: string,
+    targetType:
+      | "artwork"
+      | "edition"
+      | "exhibition"
+      | "expense"
+      | "series"
+      | "application",
+    targetId: string,
+    category: string,
+    originalName?: string
+  ) =>
+    store().importImageFromDataUrl(
+      dataUrl,
+      targetType,
+      targetId,
+      category,
+      originalName
+    )
+);
+
+/** Write an edited image data-URL to a temp file (fallback for import). */
+ipcMain.handle("image:dataUrlToTemp", async (_event, dataUrl: string) => {
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i.exec(
+    String(dataUrl || "").trim()
+  );
+  if (!match) throw new Error("La imagen editada no es válida.");
+  const mime = match[1].toLowerCase();
+  const ext = mime.includes("png") ? ".png" : mime.includes("webp") ? ".webp" : ".jpg";
+  const tempPath = path.join(tmpdir(), `mum-edit-${randomUUID()}${ext}`);
+  await writeFile(tempPath, Buffer.from(match[2], "base64"));
+  return tempPath;
+});
 
 // Import any document type (images, PDF, Word, etc.) as an attachment.
 ipcMain.handle(

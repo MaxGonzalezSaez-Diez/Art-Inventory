@@ -73,7 +73,9 @@ export const SHEETS: Record<SheetName, string[]> = {
     "endDate",
     "indefinite",
     "price",
+    "received",
     "listedPrice",
+    "taxCharged",
     "currency",
     "notes",
     "createdAt"
@@ -158,6 +160,7 @@ export const DEFAULT_LOOKUPS: LookupOption[] = [
   { category: "movementType", value: "loan", label: "Préstamo" },
   { category: "movementType", value: "exhibition", label: "Exposición" },
   { category: "movementType", value: "payment", label: "Pago a galerista" },
+  { category: "movementType", value: "lost", label: "Perdida" },
   { category: "exhibitionType", value: "single", label: "Individual" },
   { category: "exhibitionType", value: "group", label: "Colectiva" },
   { category: "country", value: "spain", label: "España" },

@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, writeFile } from "fs/promises";
+import { access, mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 import type {
@@ -7,10 +7,12 @@ import type {
   ArtworkImage,
   ArtworkInput,
   Application,
+  ApplicationCoverStyles,
   ApplicationInput,
   ApplicationTextSection,
   Contact,
   ContactInput,
+  CoverLineStyle,
   Edition,
   Exhibition,
   ExhibitionInput,
@@ -23,7 +25,8 @@ import type {
   Movement,
   SeriesInfo,
   SeriesInfoInput,
-  TextGeneratorExample
+  TextGeneratorExample,
+  EditionMode
 } from "../types/inventory";
 import {
   createEmptyWorkbook,
@@ -134,6 +137,8 @@ export class InventoryStore {
         buildMovement(draft, id, index, now, data, editionMode, editionLabelFor)
       );
 
+    assertMovementRules(movements, editionMode);
+
     const gallery = data.contacts.find(
       (contact) => contact.id === input.galleryContactId
     );
@@ -230,20 +235,29 @@ export class InventoryStore {
     data.exhibitions = upsertById(data.exhibitions, exhibition);
 
     const previousForExhibition = data.movements.filter(
-      (movement) => movement.type === "exhibition" && movement.exhibitionId === id
+      (movement) =>
+        isExhibitionMovementType(movement.type) && movement.exhibitionId === id
     );
     const otherMovements = data.movements.filter(
-      (movement) => !(movement.type === "exhibition" && movement.exhibitionId === id)
+      (movement) =>
+        !(
+          isExhibitionMovementType(movement.type) && movement.exhibitionId === id
+        )
     );
     const linkedMovements: Movement[] = artworkIds.map((artworkId) => {
       const prior = previousForExhibition.find(
         (movement) => movement.artworkId === artworkId
       );
-      const listedPrice =
-        listedPrices[artworkId] ?? prior?.listedPrice ?? "";
+      const listedPrice = Object.prototype.hasOwnProperty.call(
+        listedPrices,
+        artworkId
+      )
+        ? listedPrices[artworkId] ?? ""
+        : prior?.listedPrice ?? "";
       if (prior) {
         return {
           ...prior,
+          type: prior.type || "exhibition",
           exhibitionTitle: title,
           date: exhibition.startDate || prior.date || "",
           listedPrice
@@ -306,14 +320,17 @@ export class InventoryStore {
         .filter(
           (movement) =>
             movement.exhibitionId === exhibitionId &&
-            movement.type === "exhibition"
+            isExhibitionMovementType(movement.type)
         )
         .map((movement) => movement.artworkId)
     );
     data.exhibitions = data.exhibitions.filter((item) => item.id !== exhibitionId);
     data.movements = data.movements.filter(
       (movement) =>
-        !(movement.exhibitionId === exhibitionId && movement.type === "exhibition")
+        !(
+          movement.exhibitionId === exhibitionId &&
+          isExhibitionMovementType(movement.type)
+        )
     );
     data.artworks = data.artworks.map((artwork) => {
       if (!affected.has(artwork.id) || artwork.editionMode !== "unique") return artwork;
@@ -475,6 +492,9 @@ export class InventoryStore {
       ).trim(),
       coverDate: String(input.coverDate ?? existing?.coverDate ?? "").trim(),
       coverNote: String(input.coverNote ?? existing?.coverNote ?? "").trim(),
+      coverStyles: normalizeCoverStyles(
+        input.coverStyles ?? existing?.coverStyles
+      ),
       coverImageId: "",
       sections: normalizeApplicationSections(input, existing),
       textAboutWorks: "",
@@ -500,6 +520,12 @@ export class InventoryStore {
         input.tocWorksMode === "list"
           ? input.tocWorksMode
           : existing?.tocWorksMode || "list",
+      headerArtistName: String(
+        input.headerArtistName ?? existing?.headerArtistName ?? ""
+      ).trim(),
+      headerCompetition: String(
+        input.headerCompetition ?? existing?.headerCompetition ?? ""
+      ).trim(),
       artworkIds: uniquePreserveOrder(input.artworkIds),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
@@ -600,9 +626,58 @@ export class InventoryStore {
     targetId: string,
     category = "main"
   ): Promise<ImportedImage> {
+    const extension = path.extname(sourcePath) || ".jpg";
+    const buffer = await readFile(sourcePath);
+    return this.importImageBuffer(
+      buffer,
+      extension,
+      targetType,
+      targetId,
+      category,
+      path.basename(sourcePath)
+    );
+  }
+
+  async importImageFromDataUrl(
+    dataUrl: string,
+    targetType: "artwork" | "edition" | "exhibition" | "expense" | "series" | "application",
+    targetId: string,
+    category = "main",
+    originalName = "foto.jpg"
+  ): Promise<ImportedImage> {
+    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i.exec(dataUrl.trim());
+    if (!match) {
+      throw new Error("La imagen editada no es válida.");
+    }
+    const mime = match[1].toLowerCase();
+    const extension = mime.includes("png")
+      ? ".png"
+      : mime.includes("webp")
+        ? ".webp"
+        : ".jpg";
+    const buffer = Buffer.from(match[2], "base64");
+    const base =
+      originalName.replace(/\.[^.]+$/, "").trim() || "foto";
+    return this.importImageBuffer(
+      buffer,
+      extension,
+      targetType,
+      targetId,
+      category,
+      `${base}${extension}`
+    );
+  }
+
+  private async importImageBuffer(
+    buffer: Buffer,
+    extension: string,
+    targetType: "artwork" | "edition" | "exhibition" | "expense" | "series" | "application",
+    targetId: string,
+    category: string,
+    originalName: string
+  ): Promise<ImportedImage> {
     const data = await this.load();
     const now = new Date().toISOString();
-    const extension = path.extname(sourcePath) || ".jpg";
     const folder =
       targetType === "edition"
         ? "images/editions"
@@ -620,7 +695,7 @@ export class InventoryStore {
     const destination = path.join(this.libraryPath, relativePath);
 
     await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(sourcePath, destination);
+    await writeFile(destination, buffer);
 
     const image: ArtworkImage = {
       id: `IMG-${randomUUID().slice(0, 8)}`,
@@ -628,7 +703,7 @@ export class InventoryStore {
       targetId,
       category,
       relativePath,
-      originalName: path.basename(sourcePath),
+      originalName,
       createdAt: now
     };
 
@@ -726,6 +801,14 @@ export class InventoryStore {
     date = ""
   ): Promise<InventoryData> {
     const data = await this.load();
+    const artwork = data.artworks.find((item) => item.id === artworkId);
+    if (!artwork) throw new Error("Obra no encontrada.");
+    const existingForArt = data.movements.filter((m) => m.artworkId === artworkId);
+    if (artwork.editionMode === "unique" && countSales(existingForArt) > 0) {
+      throw new Error(
+        "Esta obra ya está vendida. No se puede registrar otra venta."
+      );
+    }
     const now = new Date().toISOString();
     const exhibition = data.exhibitions.find((item) => item.id === exhibitionId);
     const contact = data.contacts.find((item) => item.id === contactId);
@@ -749,12 +832,22 @@ export class InventoryStore {
         createdAt: now
       }
     ];
-    const artwork = data.artworks.find((item) => item.id === artworkId);
-    if (artwork && artwork.editionMode === "unique") {
+    if (artwork.editionMode === "unique") {
       const movements = data.movements.filter((m) => m.artworkId === artworkId);
+      const latestSale = movements
+        .filter((movement) => mapMovementToStatus(movement) === "sold")
+        .sort(sortByDateDesc)[0];
       data.artworks = data.artworks.map((item) =>
         item.id === artworkId
-          ? { ...item, status: computeStatus(movements, item.status), updatedAt: now }
+          ? {
+              ...item,
+              status: computeStatus(movements, item.status),
+              soldPrice: latestSale?.price ?? item.soldPrice ?? "",
+              soldDate: latestSale?.date ?? item.soldDate ?? "",
+              soldToContactId: latestSale?.contactId ?? item.soldToContactId ?? "",
+              soldToName: latestSale?.contactName ?? item.soldToName ?? "",
+              updatedAt: now
+            }
           : item
       );
     }
@@ -823,6 +916,10 @@ function buildMovement(
     price: draft.price ?? "",
     received: draft.received ?? "",
     listedPrice: draft.listedPrice ?? "",
+    taxCharged:
+      slug === "sale" || slug === "venta"
+        ? draft.taxCharged !== false
+        : undefined,
     currency: draft.currency ?? "EUR",
     notes: draft.notes ?? "",
     createdAt: now
@@ -840,6 +937,10 @@ function mapMovementToStatus(movement: Movement): string {
     case "gift":
     case "regalo":
       return "gifted";
+    case "lost":
+    case "perdido":
+    case "perdida":
+      return "lost";
     case "loan":
     case "prestamo":
       return movement.returned ? "in_studio" : "loaned";
@@ -852,6 +953,87 @@ function mapMovementToStatus(movement: Movement): string {
           : "in_exhibition";
     default:
       return "";
+  }
+}
+
+function isTerminalMovementType(type: string): boolean {
+  const slug = slugify(type);
+  return (
+    slug === "sale" ||
+    slug === "venta" ||
+    slug === "payment" ||
+    slug === "pago" ||
+    slug === "lost" ||
+    slug === "perdido" ||
+    slug === "perdida"
+  );
+}
+
+function assertMovementRules(
+  movements: Movement[],
+  editionMode: EditionMode
+): void {
+  for (const movement of movements) {
+    if (!movement.date?.trim()) {
+      throw new Error("Cada movimiento necesita una fecha.");
+    }
+  }
+  assertNoDuplicateSales(movements, editionMode);
+
+  if (editionMode !== "unique") return;
+
+  const terminals = movements
+    .filter((movement) => isTerminalMovementType(movement.type))
+    .sort(sortByDateDesc);
+  if (terminals.length > 1) {
+    throw new Error(
+      "Solo puede haber una salida definitiva (venta, pago a galerista o pérdida)."
+    );
+  }
+  const terminal = terminals[0];
+  if (!terminal) return;
+  const terminalMs = dateValue(terminal);
+  for (const movement of movements) {
+    if (movement.id === terminal.id) continue;
+    if (dateValue(movement) > terminalMs) {
+      throw new Error(
+        "No puede haber movimientos después de una venta, pago a galerista o pérdida."
+      );
+    }
+  }
+}
+
+function isSaleMovement(type: string): boolean {
+  const slug = slugify(type);
+  return slug === "sale" || slug === "venta";
+}
+
+function countSales(movements: Movement[]): number {
+  return movements.filter((movement) => isSaleMovement(movement.type)).length;
+}
+
+function assertNoDuplicateSales(
+  movements: Movement[],
+  editionMode: EditionMode
+): void {
+  const sales = movements.filter((movement) => isSaleMovement(movement.type));
+  if (editionMode === "unique") {
+    if (sales.length > 1) {
+      throw new Error(
+        "Una obra única solo puede tener una venta. Quita la venta anterior antes de registrar otra."
+      );
+    }
+    return;
+  }
+  const seen = new Set<string>();
+  for (const sale of sales) {
+    const key = sale.editionId?.trim() || "__whole__";
+    if (seen.has(key)) {
+      throw new Error(
+        "Esta copia (o la obra entera) ya tiene una venta registrada."
+      );
+    }
+    seen.add(key);
   }
 }
 
@@ -1211,6 +1393,42 @@ function uniquePreserveOrder(ids: string[] | undefined): string[] {
   return out;
 }
 
+function normalizeCoverLineStyle(raw: unknown): CoverLineStyle | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const item = raw as CoverLineStyle;
+  const font = String(item.font ?? "").trim().slice(0, 80);
+  const sizeRaw = Number(item.sizePt);
+  const sizePt =
+    Number.isFinite(sizeRaw) && sizeRaw >= 6 && sizeRaw <= 96
+      ? Math.round(sizeRaw * 10) / 10
+      : undefined;
+  const out: CoverLineStyle = {};
+  if (font) out.font = font;
+  if (sizePt != null) out.sizePt = sizePt;
+  if (item.bold === true) out.bold = true;
+  if (item.bold === false) out.bold = false;
+  if (item.italic === true) out.italic = true;
+  if (item.italic === false) out.italic = false;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizeCoverStyles(raw: unknown): ApplicationCoverStyles | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const item = raw as ApplicationCoverStyles;
+  const out: ApplicationCoverStyles = {};
+  const above = normalizeCoverLineStyle(item.above);
+  const title = normalizeCoverLineStyle(item.title);
+  const below = normalizeCoverLineStyle(item.below);
+  const belowRight = normalizeCoverLineStyle(item.belowRight);
+  const second = normalizeCoverLineStyle(item.second);
+  if (above) out.above = above;
+  if (title) out.title = title;
+  if (below) out.below = below;
+  if (belowRight) out.belowRight = belowRight;
+  if (second) out.second = second;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function normalizeApplicationSections(
   input: ApplicationInput,
   existing?: Application
@@ -1292,6 +1510,7 @@ function hydrateApplication(
     coverSubtitle: item.coverSubtitle || "",
     coverDate: item.coverDate || "",
     coverNote: item.coverNote || "",
+    coverStyles: normalizeCoverStyles(item.coverStyles),
     coverImageId: "",
     sections,
     textAboutWorks: "",
@@ -1304,6 +1523,8 @@ function hydrateApplication(
       item.tocWorksMode === "bySeries" || item.tocWorksMode === "worksOnly"
         ? item.tocWorksMode
         : "list",
+    headerArtistName: String(item.headerArtistName ?? "").trim(),
+    headerCompetition: String(item.headerCompetition ?? "").trim(),
     artworkIds: uniquePreserveOrder(item.artworkIds),
     createdAt: item.createdAt || new Date().toISOString(),
     updatedAt: item.updatedAt || new Date().toISOString()
@@ -1342,11 +1563,18 @@ function hydrateSeriesInfo(
 }
 
 function hydrateMovement(movement: Movement): Movement {
+  const slug = slugify(movement.type);
+  const isSale = slug === "sale" || slug === "venta";
   return {
     ...movement,
     returned: asBool((movement as { returned?: unknown }).returned),
     keptAtGallery: asBool((movement as { keptAtGallery?: unknown }).keptAtGallery),
-    indefinite: asBool((movement as { indefinite?: unknown }).indefinite)
+    indefinite: asBool((movement as { indefinite?: unknown }).indefinite),
+    taxCharged: isSale
+      ? (movement as { taxCharged?: unknown }).taxCharged === false
+        ? false
+        : true
+      : undefined
   };
 }
 
@@ -1451,6 +1679,11 @@ function slugify(value?: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+}
+
+function isExhibitionMovementType(type: string): boolean {
+  const slug = slugify(type);
+  return slug === "exhibition" || slug === "exposicion";
 }
 
 function isThreeDimensional(type: string): boolean {

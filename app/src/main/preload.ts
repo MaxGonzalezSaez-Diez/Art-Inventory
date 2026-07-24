@@ -3,7 +3,11 @@ import type {
   PriceListFormat,
   PriceListPayload
 } from "./pricelist";
-import type { ImageExportOptions, ImageExportResult } from "./imageExport";
+import type {
+  ImageExportOptions,
+  ImageExportResult,
+  ImageProbe
+} from "./imageExport";
 import type {
   AppSettings,
   ApplicationInput,
@@ -109,7 +113,8 @@ const api = {
       artwork: string;
       series: string;
       where: string;
-      received: number | null;
+      salePrice: number | null;
+      taxCharged?: boolean;
     }>;
     totals: { spent: number; earned: number; net: number };
   }): Promise<string | null> =>
@@ -153,6 +158,29 @@ const api = {
     category: string
   ): Promise<{ image: unknown; inventory: InventoryData } | null> =>
     ipcRenderer.invoke("image:importPath", sourcePath, targetType, targetId, category),
+  importImageFromDataUrl: (
+    dataUrl: string,
+    targetType:
+      | "artwork"
+      | "edition"
+      | "exhibition"
+      | "expense"
+      | "series"
+      | "application",
+    targetId: string,
+    category: string,
+    originalName?: string
+  ): Promise<{ image: unknown; inventory: InventoryData } | null> =>
+    ipcRenderer.invoke(
+      "image:importDataUrl",
+      dataUrl,
+      targetType,
+      targetId,
+      category,
+      originalName
+    ),
+  dataUrlToTempPath: (dataUrl: string): Promise<string> =>
+    ipcRenderer.invoke("image:dataUrlToTemp", dataUrl),
   deleteImage: (imageId: string): Promise<InventoryData> =>
     ipcRenderer.invoke("image:delete", imageId),
   markMovementReturned: (movementId: string): Promise<InventoryData> =>
@@ -163,6 +191,8 @@ const api = {
     ipcRenderer.invoke("image:saveCopy", filePath, suggestedName),
   exportImage: (options: ImageExportOptions): Promise<ImageExportResult | null> =>
     ipcRenderer.invoke("image:export", options),
+  probeImage: (filePath: string): Promise<ImageProbe | null> =>
+    ipcRenderer.invoke("image:probe", filePath),
   pickImageDataUrl: (): Promise<string | null> =>
     ipcRenderer.invoke("image:pickDataUrl")
 };
