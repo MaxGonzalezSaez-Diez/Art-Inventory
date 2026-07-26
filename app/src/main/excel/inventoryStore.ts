@@ -28,6 +28,7 @@ import type {
   TextGeneratorExample,
   EditionMode
 } from "../types/inventory";
+import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT } from "../types/inventory";
 import {
   createEmptyWorkbook,
   ensureLibrary,
@@ -387,7 +388,10 @@ export class InventoryStore {
 
   async saveSettings(settings: AppSettings): Promise<InventoryData> {
     const data = await this.load();
-    data.settings = normalizeSettings(settings);
+    data.settings = normalizeSettings({
+      ...data.settings,
+      ...settings
+    });
     await this.persist(data);
     return this.load();
   }
@@ -494,6 +498,12 @@ export class InventoryStore {
       coverNote: String(input.coverNote ?? existing?.coverNote ?? "").trim(),
       coverStyles: normalizeCoverStyles(
         input.coverStyles ?? existing?.coverStyles
+      ),
+      sectionHeadingStyle: normalizeCoverLineStyle(
+        input.sectionHeadingStyle ?? existing?.sectionHeadingStyle
+      ),
+      sectionBodyStyle: normalizeCoverLineStyle(
+        input.sectionBodyStyle ?? existing?.sectionBodyStyle
       ),
       coverImageId: "",
       sections: normalizeApplicationSections(input, existing),
@@ -1287,7 +1297,8 @@ function defaultSettings(): AppSettings {
       { id: "tax-es", country: "España", rate: 21, from: "" },
       { id: "tax-de", country: "Alemania", rate: 19, from: "" },
       { id: "tax-none", country: "Sin impuesto", rate: 0, from: "" }
-    ]
+    ],
+    textGeneratorSystemPrompt: DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
   };
 }
 
@@ -1309,6 +1320,10 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
           : []
       }))
     : [];
+  const prompt =
+    typeof raw.textGeneratorSystemPrompt === "string"
+      ? raw.textGeneratorSystemPrompt.trim()
+      : "";
   return {
     // Seed starter sizes only when the user has never configured any.
     sizeTypes: sizeTypes.length > 0 ? sizeTypes : base.sizeTypes,
@@ -1320,7 +1335,9 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
             rate: Number(tax.rate) || 0,
             from: String(tax.from ?? "").trim()
           }))
-        : base.taxRates
+        : base.taxRates,
+    textGeneratorSystemPrompt:
+      prompt || base.textGeneratorSystemPrompt || DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
   };
 }
 
@@ -1511,6 +1528,8 @@ function hydrateApplication(
     coverDate: item.coverDate || "",
     coverNote: item.coverNote || "",
     coverStyles: normalizeCoverStyles(item.coverStyles),
+    sectionHeadingStyle: normalizeCoverLineStyle(item.sectionHeadingStyle),
+    sectionBodyStyle: normalizeCoverLineStyle(item.sectionBodyStyle),
     coverImageId: "",
     sections,
     textAboutWorks: "",

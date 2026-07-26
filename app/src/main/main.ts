@@ -4,6 +4,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  nativeImage,
   shell,
   type OpenDialogOptions
 } from "electron";
@@ -16,9 +17,12 @@ import { InventoryStore } from "./excel/inventoryStore";
 import { ensureLibrary } from "./excel/workbook";
 import {
   generatePriceList,
-  type PriceListFormat,
   type PriceListPayload
 } from "./pricelist";
+import {
+  generateCertificateOfAuthenticity,
+  type CertificatePayload
+} from "./certificateOfAuthenticity";
 import {
   generateApplicationDocument,
   type ApplicationDocFormat,
@@ -48,12 +52,6 @@ function store(): InventoryStore {
   if (!libraryPath) libraryPath = defaultLibraryPath();
   return new InventoryStore(libraryPath);
 }
-
-// Must run before app ready so Chromium picks up speech features.
-app.commandLine.appendSwitch(
-  "enable-features",
-  "WebSpeechRecognition,WebSpeechSynthesis"
-);
 
 async function createWindow(): Promise<void> {
   libraryPath = defaultLibraryPath();
@@ -144,8 +142,13 @@ ipcMain.handle(
 );
 ipcMain.handle(
   "pricelist:generate",
-  async (_event, format: PriceListFormat, payload: PriceListPayload) =>
-    generatePriceList(mainWindow, format, payload)
+  async (_event, payload: PriceListPayload) =>
+    generatePriceList(mainWindow, payload)
+);
+ipcMain.handle(
+  "certificate:generate",
+  async (_event, payload: CertificatePayload) =>
+    generateCertificateOfAuthenticity(mainWindow, payload)
 );
 ipcMain.handle("exhibition:delete", async (_event, exhibitionId: string) =>
   store().deleteExhibition(exhibitionId)
@@ -162,6 +165,34 @@ ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
   clipboard.writeText(String(text ?? ""));
   return true;
 });
+
+ipcMain.handle(
+  "clipboard:writePrompt",
+  async (
+    _event,
+    payload: { text?: string; html?: string; imageDataUrl?: string }
+  ) => {
+    const text = String(payload?.text ?? "");
+    const html = payload?.html != null ? String(payload.html) : "";
+    const dataUrl = String(payload?.imageDataUrl ?? "");
+    const data: {
+      text: string;
+      html?: string;
+      image?: Electron.NativeImage;
+    } = { text };
+    if (html.trim()) data.html = html;
+    if (dataUrl.startsWith("data:image")) {
+      try {
+        const image = nativeImage.createFromDataURL(dataUrl);
+        if (!image.isEmpty()) data.image = image;
+      } catch {
+        /* ignore bad image */
+      }
+    }
+    clipboard.write(data);
+    return true;
+  }
+);
 ipcMain.handle("expense:save", async (_event, input: ExpenseInput) =>
   store().saveExpense(input)
 );

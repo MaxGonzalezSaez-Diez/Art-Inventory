@@ -410,9 +410,18 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
           children: [
             new TextRun({
               text: section.heading.trim(),
-              bold: true,
-              size: 32,
-              font: payload.style?.fontTitle || "Georgia"
+              bold: payload.style?.sectionHeading?.bold ?? true,
+              italics: Boolean(payload.style?.sectionHeading?.italic),
+              size: Math.round(
+                (payload.style?.sectionHeading?.sizePt != null &&
+                Number.isFinite(payload.style.sectionHeading.sizePt)
+                  ? payload.style.sectionHeading.sizePt
+                  : 18) * 2
+              ),
+              font:
+                payload.style?.sectionHeading?.font?.trim() ||
+                payload.style?.fontTitle ||
+                "Georgia"
             })
           ]
         })
@@ -430,8 +439,18 @@ async function buildDocx(payload: ApplicationPdfPayload): Promise<Buffer> {
             children: [
               new TextRun({
                 text: block,
-                size: 24,
-                font: payload.style?.fontBody || "Georgia"
+                bold: payload.style?.sectionBody?.bold === true,
+                italics: Boolean(payload.style?.sectionBody?.italic),
+                size: Math.round(
+                  (payload.style?.sectionBody?.sizePt != null &&
+                  Number.isFinite(payload.style.sectionBody.sizePt)
+                    ? payload.style.sectionBody.sizePt
+                    : 12) * 2
+                ),
+                font:
+                  payload.style?.sectionBody?.font?.trim() ||
+                  payload.style?.fontBody ||
+                  "Georgia"
               })
             ]
           })
@@ -610,30 +629,9 @@ export async function generateApplicationDocument(
                 })
           )
         );
-        // Match print page geometry in the offscreen window so frame squares
-        // can be measured, then lock each frame-box to an explicit square.
-        const style = document.createElement("style");
-        style.textContent = \`
-          @media screen {
-            body { background:#fff !important; padding:0 !important; display:block !important; width:794px !important; }
-            .page {
-              transform:none !important; margin:0 !important; box-shadow:none !important;
-              width:794px !important; height:1023px !important; max-height:1023px !important;
-              min-height:1023px !important; padding:0 0 42px !important; overflow:hidden !important;
-            }
-            .page-main, .work-main {
-              display:flex !important; flex-direction:column !important;
-              height:100% !important; min-height:0 !important;
-            }
-            .frame-box::before { display:none !important; padding-top:0 !important; }
-          }
-        \`;
-        document.head.appendChild(style);
-        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-        if (typeof window.__preparePrintLayout === "function") {
-          window.__preparePrintLayout();
-        }
-        await new Promise((r) => setTimeout(r, 50));
+        // Only drop the preview zoom transform. The print stylesheet owns all
+        // geometry; nothing here may resize frames, because this window is
+        // wider than the printed page box.
         if (typeof window.__preparePrintLayout === "function") {
           window.__preparePrintLayout();
         }

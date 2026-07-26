@@ -191,6 +191,16 @@ export interface Application {
   coverNote?: string;
   /** Per-line font / size for the PDF cover. */
   coverStyles?: ApplicationCoverStyles;
+  /**
+   * Shared format for all text-section encabezados (PDF/Word).
+   * Applies to every section heading at once.
+   */
+  sectionHeadingStyle?: CoverLineStyle;
+  /**
+   * Shared base format for all text-section bodies (PDF/Word).
+   * Inline bold/italic in the editor still work letter by letter.
+   */
+  sectionBodyStyle?: CoverLineStyle;
   /** @deprecated cover images removed */
   coverImageId?: string;
   /** Flexible text pages (heading + rich HTML body). */
@@ -299,7 +309,14 @@ export interface TaxRate {
 export interface AppSettings {
   sizeTypes: SizeType[];
   taxRates: TaxRate[];
+  /**
+   * Fixed system instructions prepended to Generador de texto copies.
+   * Editable in a quiet panel on that page.
+   */
+  textGeneratorSystemPrompt?: string;
 }
+
+export const DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT = `Eres el apoyo de una artista: secretaria, galerista e historiadora del arte. Redactas textos (notas de sala, dossiers, solicitudes, presentaciones de obra) con voz elocuente, precisa y humana — nunca grandilocuente ni de folleto publicitario. No inventes datos (títulos, medidas, fechas, biografía, materiales). Si falta información, márcala entre corchetes. Conserva la voz de la artista cuando haya notas o ejemplos; úsalos como referencia de tono, no como plantilla rígida.`;
 
 export interface InventoryData {
   libraryPath: string;

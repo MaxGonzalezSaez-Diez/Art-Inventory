@@ -46,6 +46,7 @@ import type {
   CoverLineStyle,
   TextGeneratorExample
 } from "../main/types/inventory";
+import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT } from "../main/types/inventory";
 import { buildApplicationHtml } from "../main/applicationDocumentHtml";
 
 /** Import an edited JPEG/PNG data-URL as an artwork main photo. */
@@ -364,6 +365,8 @@ export function App() {
             setInventory={setInventory}
             onEdit={() => startEdit(selectedArtwork)}
             onBack={goBack}
+            onToast={setToast}
+            onError={setMessage}
             onDeleted={(data) => {
               setInventory(data);
               goBack();
@@ -1651,28 +1654,47 @@ function MovementModal({
   const dateMissing = !(m.date ?? "").trim();
   const settings: AppSettings = {
     sizeTypes: inventory.settings.sizeTypes ?? [],
-    taxRates: inventory.settings.taxRates ?? []
+    taxRates: inventory.settings.taxRates ?? [],
+    textGeneratorSystemPrompt: inventory.settings.textGeneratorSystemPrompt
   };
 
-  function paymentHalfPrice(date?: string): string {
+  function paymentHalfAt(date?: string) {
     const ms = dateToMs(date);
     const at = Number.isFinite(ms) ? (ms as number) : Date.now();
-    const half = galleryPaymentHalfValue(artworkDraft as Artwork, settings, at);
-    return half == null ? "" : String(half);
+    return galleryPaymentHalfInfo(artworkDraft, settings, at);
   }
 
   function applyType(value: string) {
     const nextKind = movementKind(value);
     if (nextKind === "payment") {
+      const { half } = paymentHalfAt(m.date);
       set({
         type: value,
         recipientType: "gallery",
-        price: paymentHalfPrice(m.date) || m.price
+        price: half != null ? String(half) : ""
       });
       return;
     }
     set({ type: value });
   }
+
+  const paymentInfo = kind === "payment" ? paymentHalfAt(m.date) : null;
+
+  useEffect(() => {
+    if (kind !== "payment") return;
+    if (paymentInfo?.half == null) return;
+    const current = parseMoney(m.price);
+    // Fill when empty; keep a manual value if the user already typed one
+    // that differs from the auto amount.
+    if (current == null) {
+      setM((currentMove) =>
+        currentMove.price
+          ? currentMove
+          : { ...currentMove, price: String(paymentInfo.half) }
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, m.date, artworkDraft.height, artworkDraft.width, artworkDraft.unit]);
 
   const hideTerminal = blockTerminalTypes
     ? ["sale", "venta", "payment", "pago", "lost", "perdido", "perdida"]
@@ -1727,9 +1749,10 @@ function MovementModal({
                   value={m.date ?? ""}
                   onChange={(value) => {
                     if (kind === "payment") {
+                      const { half } = paymentHalfAt(value);
                       set({
                         date: value,
-                        price: paymentHalfPrice(value) || m.price
+                        price: half != null ? String(half) : ""
                       });
                     } else {
                       set({ date: value });
@@ -1822,15 +1845,37 @@ function MovementModal({
               />
               <label className="field">
                 Valor / coste (50% del precio de la obra)
-                <input
-                  inputMode="decimal"
-                  placeholder="ej. 2.000 €"
-                  value={m.price ?? ""}
-                  onChange={(event) => set({ price: event.target.value })}
-                />
-                <span className="muted small-note">
-                  Se rellena solo con la mitad del valor según factores y fecha.
-                </span>
+                <div className="payment-value-row">
+                  <input
+                    inputMode="decimal"
+                    placeholder="ej. 2000"
+                    value={m.price ?? ""}
+                    onChange={(event) => set({ price: event.target.value })}
+                  />
+                  {paymentInfo?.problem ? (
+                    <span
+                      className="payment-value-warn"
+                      title={paymentInfo.problem}
+                      aria-label={paymentInfo.problem}
+                    >
+                      !
+                    </span>
+                  ) : null}
+                </div>
+                {paymentInfo?.problem ? (
+                  <span className="payment-value-hint error-inline">
+                    {paymentInfo.problem}
+                  </span>
+                ) : paymentInfo?.half != null ? (
+                  <span className="muted small-note">
+                    Calculado solo: mitad de {formatMoney(paymentInfo.half * 2)}{" "}
+                    (factores × alto+ancho). Puedes corregirlo a mano.
+                  </span>
+                ) : (
+                  <span className="muted small-note">
+                    Se rellena solo con la mitad del valor según factores y fecha.
+                  </span>
+                )}
               </label>
             </div>
           ) : kind === "lost" ? (
@@ -2040,10 +2085,10 @@ function MovementModal({
               }
               let toSave = m;
               if (kind === "payment") {
-                const half = paymentHalfPrice(m.date);
+                const { half } = paymentHalfAt(m.date);
                 const stored = parseMoney(m.price);
-                if (half && (stored == null || stored <= 0)) {
-                  toSave = { ...m, price: half };
+                if (half != null && (stored == null || stored <= 0)) {
+                  toSave = { ...m, price: String(half) };
                 }
               }
               const error = onSave(toSave);
@@ -2711,7 +2756,9 @@ function ArtworkDetail({
   onEdit,
   onBack,
   onDeleted,
-  onOpenExhibition
+  onOpenExhibition,
+  onToast,
+  onError
 }: {
   artwork: Artwork;
   inventory: InventoryData;
@@ -2720,11 +2767,17 @@ function ArtworkDetail({
   onBack: () => void;
   onDeleted: (data: InventoryData) => void;
   onOpenExhibition: (exhibitionId: string) => void;
+  onToast: (message: string) => void;
+  onError: (message: string) => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("info");
   const [openMovement, setOpenMovement] = useState<Movement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [certBusy, setCertBusy] = useState(false);
+  const [certLangOpen, setCertLangOpen] = useState(false);
+  const [certLang, setCertLang] = useState<"es" | "en" | "de">("es");
+  const [certCopyId, setCertCopyId] = useState<string>("");
   const [imageEditorSrc, setImageEditorSrc] = useState<string | null>(null);
   const [imageBusy, setImageBusy] = useState(false);
   const image = mainImageFor(artwork, inventory);
@@ -2760,6 +2813,61 @@ function ArtworkDetail({
     onDeleted(data);
   }
 
+  async function generateCertificate() {
+    const isMultiple = artwork.editionMode === "multiple";
+    const counted =
+      Number(artwork.editionPersonalCopies || 0) +
+      Number(artwork.editionSaleCopies || 0);
+    const total =
+      editions.length > 0 ? editions.length : Math.max(1, counted);
+    if (isMultiple && total > 1 && !certCopyId && editions.length > 0) {
+      onError("Elige qué ejemplar es este certificado.");
+      return;
+    }
+    setCertBusy(true);
+    try {
+      let artistName = "";
+      try {
+        artistName = localStorage.getItem("solicitud-artist-name") || "";
+      } catch {
+        /* ignore */
+      }
+      const selectedEdition = editions.find((e) => e.id === certCopyId);
+      const copyIndex = selectedEdition
+        ? editions.findIndex((e) => e.id === certCopyId) + 1
+        : Number(certCopyId) || 1;
+      const path = await requireApi("generateCertificateOfAuthenticity")({
+        title: artwork.title,
+        year: String(artwork.yearMade ?? "").trim() || undefined,
+        medium: artTypeLabel(inventory, artwork.type, certLang) || undefined,
+        size: formatSize(artwork) || undefined,
+        series: artwork.series?.trim() || undefined,
+        editionMode: isMultiple ? "multiple" : "unique",
+        editionCount: total,
+        copyNumber: isMultiple ? Math.max(1, copyIndex) : undefined,
+        copyLabel: selectedEdition?.label || undefined,
+        artistName: artistName || undefined,
+        language: certLang
+      });
+      setCertLangOpen(false);
+      if (path) onToast("Certificado generado.");
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo generar el certificado."
+      );
+    } finally {
+      setCertBusy(false);
+    }
+  }
+
+  function openCertificateModal() {
+    setCertLang("es");
+    setCertCopyId(editions[0]?.id ?? (editions.length ? "" : "1"));
+    setCertLangOpen(true);
+  }
+
   return (
     <section className="detail-layout">
       <div className="detail-image-panel">
@@ -2780,6 +2888,109 @@ function ArtworkDetail({
           onSave={saveEditedImage}
         />
       ) : null}
+      {certLangOpen ? (
+        <div
+          className="modal-backdrop"
+          onClick={() => !certBusy && setCertLangOpen(false)}
+        >
+          <div
+            className="modal confirm-modal cert-lang-modal"
+            role="dialog"
+            aria-labelledby="cert-lang-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="cert-lang-title">Generar certificado</h3>
+            <p className="muted">
+              Elige el idioma. La técnica y las comillas se adaptan solas.
+            </p>
+            <div className="cert-lang-choices" role="radiogroup" aria-label="Idioma">
+              {(
+                [
+                  ["es", "Español"],
+                  ["en", "English"],
+                  ["de", "Deutsch"]
+                ] as const
+              ).map(([code, label]) => (
+                <button
+                  key={code}
+                  type="button"
+                  className={`cert-lang-choice${
+                    certLang === code ? " selected" : ""
+                  }`}
+                  disabled={certBusy}
+                  aria-pressed={certLang === code}
+                  onClick={() => setCertLang(code)}
+                >
+                  <strong>{label}</strong>
+                  <span className="muted">{code.toUpperCase()}</span>
+                </button>
+              ))}
+            </div>
+            {artwork.editionMode === "multiple" &&
+            (editions.length > 1 ||
+              Number(artwork.editionPersonalCopies || 0) +
+                Number(artwork.editionSaleCopies || 0) >
+                1) ? (
+              <label className="field cert-copy-field">
+                ¿Qué ejemplar es este certificado?
+                {editions.length > 0 ? (
+                  <select
+                    value={certCopyId}
+                    disabled={certBusy}
+                    onChange={(event) => setCertCopyId(event.target.value)}
+                  >
+                    {editions.map((edition, index) => (
+                      <option key={edition.id} value={edition.id}>
+                        {edition.label || `${index + 1}/${editions.length}`}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={certCopyId}
+                    disabled={certBusy}
+                    onChange={(event) => setCertCopyId(event.target.value)}
+                  >
+                    {Array.from(
+                      {
+                        length: Math.max(
+                          1,
+                          Number(artwork.editionPersonalCopies || 0) +
+                            Number(artwork.editionSaleCopies || 0)
+                        )
+                      },
+                      (_, index) => (
+                        <option key={index + 1} value={String(index + 1)}>
+                          {index + 1} /{" "}
+                          {Number(artwork.editionPersonalCopies || 0) +
+                            Number(artwork.editionSaleCopies || 0)}
+                        </option>
+                      )
+                    )}
+                  </select>
+                )}
+              </label>
+            ) : null}
+            <div className="cert-lang-actions">
+              <button
+                type="button"
+                className="ghost"
+                disabled={certBusy}
+                onClick={() => setCertLangOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={certBusy}
+                onClick={() => void generateCertificate()}
+              >
+                {certBusy ? "Generando…" : "Generar PDF"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="detail-panel">
         <div className="detail-header">
           <div>
@@ -2787,6 +2998,14 @@ function ArtworkDetail({
             <h2>{artwork.title}</h2>
           </div>
           <div className="form-head-actions">
+            <button
+              type="button"
+              className="ghost"
+              disabled={certBusy}
+              onClick={openCertificateModal}
+            >
+              {certBusy ? "…" : "Generar certificado"}
+            </button>
             <button onClick={onEdit}>Editar</button>
             <button className="ghost" onClick={onBack}>
               Volver
@@ -6508,15 +6727,53 @@ function basePriceAt(
   return sizeSumCm(artwork) * factor;
 }
 
-/** Half of factor × (alto+ancho) for «pago a galerista». */
+/** Half of factor × (alto+ancho) for «pago a galerista», with a clear gap reason. */
+function galleryPaymentHalfInfo(
+  artwork: Artwork | ArtworkInput,
+  settings: AppSettings,
+  dateMs: number
+): { half: number | null; problem: string | null } {
+  const h = toCm(artwork.height, artwork.unit ?? "cm");
+  const w = toCm(artwork.width, artwork.unit ?? "cm");
+  if (h == null || h <= 0 || w == null || w <= 0) {
+    return {
+      half: null,
+      problem:
+        "Faltan alto y ancho de la obra. Complétalos en la ficha para calcular el valor."
+    };
+  }
+  const sizeSum = h + w;
+  const types = settings.sizeTypes ?? [];
+  if (types.length === 0) {
+    return {
+      half: null,
+      problem:
+        "No hay factores definidos. Ve a «Factores y precios» y configura los tamaños."
+    };
+  }
+  const type = sizeTypeForSum(types, sizeSum);
+  if (!type) {
+    return {
+      half: null,
+      problem: `Ningún tamaño cubre ${Math.round(sizeSum)} cm (alto+ancho). Ajusta los rangos en «Factores y precios».`
+    };
+  }
+  const factor = factorAt(type, dateMs);
+  if (factor == null || factor <= 0) {
+    return {
+      half: null,
+      problem: `«${type.label || "Ese tamaño"}» no tiene factor. Añádelo en «Factores y precios».`
+    };
+  }
+  return { half: Math.round(sizeSum * factor * 0.5), problem: null };
+}
+
 function galleryPaymentHalfValue(
-  artwork: Artwork,
+  artwork: Artwork | ArtworkInput,
   settings: AppSettings,
   dateMs: number
 ): number | null {
-  const base = basePriceAt(artwork, settings, dateMs);
-  if (base == null) return null;
-  return Math.round(base * 0.5);
+  return galleryPaymentHalfInfo(artwork, settings, dateMs).half;
 }
 
 /** Cost used in Cuentas: stored price, or half of calculated value if missing. */
@@ -8323,6 +8580,121 @@ async function copyTextToClipboard(text: string): Promise<void> {
   if (!ok) throw new Error("No se pudo copiar al portapapeles.");
 }
 
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Build a single PNG collage so ChatGPT can see several paintings in one paste. */
+async function buildArtworkCollageDataUrl(
+  dataUrls: string[],
+  labels: string[]
+): Promise<string | undefined> {
+  const urls = dataUrls.filter(Boolean);
+  if (urls.length === 0) return undefined;
+
+  const loadImage = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("No se pudo cargar la imagen"));
+      img.src = src;
+    });
+
+  const images: HTMLImageElement[] = [];
+  for (const url of urls) {
+    try {
+      images.push(await loadImage(url));
+    } catch {
+      /* skip broken */
+    }
+  }
+  if (images.length === 0) return undefined;
+
+  const cell = 360;
+  const gap = 16;
+  const labelH = 28;
+  const cols = Math.min(3, images.length);
+  const rows = Math.ceil(images.length / cols);
+  const canvas = document.createElement("canvas");
+  canvas.width = cols * cell + (cols + 1) * gap;
+  canvas.height = rows * (cell + labelH) + (rows + 1) * gap;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return undefined;
+  ctx.fillStyle = "#f4f0e8";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.font = "14px Georgia, serif";
+  ctx.fillStyle = "#2a2620";
+  ctx.textAlign = "center";
+
+  images.forEach((img, index) => {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const x = gap + col * (cell + gap);
+    const y = gap + row * (cell + labelH + gap);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(x, y, cell, cell);
+    const scale = Math.min(cell / img.width, cell / img.height);
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const dx = x + Math.round((cell - w) / 2);
+    const dy = y + Math.round((cell - h) / 2);
+    ctx.drawImage(img, dx, dy, w, h);
+    ctx.strokeStyle = "#d8d0c2";
+    ctx.strokeRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
+    const label = (labels[index] || `Obra ${index + 1}`).slice(0, 42);
+    ctx.fillStyle = "#2a2620";
+    ctx.fillText(label, x + cell / 2, y + cell + 18, cell - 8);
+  });
+
+  return canvas.toDataURL("image/png");
+}
+
+/**
+ * Puts the prompt on the clipboard. Paintings travel as one PNG collage,
+ * because ChatGPT attaches clipboard images but ignores data: URLs inside HTML.
+ * Passing an empty text copies the collage on its own.
+ */
+async function copyPromptWithPaintings(options: {
+  text: string;
+  imageDataUrls: string[];
+  labels: string[];
+}): Promise<{ imageCount: number }> {
+  const usableImages = options.imageDataUrls.filter(Boolean);
+  const collage = await buildArtworkCollageDataUrl(
+    options.imageDataUrls,
+    options.labels
+  );
+  const api = window.inventoryApi?.writeClipboardPrompt;
+  if (typeof api !== "function") {
+    await copyTextToClipboard(options.text);
+    return { imageCount: 0 };
+  }
+
+  if (!options.text.trim()) {
+    await api({ text: "", imageDataUrl: collage });
+    return { imageCount: collage ? usableImages.length : 0 };
+  }
+
+  const imgsHtml = options.imageDataUrls
+    .map((src, index) => {
+      if (!src) return "";
+      const label = escapeHtmlText(options.labels[index] || `Obra ${index + 1}`);
+      return `<figure style="margin:12px 0"><img src="${src}" alt="${label}" style="max-width:420px;height:auto;display:block"/><figcaption>${label}</figcaption></figure>`;
+    })
+    .filter(Boolean)
+    .join("");
+  const html = `<div><pre style="white-space:pre-wrap;font-family:Georgia,serif">${escapeHtmlText(
+    options.text
+  )}</pre>${imgsHtml}</div>`;
+
+  await api({ text: options.text, html, imageDataUrl: collage });
+  return { imageCount: collage ? usableImages.length : 0 };
+}
+
 function normalizeTextExample(
   example: TextGeneratorExample
 ): TextGeneratorExample {
@@ -9468,17 +9840,21 @@ function OrderButtons({
 
 function RichMenuSelect({
   label,
+  value,
   options,
   onPick,
   className
 }: {
   label: string;
+  value?: string;
   options: Array<{ value: string; label: string }>;
   onPick: (value: string) => void;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((option) => option.value === value);
+  const display = selected?.label ?? label;
 
   useEffect(() => {
     if (!open) return;
@@ -9504,7 +9880,7 @@ function RichMenuSelect({
           setOpen((current) => !current);
         }}
       >
-        {label}
+        {display}
         <span className="rich-menu-caret" aria-hidden>
           ▾
         </span>
@@ -9515,8 +9891,11 @@ function RichMenuSelect({
             <button
               key={option.value}
               type="button"
-              className="rich-menu-item"
+              className={`rich-menu-item${
+                option.value === value ? " selected" : ""
+              }`}
               role="option"
+              aria-selected={option.value === value}
               onMouseDown={(event) => {
                 event.preventDefault();
                 onPick(option.value);
@@ -9535,17 +9914,27 @@ function RichMenuSelect({
 function RichTextField({
   value,
   onChange,
-  placeholder
+  placeholder,
+  baseFont = "Georgia",
+  baseSizePt = 12,
+  baseBold = false,
+  baseItalic = false
 }: {
   value: string;
   onChange: (html: string) => void;
   placeholder?: string;
+  baseFont?: string;
+  baseSizePt?: number;
+  baseBold?: boolean;
+  baseItalic?: boolean;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const initialRef = useRef(value || "");
   const savedRangeRef = useRef<globalThis.Range | null>(null);
+  const [pickedFont, setPickedFont] = useState<string | undefined>(undefined);
+  const [pickedSize, setPickedSize] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -9553,13 +9942,16 @@ function RichTextField({
     const doc = iframe.contentDocument;
     if (!doc) return;
 
+    const family = `"${baseFont.replace(/"/g, "")}", Georgia, serif`;
     doc.open();
     doc.write(`<!DOCTYPE html><html><head><style>
       html, body {
         background: #fff;
         color: #2a2620;
-        font-family: Georgia, "Times New Roman", serif;
-        font-size: 15px;
+        font-family: ${family};
+        font-size: ${baseSizePt}pt;
+        font-weight: ${baseBold ? 700 : 400};
+        font-style: ${baseItalic ? "italic" : "normal"};
         line-height: 1.45;
         margin: 0;
         min-height: 100%;
@@ -9582,6 +9974,9 @@ function RichTextField({
     body.innerHTML = initialRef.current || "";
 
     const emit = () => onChangeRef.current(body.innerHTML);
+    // Only remember selection from real editor interaction. Do NOT listen to
+    // selectionchange — opening the toolbar menus collapses the iframe
+    // selection and would wipe the saved range before font/size apply.
     const rememberSelection = () => {
       const selection = doc.getSelection();
       if (!selection || selection.rangeCount === 0) return;
@@ -9594,16 +9989,25 @@ function RichTextField({
     body.addEventListener("blur", emit);
     body.addEventListener("keyup", rememberSelection);
     body.addEventListener("mouseup", rememberSelection);
-    doc.addEventListener("selectionchange", rememberSelection);
 
     return () => {
       body.removeEventListener("input", emit);
       body.removeEventListener("blur", emit);
       body.removeEventListener("keyup", rememberSelection);
       body.removeEventListener("mouseup", rememberSelection);
-      doc.removeEventListener("selectionchange", rememberSelection);
     };
+    // Base look is updated in a separate effect so we don't wipe edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const body = iframeRef.current?.contentDocument?.body;
+    if (!body) return;
+    body.style.fontFamily = `"${baseFont.replace(/"/g, "")}", Georgia, serif`;
+    body.style.fontSize = `${baseSizePt}pt`;
+    body.style.fontWeight = baseBold ? "700" : "400";
+    body.style.fontStyle = baseItalic ? "italic" : "normal";
+  }, [baseFont, baseSizePt, baseBold, baseItalic]);
 
   function withDoc(fn: (doc: Document, body: HTMLElement) => void) {
     const doc = iframeRef.current?.contentDocument;
@@ -9611,15 +10015,25 @@ function RichTextField({
     if (!doc || !body) return;
     body.focus();
     const savedRange = savedRangeRef.current;
-    if (savedRange && body.contains(savedRange.commonAncestorContainer)) {
-      const selection = doc.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(savedRange);
+    if (savedRange) {
+      try {
+        if (body.contains(savedRange.commonAncestorContainer)) {
+          const selection = doc.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(savedRange);
+        }
+      } catch {
+        // Detached range after DOM edits — ignore and use current selection.
+      }
     }
     fn(doc, body);
     const selection = doc.getSelection();
     if (selection && selection.rangeCount > 0) {
-      savedRangeRef.current = selection.getRangeAt(0).cloneRange();
+      try {
+        savedRangeRef.current = selection.getRangeAt(0).cloneRange();
+      } catch {
+        /* ignore */
+      }
     }
     onChangeRef.current(body.innerHTML);
   }
@@ -9632,7 +10046,7 @@ function RichTextField({
   }
 
   function applyInlineStyle(patch: { fontFamily?: string; fontSize?: string }) {
-    withDoc((doc) => {
+    withDoc((doc, body) => {
       const sel = doc.getSelection();
       if (!sel || sel.rangeCount === 0) return;
       const range = sel.getRangeAt(0);
@@ -9642,8 +10056,15 @@ function RichTextField({
         if (patch.fontSize) el.style.fontSize = patch.fontSize;
       };
 
+      const forceOnDescendants = (root: HTMLElement) => {
+        root.querySelectorAll("span, font").forEach((child) => {
+          const el = child as HTMLElement;
+          if (patch.fontFamily) el.style.fontFamily = patch.fontFamily!;
+          if (patch.fontSize) el.style.fontSize = patch.fontSize!;
+        });
+      };
+
       if (sel.isCollapsed) {
-        // Keep typing style for the caret: prefer updating the nearest span.
         let node: Node | null = range.startContainer;
         if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
         const existing =
@@ -9652,6 +10073,23 @@ function RichTextField({
             : null;
         if (existing instanceof HTMLElement) {
           applyToElement(existing);
+          forceOnDescendants(existing);
+          return;
+        }
+        // No selection and no styled span: apply to all current text so the
+        // dropdown always has a visible effect; empty editor gets a caret span.
+        const plain = (body.textContent || "").replace(/\u200b/g, "").trim();
+        if (plain) {
+          const wrap = doc.createElement("span");
+          applyToElement(wrap);
+          while (body.firstChild) wrap.appendChild(body.firstChild);
+          forceOnDescendants(wrap);
+          body.appendChild(wrap);
+          const pick = doc.createRange();
+          pick.selectNodeContents(wrap);
+          pick.collapse(false);
+          sel.removeAllRanges();
+          sel.addRange(pick);
           return;
         }
         const span = doc.createElement("span");
@@ -9677,31 +10115,22 @@ function RichTextField({
         const legacySize = fontEl.getAttribute("size");
         if (legacySize && !replacement.style.fontSize) {
           const map: Record<string, string> = {
-            "1": "10px",
-            "2": "13px",
-            "3": "16px",
-            "4": "18px",
-            "5": "24px",
-            "6": "32px",
-            "7": "48px"
+            "1": "10pt",
+            "2": "11pt",
+            "3": "12pt",
+            "4": "14pt",
+            "5": "18pt",
+            "6": "24pt",
+            "7": "36pt"
           };
-          replacement.style.fontSize = map[legacySize] || "16px";
+          replacement.style.fontSize = map[legacySize] || "12pt";
         }
         while (fontEl.firstChild) replacement.appendChild(fontEl.firstChild);
         fontEl.replaceWith(replacement);
       });
-      if (patch.fontSize) {
-        span.querySelectorAll("span").forEach((child) => {
-          (child as HTMLElement).style.fontSize = patch.fontSize!;
-        });
-      }
-      if (patch.fontFamily) {
-        span.querySelectorAll("span").forEach((child) => {
-          if (!(child as HTMLElement).style.fontFamily) {
-            (child as HTMLElement).style.fontFamily = patch.fontFamily!;
-          }
-        });
-      }
+      // Always overwrite — otherwise an older font-family on a nested span
+      // wins and the dropdown looks like it does nothing.
+      forceOnDescendants(span);
       range.insertNode(span);
       sel.removeAllRanges();
       const pick = doc.createRange();
@@ -9711,21 +10140,23 @@ function RichTextField({
   }
 
   function applyFont(font: string) {
+    setPickedFont(font);
     applyInlineStyle({ fontFamily: `"${font.replace(/"/g, "")}"` });
   }
 
   function applySize(size: string) {
+    setPickedSize(size);
     applyInlineStyle({ fontSize: size });
   }
 
   return (
     <div className="rich-editor">
       <div className="rich-toolbar">
-        <div className="rich-tool-group" role="group" aria-label="Estilo">
+        <div className="rich-tool-group" role="group" aria-label="Estilo por letra">
           <button
             type="button"
             className="rich-tool"
-            title="Negrita"
+            title="Negrita (selección)"
             onMouseDown={(e) => {
               e.preventDefault();
               run("bold");
@@ -9736,7 +10167,7 @@ function RichTextField({
           <button
             type="button"
             className="rich-tool"
-            title="Cursiva"
+            title="Cursiva (selección)"
             onMouseDown={(e) => {
               e.preventDefault();
               run("italic");
@@ -9747,7 +10178,7 @@ function RichTextField({
           <button
             type="button"
             className="rich-tool"
-            title="Subrayado"
+            title="Subrayado (selección)"
             onMouseDown={(e) => {
               e.preventDefault();
               run("underline");
@@ -9758,6 +10189,7 @@ function RichTextField({
         </div>
         <RichMenuSelect
           label="Fuente"
+          value={pickedFont}
           className="rich-font"
           options={PRICELIST_FONTS.map((font) => ({
             value: font,
@@ -9767,13 +10199,12 @@ function RichTextField({
         />
         <RichMenuSelect
           label="Tamaño"
+          value={pickedSize}
           className="rich-size"
-          options={[
-            { value: "12px", label: "Pequeño" },
-            { value: "16px", label: "Normal" },
-            { value: "20px", label: "Grande" },
-            { value: "26px", label: "Muy grande" }
-          ]}
+          options={RICH_TEXT_SIZES.map((pt) => ({
+            value: `${pt}pt`,
+            label: String(pt)
+          }))}
           onPick={(v) => applySize(v)}
         />
         <label className="rich-color" title="Color del texto">
@@ -9961,13 +10392,11 @@ function SeriesDetailPanel({
   onOpenArtwork: (artworkId: string) => void;
 }) {
   const [texts, setTexts] = useState<SeriesText[]>(info?.texts ?? []);
-  const [notes, setNotes] = useState(info?.notes ?? "");
   const [openId, setOpenId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setTexts(info?.texts ?? []);
-    setNotes(info?.notes ?? "");
     setOpenId(null);
   }, [info?.id, name]);
 
@@ -9975,14 +10404,14 @@ function SeriesDetailPanel({
     (image) => image.targetType === "series" && image.targetId === info?.id
   );
 
-  async function save(nextTexts = texts, nextNotes = notes) {
+  async function save(nextTexts = texts) {
     setSaving(true);
     try {
       const data = await requireApi("saveSeriesInfo")({
         id: info?.id,
         name,
         texts: nextTexts,
-        notes: nextNotes
+        notes: info?.notes ?? ""
       });
       setInventory(data);
       onToast("Serie guardada.");
@@ -10016,7 +10445,7 @@ function SeriesDetailPanel({
       const data = await requireApi("saveSeriesInfo")({
         name,
         texts,
-        notes
+        notes: info?.notes ?? ""
       });
       setInventory(data);
       seriesId = data.seriesInfo.find(
@@ -10170,25 +10599,6 @@ function SeriesDetailPanel({
   );
 }
 
-interface SpeechRecognitionLike {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: {
-    resultIndex: number;
-    results: ArrayLike<{
-      isFinal?: boolean;
-      0?: { transcript?: string };
-    }>;
-  }) => void) | null;
-  onerror: ((event: { error?: string }) => void) | null;
-  onend: (() => void) | null;
-}
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
-
 function TextGeneratorPage({
   inventory,
   setInventory,
@@ -10202,20 +10612,24 @@ function TextGeneratorPage({
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showPicker, setShowPicker] = useState(false);
+  const [systemPromptOpen, setSystemPromptOpen] = useState(false);
+  const [systemPrompt, setSystemPrompt] = useState(
+    () =>
+      inventory.settings.textGeneratorSystemPrompt?.trim() ||
+      DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
+  );
+  const [systemPromptSaving, setSystemPromptSaving] = useState(false);
   const [instruction, setInstruction] = useState(
     "Escribe un primer borrador claro, profesional y personal (unas 180–250 palabras) para presentar estas obras. No inventes datos. Conserva la voz de la artista y usa los ejemplos solo como referencia de tono."
   );
-  const [freeText, setFreeText] = useState(
-    "Quiero un texto que una noche, agua y color. Hablar de proceso sin sonar académico. Mencionar que trabajo por capas y que me importa la atmósfera más que el detalle. Si falta algún dato, marcarlo entre corchetes."
-  );
+  const [freeText, setFreeText] = useState("");
   const [responseLanguage, setResponseLanguage] = useState<"es" | "en" | "de">(
     "es"
   );
   const [referenceLinks, setReferenceLinks] = useState<
     Array<{ id: string; url: string; note: string }>
   >([]);
-  const [dictationLanguage, setDictationLanguage] = useState("es-ES");
-  const [listening, setListening] = useState(false);
+  const [dictationHelpOpen, setDictationHelpOpen] = useState(false);
   const [examples, setExamples] = useState<TextGeneratorExample[]>(() =>
     (inventory.textGeneratorExamples ?? []).map(normalizeTextExample)
   );
@@ -10223,19 +10637,28 @@ function TextGeneratorPage({
   const [selectedSeriesTextKeys, setSelectedSeriesTextKeys] = useState<string[]>(
     []
   );
+  const [expandedSeriesId, setExpandedSeriesId] = useState<string | null>(null);
+  const [expandedTextKey, setExpandedTextKey] = useState<string | null>(null);
   const [seriesOpen, setSeriesOpen] = useState(false);
   const [showOtherSeries, setShowOtherSeries] = useState(false);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [editingExampleId, setEditingExampleId] = useState<string | null>(null);
   const [savingExamples, setSavingExamples] = useState(false);
-  const [copying, setCopying] = useState(false);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
+  const [copying, setCopying] = useState<null | "all" | "text" | "images">(null);
+  const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
+  const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const autoSeriesKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setExamples((inventory.textGeneratorExamples ?? []).map(normalizeTextExample));
   }, [inventory.textGeneratorExamples]);
+
+  useEffect(() => {
+    setSystemPrompt(
+      inventory.settings.textGeneratorSystemPrompt?.trim() ||
+        DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
+    );
+  }, [inventory.settings.textGeneratorSystemPrompt]);
 
   const selectedArtworks = selectedIds
     .map((id) => inventory.artworks.find((artwork) => artwork.id === id))
@@ -10243,6 +10666,38 @@ function TextGeneratorPage({
   const selectedSeriesNames = uniqueValues(
     selectedArtworks.map((artwork) => artwork.series)
   );
+  const artworksWithPhoto = selectedArtworks.filter((art) =>
+    Boolean(previewImages[art.id])
+  );
+  const missingPhotoCount = selectedArtworks.length - artworksWithPhoto.length;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next: Record<string, string> = {};
+      for (const art of selectedArtworks) {
+        const image = inventory.images.find(
+          (img) =>
+            img.targetType === "artwork" &&
+            img.targetId === art.id &&
+            img.category === "main"
+        );
+        if (image?.absolutePath) {
+          try {
+            next[art.id] = await window.inventoryApi.imageToDataUrl(
+              image.absolutePath
+            );
+          } catch {
+            /* skip */
+          }
+        }
+      }
+      if (!cancelled) setPreviewImages(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedArtworks.map((a) => a.id).join("|"), inventory.images]);
 
   const seriesForPrompt = useMemo(() => {
     const fromWorks = selectedSeriesNames
@@ -10285,6 +10740,8 @@ function TextGeneratorPage({
 
   const generatedText = useMemo(() => {
     const blocks: string[] = [
+      "SYSTEM",
+      systemPrompt.trim() || DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT,
       "ENCARGO",
       instruction.trim() || "Redacta un primer borrador usando solo estos datos."
     ];
@@ -10296,6 +10753,7 @@ function TextGeneratorPage({
     if (selectedArtworks.length > 0) {
       blocks.push(
         "OBRAS SELECCIONADAS",
+        "Las imágenes de estas obras van adjuntas en el portapapeles (collage / HTML). Úsalas como referencia visual.",
         selectedArtworks
           .map((artwork, index) => {
             const lines = [
@@ -10332,7 +10790,6 @@ function TextGeneratorPage({
               .join("\n")
           );
         }
-        if (series.notes?.trim()) lines.push(`Notas: ${series.notes.trim()}`);
         return lines.join("\n\n");
       })
       .filter(Boolean);
@@ -10387,6 +10844,7 @@ function TextGeneratorPage({
     );
     return blocks.filter(Boolean).join("\n\n");
   }, [
+    systemPrompt,
     instruction,
     freeText,
     selectedArtworks,
@@ -10398,111 +10856,19 @@ function TextGeneratorPage({
     responseLanguageLine
   ]);
 
-  function stopMicStream() {
-    micStreamRef.current?.getTracks().forEach((track) => track.stop());
-    micStreamRef.current = null;
+  /**
+   * Chromium's Web Speech API needs Google's cloud recogniser, and Electron
+   * ships without that key, so it always fails. macOS dictation types straight
+   * into whichever field has focus, so we put the cursor there and explain it.
+   */
+  function startSystemDictation() {
+    const field = notesRef.current;
+    if (field) {
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    }
+    setDictationHelpOpen(true);
   }
-
-  async function startDictation() {
-    const speechWindow = window as typeof window & {
-      SpeechRecognition?: SpeechRecognitionConstructor;
-      webkitSpeechRecognition?: SpeechRecognitionConstructor;
-    };
-    const Recognition =
-      speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
-    if (!Recognition) {
-      onError(
-        "El dictado por voz no está disponible en esta versión de Electron. Escribe o pega las notas en el cuadro."
-      );
-      return;
-    }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      onError(
-        "No hay acceso al micrófono. Escribe o pega las notas en el cuadro."
-      );
-      return;
-    }
-
-    try {
-      stopMicStream();
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
-        audio: true
-      });
-    } catch {
-      onError(
-        "Permiso de micrófono denegado. Actívalo en Preferencias del Sistema → Privacidad → Micrófono."
-      );
-      return;
-    }
-
-    const recognition = new Recognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = dictationLanguage;
-    recognition.onresult = (event) => {
-      const pieces: string[] = [];
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const result = event.results[index];
-        if (!result || result.isFinal === false) continue;
-        const transcript = result[0]?.transcript?.trim();
-        if (transcript) pieces.push(transcript);
-      }
-      if (pieces.length === 0) return;
-      setFreeText((current) =>
-        [current.trim(), pieces.join(" ")].filter(Boolean).join(current.trim() ? " " : "")
-      );
-    };
-    recognition.onerror = (event) => {
-      setListening(false);
-      stopMicStream();
-      recognitionRef.current = null;
-      const code = event.error || "error";
-      if (code === "not-allowed" || code === "service-not-allowed") {
-        onError("Micrófono no permitido. Revisa los permisos del sistema.");
-      } else if (code !== "aborted" && code !== "no-speech") {
-        onError(`Dictado interrumpido (${code}). Puedes seguir escribiendo a mano.`);
-      }
-    };
-    recognition.onend = () => {
-      setListening(false);
-      stopMicStream();
-      recognitionRef.current = null;
-    };
-    recognitionRef.current = recognition;
-    try {
-      recognition.start();
-      setListening(true);
-    } catch {
-      stopMicStream();
-      recognitionRef.current = null;
-      onError("No se pudo iniciar el dictado. Prueba otra vez o escribe a mano.");
-    }
-  }
-
-  function stopDictation() {
-    try {
-      recognitionRef.current?.stop();
-    } catch {
-      /* ignore */
-    }
-    recognitionRef.current = null;
-    stopMicStream();
-    setListening(false);
-  }
-
-  useEffect(
-    () => () => {
-      try {
-        recognitionRef.current?.stop();
-      } catch {
-        /* ignore */
-      }
-      recognitionRef.current = null;
-      micStreamRef.current?.getTracks().forEach((track) => track.stop());
-      micStreamRef.current = null;
-    },
-    []
-  );
 
   function addExample() {
     const id = `example-${Date.now()}`;
@@ -10550,21 +10916,71 @@ function TextGeneratorPage({
     );
   }
 
-  async function copyPrompt() {
-    if (
-      !selectedArtworks.length &&
-      !freeText.trim() &&
-      selectedExampleIds.length === 0 &&
-      selectedSeriesTextKeys.length === 0 &&
-      !referenceLinks.some((link) => link.url.trim())
-    ) {
+  async function saveSystemPrompt() {
+    setSystemPromptSaving(true);
+    try {
+      const next =
+        systemPrompt.trim() || DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT;
+      const data = await requireApi("saveSettings")({
+        ...inventory.settings,
+        textGeneratorSystemPrompt: next
+      });
+      setInventory(data);
+      setSystemPrompt(
+        data.settings.textGeneratorSystemPrompt?.trim() ||
+          DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
+      );
+      onToast("Instrucciones fijas guardadas.");
+    } catch (error) {
+      onError(
+        error instanceof Error
+          ? error.message
+          : "No se pudieron guardar las instrucciones."
+      );
+    } finally {
+      setSystemPromptSaving(false);
+    }
+  }
+
+  async function copyPrompt(mode: "all" | "text" | "images") {
+    const hasSomething =
+      selectedArtworks.length > 0 ||
+      freeText.trim() ||
+      selectedExampleIds.length > 0 ||
+      selectedSeriesTextKeys.length > 0 ||
+      referenceLinks.some((link) => link.url.trim());
+    if (!hasSomething) {
       onError("Añade al menos una obra, una nota, un enlace, un texto de serie o un ejemplo.");
       return;
     }
-    setCopying(true);
+    if (mode === "images" && artworksWithPhoto.length === 0) {
+      onError("Ninguna de las obras elegidas tiene foto principal.");
+      return;
+    }
+    setCopying(mode);
     try {
-      await copyTextToClipboard(generatedText);
-      onToast("Texto copiado. Ya puedes pegarlo en ChatGPT.");
+      const labels = artworksWithPhoto.map((art) => art.title);
+      const imageDataUrls = artworksWithPhoto.map((art) => previewImages[art.id]);
+      const { imageCount } = await copyPromptWithPaintings({
+        text: mode === "images" ? "" : generatedText,
+        imageDataUrls: mode === "text" ? [] : imageDataUrls,
+        labels: mode === "text" ? [] : labels
+      });
+      if (mode === "text") {
+        onToast("Texto copiado. Pégalo en ChatGPT con ⌘V.");
+      } else if (mode === "images") {
+        onToast(
+          `${imageCount} foto${imageCount === 1 ? "" : "s"} copiada${
+            imageCount === 1 ? "" : "s"
+          }. Pega en ChatGPT con ⌘V para adjuntarlas.`
+        );
+      } else {
+        onToast(
+          imageCount > 0
+            ? `Texto + ${imageCount} foto${imageCount === 1 ? "" : "s"} copiados. Pega en el chat (⌘V).`
+            : "Texto copiado. Ya puedes pegarlo en ChatGPT."
+        );
+      }
     } catch (error) {
       onError(
         error instanceof Error
@@ -10572,47 +10988,99 @@ function TextGeneratorPage({
           : "No se pudo copiar. Selecciona el texto a la derecha y cópialo con ⌘C."
       );
     } finally {
-      setCopying(false);
+      setCopying(null);
     }
   }
 
   function renderSeriesTextPicker(series: SeriesInfo, linked: boolean) {
     const texts = series.texts ?? [];
+    const expanded = expandedSeriesId === series.id;
+    const selectedCount = texts.filter((text) =>
+      selectedSeriesTextKeys.includes(seriesTextKey(series.id, text.id))
+    ).length;
     return (
-      <div className="textgen-series-block" key={series.id}>
-        <div className="textgen-series-head">
-          <strong>{series.name}</strong>
-          {linked ? (
-            <span className="muted small-note">de las obras elegidas</span>
-          ) : (
-            <span className="muted small-note">otra serie</span>
-          )}
-        </div>
-        {texts.length === 0 ? (
-          <p className="muted small-note">
-            Esta serie aún no tiene textos. Añádelos en la pestaña Series.
-          </p>
-        ) : (
-          <div className="textgen-check-list">
-            {texts.map((text) => {
-              const key = seriesTextKey(series.id, text.id);
-              return (
-                <label className="textgen-check" key={key}>
-                  <input
-                    type="checkbox"
-                    checked={selectedSeriesTextKeys.includes(key)}
-                    onChange={() => toggleSeriesText(key)}
-                  />
-                  <span>
-                    <strong>{text.topic || "Sin tema"}</strong>
-                    <span className="muted">
-                      {text.body.trim().slice(0, 80) || "Sin texto"}
-                      {text.body.trim().length > 80 ? "…" : ""}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
+      <div
+        className={`textgen-series-block${expanded ? " open" : ""}`}
+        key={series.id}
+      >
+        <button
+          type="button"
+          className="textgen-series-toggle"
+          onClick={() =>
+            setExpandedSeriesId(expanded ? null : series.id)
+          }
+        >
+          <span className="textgen-series-toggle-main">
+            <strong>{series.name}</strong>
+            <span className="muted small-note">
+              {linked ? "de las obras elegidas" : "otra serie"}
+              {" · "}
+              {texts.length === 0
+                ? "sin textos"
+                : `${texts.length} texto${texts.length === 1 ? "" : "s"}`}
+              {selectedCount > 0 ? ` · ${selectedCount} marcado${selectedCount === 1 ? "" : "s"}` : ""}
+            </span>
+          </span>
+          <span className="series-text-chevron" aria-hidden>
+            {expanded ? "▾" : "▸"}
+          </span>
+        </button>
+        {expanded && (
+          <div className="textgen-series-body">
+            {texts.length === 0 ? (
+              <p className="muted small-note">
+                Esta serie aún no tiene textos. Añádelos en la pestaña Series.
+              </p>
+            ) : (
+              <div className="textgen-check-list">
+                {texts.map((text) => {
+                  const key = seriesTextKey(series.id, text.id);
+                  const textOpen = expandedTextKey === key;
+                  const checked = selectedSeriesTextKeys.includes(key);
+                  return (
+                    <div
+                      className={`textgen-series-text${textOpen ? " open" : ""}`}
+                      key={key}
+                    >
+                      <div className="textgen-series-text-row">
+                        <label className="textgen-check textgen-check-inline">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleSeriesText(key)}
+                          />
+                          <span>
+                            <strong>{text.topic || "Sin tema"}</strong>
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          onClick={() =>
+                            setExpandedTextKey(textOpen ? null : key)
+                          }
+                        >
+                          {textOpen ? "Ocultar" : "Ver texto"}
+                        </button>
+                      </div>
+                      {textOpen && (
+                        <div className="textgen-series-text-full">
+                          {text.body.trim() || (
+                            <span className="muted">Sin texto</span>
+                          )}
+                        </div>
+                      )}
+                      {!textOpen && text.body.trim() && (
+                        <p className="muted small-note textgen-series-text-preview">
+                          {text.body.trim().slice(0, 120)}
+                          {text.body.trim().length > 120 ? "…" : ""}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -10626,22 +11094,88 @@ function TextGeneratorPage({
           <p className="eyebrow">Ayuda para redactar</p>
           <h2>Generador de texto</h2>
           <p className="page-lead">
-            Reúne obras, textos de series, notas y ejemplos. Copia el resultado y
-            pégalo en ChatGPT.
+            Reúne obras (con foto), textos de series, notas y ejemplos. Copia el
+            resultado y pégalo en ChatGPT.
           </p>
         </div>
         <button
           type="button"
           className="cuentas-primary"
-          disabled={copying}
-          onClick={() => void copyPrompt()}
+          disabled={copying !== null}
+          onClick={() => void copyPrompt("all")}
         >
-          {copying ? "Copiando…" : "Copiar todo"}
+          {copying === "all" ? "Copiando…" : "Copiar para ChatGPT"}
         </button>
+      </div>
+
+      <div className="textgen-summary">
+        <span className="textgen-chip">
+          {selectedArtworks.length} obra{selectedArtworks.length === 1 ? "" : "s"}
+        </span>
+        <span className="textgen-chip">
+          {artworksWithPhoto.length} foto{artworksWithPhoto.length === 1 ? "" : "s"}
+        </span>
+        <span className="textgen-chip">
+          {selectedSeriesTextKeys.length} texto
+          {selectedSeriesTextKeys.length === 1 ? "" : "s"} de serie
+        </span>
+        <span className="textgen-chip">
+          {selectedExampleIds.length} ejemplo
+          {selectedExampleIds.length === 1 ? "" : "s"}
+        </span>
+        {missingPhotoCount > 0 && (
+          <span className="textgen-chip warn">
+            {missingPhotoCount} obra{missingPhotoCount === 1 ? "" : "s"} sin foto
+          </span>
+        )}
       </div>
 
       <div className="textgen-layout">
         <div className="textgen-config">
+          <div className={`textgen-system${systemPromptOpen ? " open" : ""}`}>
+            <button
+              type="button"
+              className="textgen-system-toggle"
+              onClick={() => setSystemPromptOpen((open) => !open)}
+            >
+              <span>Instrucciones fijas (sistema)</span>
+              <span className="muted">{systemPromptOpen ? "▲" : "▼"}</span>
+            </button>
+            {systemPromptOpen && (
+              <div className="textgen-system-body">
+                <p className="muted small-note">
+                  Va al inicio de lo que copias. Queda guardado; no hace falta
+                  tocarlo cada vez.
+                </p>
+                <textarea
+                  className="textgen-system-input"
+                  rows={5}
+                  value={systemPrompt}
+                  onChange={(event) => setSystemPrompt(event.target.value)}
+                />
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={() =>
+                      setSystemPrompt(DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT)
+                    }
+                  >
+                    Restaurar pred.
+                  </button>
+                  <button
+                    type="button"
+                    className="small"
+                    disabled={systemPromptSaving}
+                    onClick={() => void saveSystemPrompt()}
+                  >
+                    {systemPromptSaving ? "…" : "Guardar"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="pl-block">
             <div className="pl-block-head">
               <span className="pl-block-title">1. Obras</span>
@@ -10679,6 +11213,16 @@ function TextGeneratorPage({
                         )
                       }
                     />
+                    <div className="textgen-work-thumb">
+                      {previewImages[artwork.id] ? (
+                        <img
+                          src={previewImages[artwork.id]}
+                          alt=""
+                        />
+                      ) : (
+                        <span className="muted">Sin foto</span>
+                      )}
+                    </div>
                     <div>
                       <strong>{artwork.title}</strong>
                       <span className="muted">
@@ -10726,7 +11270,8 @@ function TextGeneratorPage({
             </div>
             {!seriesOpen ? (
               <p className="muted small-note">
-                Cerrado. Ábrelo solo si quieres añadir o quitar textos de serie.
+                Cerrado. Ábrelo para revisar textos completos y marcar cuáles
+                van al chat.
               </p>
             ) : seriesForPrompt.linked.length === 0 &&
               seriesForPrompt.other.length === 0 ? (
@@ -10735,6 +11280,10 @@ function TextGeneratorPage({
               </p>
             ) : (
               <div className="textgen-series-list">
+                <p className="muted small-note">
+                  Pulsa una serie para abrirla. Ahí puedes leer el texto entero
+                  antes de marcarlo.
+                </p>
                 {seriesForPrompt.linked.map((series) =>
                   renderSeriesTextPicker(series, true)
                 )}
@@ -10778,27 +11327,9 @@ function TextGeneratorPage({
           <div className="pl-block">
             <div className="pl-block-head">
               <span className="pl-block-title">3. Encargo y notas</span>
-              <div className="textgen-dictation">
-                <select
-                  value={dictationLanguage}
-                  onChange={(event) => setDictationLanguage(event.target.value)}
-                  disabled={listening}
-                  aria-label="Idioma del dictado"
-                >
-                  <option value="es-ES">Dictado ES</option>
-                  <option value="en-US">Dictado EN</option>
-                  <option value="de-DE">Dictado DE</option>
-                </select>
-                <button
-                  type="button"
-                  className={listening ? "danger-solid" : "ghost"}
-                  onClick={() =>
-                    void (listening ? stopDictation() : startDictation())
-                  }
-                >
-                  {listening ? "■ Parar" : "● Dictar"}
-                </button>
-              </div>
+              <button type="button" className="ghost" onClick={startSystemDictation}>
+                Dictar con el Mac
+              </button>
             </div>
             <label className="field">
               Qué quieres escribir
@@ -10811,14 +11342,36 @@ function TextGeneratorPage({
             <label className="field">
               Notas libres (escribe, pega o dicta)
               <textarea
+                ref={notesRef}
                 rows={5}
                 value={freeText}
                 placeholder="Ideas sueltas. No hace falta que estén ordenadas."
                 onChange={(event) => setFreeText(event.target.value)}
               />
             </label>
-            {listening && (
-              <p className="recording-note">Escuchando… habla con calma.</p>
+            {dictationHelpOpen && (
+              <div className="textgen-dictation-help">
+                <p>
+                  <strong>El dictado lo hace tu Mac</strong>, no esta aplicación.
+                  El cursor ya está en «Notas libres».
+                </p>
+                <ol>
+                  <li>Pulsa dos veces la tecla 🎤 (o la que tengas configurada).</li>
+                  <li>Habla con calma; el texto se escribe solo.</li>
+                  <li>Pulsa la tecla otra vez o Intro para terminar.</li>
+                </ol>
+                <p className="muted small-note">
+                  ¿No pasa nada? Actívalo en Ajustes del Sistema → Teclado →
+                  Dictado. También está en el menú Edit → Start Dictation.
+                </p>
+                <button
+                  type="button"
+                  className="ghost small"
+                  onClick={() => setDictationHelpOpen(false)}
+                >
+                  Entendido
+                </button>
+              </div>
             )}
             <label className="field">
               Idioma de la respuesta
@@ -11047,11 +11600,35 @@ function TextGeneratorPage({
             </div>
             <button
               type="button"
-              disabled={copying}
-              onClick={() => void copyPrompt()}
+              disabled={copying !== null}
+              onClick={() => void copyPrompt("all")}
             >
-              {copying ? "…" : "Copiar"}
+              {copying === "all" ? "…" : "Copiar texto + fotos"}
             </button>
+          </div>
+          <div className="textgen-copy-split">
+            <button
+              type="button"
+              className="ghost small"
+              disabled={copying !== null}
+              onClick={() => void copyPrompt("text")}
+            >
+              {copying === "text" ? "…" : "Solo el texto"}
+            </button>
+            <button
+              type="button"
+              className="ghost small"
+              disabled={copying !== null || artworksWithPhoto.length === 0}
+              onClick={() => void copyPrompt("images")}
+            >
+              {copying === "images"
+                ? "…"
+                : `Solo las fotos (${artworksWithPhoto.length})`}
+            </button>
+            <span className="muted small-note">
+              Si ChatGPT no coge las fotos al pegar, usa «Solo las fotos» y pega
+              otra vez.
+            </span>
           </div>
           <textarea
             className="textgen-output"
@@ -11345,6 +11922,18 @@ function ApplicationEditor({
           coverDate: application.coverDate ?? "",
           coverNote: application.coverNote ?? "",
           coverStyles: application.coverStyles ?? {},
+          sectionHeadingStyle: application.sectionHeadingStyle ?? {
+            font: "Georgia",
+            sizePt: 18,
+            bold: true,
+            italic: false
+          },
+          sectionBodyStyle: application.sectionBodyStyle ?? {
+            font: "Georgia",
+            sizePt: 12,
+            bold: false,
+            italic: false
+          },
           sections: sectionsFromApplication(application, initialLang),
           headingWorks: application.headingWorks || defaults.works,
           language: initialLang,
@@ -11373,6 +11962,18 @@ function ApplicationEditor({
           coverDate: "",
           coverNote: "",
           coverStyles: {},
+          sectionHeadingStyle: {
+            font: "Georgia",
+            sizePt: 18,
+            bold: true,
+            italic: false
+          },
+          sectionBodyStyle: {
+            font: "Georgia",
+            sizePt: 12,
+            bold: false,
+            italic: false
+          },
           sections: [],
           headingWorks: defaults.works,
           language: "es",
@@ -11493,6 +12094,53 @@ function ApplicationEditor({
       if (Object.keys(cleaned).length > 0) next[key] = cleaned;
       else delete next[key];
       return { ...current, coverStyles: next };
+    });
+    markDirty();
+  }
+
+  function setSectionHeadingStyle(patch: Partial<CoverLineStyle>) {
+    setForm((current) => {
+      const merged: CoverLineStyle = {
+        ...(current.sectionHeadingStyle ?? {}),
+        ...patch
+      };
+      const cleaned: CoverLineStyle = {};
+      if (merged.font?.trim()) cleaned.font = merged.font.trim();
+      if (merged.sizePt != null && Number.isFinite(merged.sizePt)) {
+        cleaned.sizePt = merged.sizePt;
+      }
+      if (merged.bold === true) cleaned.bold = true;
+      if (merged.bold === false) cleaned.bold = false;
+      if (merged.italic === true) cleaned.italic = true;
+      if (merged.italic === false) cleaned.italic = false;
+      return {
+        ...current,
+        sectionHeadingStyle:
+          Object.keys(cleaned).length > 0 ? cleaned : undefined
+      };
+    });
+    markDirty();
+  }
+
+  function setSectionBodyStyle(patch: Partial<CoverLineStyle>) {
+    setForm((current) => {
+      const merged: CoverLineStyle = {
+        ...(current.sectionBodyStyle ?? {}),
+        ...patch
+      };
+      const cleaned: CoverLineStyle = {};
+      if (merged.font?.trim()) cleaned.font = merged.font.trim();
+      if (merged.sizePt != null && Number.isFinite(merged.sizePt)) {
+        cleaned.sizePt = merged.sizePt;
+      }
+      if (merged.bold === true) cleaned.bold = true;
+      if (merged.bold === false) cleaned.bold = false;
+      if (merged.italic === true) cleaned.italic = true;
+      if (merged.italic === false) cleaned.italic = false;
+      return {
+        ...current,
+        sectionBodyStyle: Object.keys(cleaned).length > 0 ? cleaned : undefined
+      };
     });
     markDirty();
   }
@@ -11618,7 +12266,9 @@ function ApplicationEditor({
         frameBorderColor,
         frameBorderWidth,
         framePadding,
-        showFrame: !hideFrame
+        showFrame: !hideFrame,
+        sectionHeading: form.sectionHeadingStyle,
+        sectionBody: form.sectionBodyStyle
       },
       rows
     };
@@ -11637,6 +12287,8 @@ function ApplicationEditor({
     form.coverNote,
     form.organization,
     JSON.stringify(form.coverStyles ?? {}),
+    JSON.stringify(form.sectionHeadingStyle ?? {}),
+    JSON.stringify(form.sectionBodyStyle ?? {}),
     form.headingWorks,
     form.tocWorksMode,
     form.headerArtistName,
@@ -12135,6 +12787,43 @@ function ApplicationEditor({
               </div>
             ) : (
               <div className="app-section-list">
+                <div className="app-section-heading-format">
+                  <div className="app-section-heading-format-head">
+                    <span className="cover-line-label">
+                      Formato de todos los encabezados
+                    </span>
+                    <span className="cover-line-hint">
+                      Se aplica a cada sección a la vez
+                    </span>
+                  </div>
+                  <SharedTextFormatTools
+                    ariaLabel="encabezados"
+                    style={form.sectionHeadingStyle}
+                    defaults={{ font: "Georgia", sizePt: 18, bold: true, italic: false }}
+                    onChange={setSectionHeadingStyle}
+                  />
+                </div>
+                <div className="app-section-heading-format">
+                  <div className="app-section-heading-format-head">
+                    <span className="cover-line-label">
+                      Formato de todos los textos
+                    </span>
+                    <span className="cover-line-hint">
+                      Base de todos los cuerpos · N/I por letra sigue en el editor
+                    </span>
+                  </div>
+                  <SharedTextFormatTools
+                    ariaLabel="textos"
+                    style={form.sectionBodyStyle}
+                    defaults={{
+                      font: "Georgia",
+                      sizePt: 12,
+                      bold: false,
+                      italic: false
+                    }}
+                    onChange={setSectionBodyStyle}
+                  />
+                </div>
                 {sections.map((section, index) => {
                   const open = openSectionId === section.id;
                   const preview = (section.bodyHtml || "")
@@ -12185,6 +12874,10 @@ function ApplicationEditor({
                             <RichTextField
                               key={section.id}
                               value={section.bodyHtml}
+                              baseFont={form.sectionBodyStyle?.font ?? "Georgia"}
+                              baseSizePt={form.sectionBodyStyle?.sizePt ?? 12}
+                              baseBold={form.sectionBodyStyle?.bold ?? false}
+                              baseItalic={form.sectionBodyStyle?.italic ?? false}
                               onChange={(html) =>
                                 updateSection(section.id, { bodyHtml: html })
                               }
@@ -12214,7 +12907,7 @@ function ApplicationEditor({
           >
             <div className="form-row">
               <label className="field">
-                Título
+                Fichas de obra (título y datos)
                 <select
                   value={fontTitle}
                   onChange={(event) => setFontTitle(event.target.value)}
@@ -12227,7 +12920,7 @@ function ApplicationEditor({
                 </select>
               </label>
               <label className="field">
-                Texto
+                Cuerpo de texto
                 <select
                   value={fontBody}
                   onChange={(event) => setFontBody(event.target.value)}
@@ -12437,7 +13130,6 @@ function PriceListPage({
   const [priceBold, setPriceBold] = useState(true);
   const [imageGap, setImageGap] = useState(16);
   const [frameBorderColor, setFrameBorderColor] = useState("#e4e4e4");
-  const [prices, setPrices] = useState<Record<string, string>>({});
   const [customImages, setCustomImages] = useState<Record<string, string>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
   const [showFreePicker, setShowFreePicker] = useState(false);
@@ -12525,10 +13217,6 @@ function PriceListPage({
     return artworkById.get(artworkId)?.soldPrice ?? "";
   }
 
-  function rawPrice(id: string): string {
-    return prices[id] ?? listedPriceFor(id);
-  }
-
   // Mirrors rowImageHeight() in the PDF generator so the preview shows the
   // exact frame size the PDF will use.
   function previewFrameSize(perPage: number): number {
@@ -12541,7 +13229,7 @@ function PriceListPage({
     if (dataUrl) setCustomImages((current) => ({ ...current, [id]: dataUrl }));
   }
 
-  async function generate(format: "pdf" | "docx") {
+  async function generate() {
     if (selectedIds.length === 0) {
       onError("Selecciona al menos una obra para la lista.");
       return;
@@ -12565,13 +13253,13 @@ function PriceListPage({
           material: artTypeLabel(inventory, art.type, language),
           size: formatSize(art),
           year: art.yearMade ?? "",
-          price: formatEuro(rawPrice(id)),
+          price: formatEuro(listedPriceFor(id)),
           imageDataUrl,
           widthCm: toCm(art.width, art.unit),
           heightCm: toCm(art.height, art.unit)
         });
       }
-      const savedPath = await window.inventoryApi.generatePriceList(format, {
+      const savedPath = await window.inventoryApi.generatePriceList({
         header: header || "Folleto de obras",
         subtitle,
         leftHeader,
@@ -12588,7 +13276,7 @@ function PriceListPage({
       });
       if (savedPath) {
         onError("");
-        onToast(`Lista generada (${format.toUpperCase()}).`);
+        onToast("Lista generada (PDF).");
       }
     } catch (caught) {
       onError(caught instanceof Error ? caught.message : "No se pudo generar la lista.");
@@ -12605,11 +13293,8 @@ function PriceListPage({
           <h2>Generar folleto de obras</h2>
         </div>
         <div className="form-head-actions">
-          <button disabled={busy} onClick={() => generate("pdf")}>
+          <button disabled={busy} onClick={() => void generate()}>
             Generar PDF
-          </button>
-          <button className="ghost" disabled={busy} onClick={() => generate("docx")}>
-            Generar Word
           </button>
         </div>
       </div>
@@ -12670,10 +13355,12 @@ function PriceListPage({
           {selectedIds.length > 0 && (
             <div className="pl-block">
               <span className="pl-block-title">
-                Precio, imagen y orden de cada obra
+                Imagen y orden de cada obra
               </span>
               <p className="muted small-note">
-                Usa ↑ ↓ para elegir el orden del folleto.
+                Usa ↑ ↓ para elegir el orden del folleto. Los precios se toman de
+                la exposición (o del precio de venta si no hay exposición);
+                cámbialos allí si hace falta.
               </p>
               <div className="pl-row-list">
                 {selectedIds.map((id, index) => {
@@ -12691,19 +13378,6 @@ function PriceListPage({
                       <span className="pl-row-title" title={art.title}>
                         {art.title}
                       </span>
-                      {showPrice && (
-                        <input
-                          className="pl-price"
-                          placeholder="Precio €"
-                          value={prices[id] ?? listedPriceFor(id)}
-                          onChange={(event) =>
-                            setPrices((current) => ({
-                              ...current,
-                              [id]: event.target.value
-                            }))
-                          }
-                        />
-                      )}
                       <button className="ghost small" onClick={() => pickImage(id)}>
                         {customImages[id] ? "Cambiar imagen" : "Otra imagen"}
                       </button>
@@ -13034,7 +13708,7 @@ function PriceListPage({
                             className="pl-sheet-price"
                             style={{ fontWeight: priceBold ? 700 : 400 }}
                           >
-                            {formatEuro(rawPrice(id)) || "—"}
+                            {formatEuro(listedPriceFor(id)) || "—"}
                           </div>
                         )}
                       </div>
@@ -13076,6 +13750,105 @@ const PRICELIST_FONTS = [
   "Futura",
   "Courier New"
 ];
+
+/** Discrete point sizes for text / encabezado / portada controls. */
+const FONT_SIZE_PT_OPTIONS = [
+  8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 42, 48
+];
+
+/** Body text sizes in the rich editor (Tamaño). */
+const RICH_TEXT_SIZES = [10, 11, 12, 14, 16, 18, 20, 24];
+
+function SharedTextFormatTools({
+  ariaLabel,
+  style,
+  defaults,
+  onChange
+}: {
+  ariaLabel: string;
+  style?: CoverLineStyle;
+  defaults: {
+    font: string;
+    sizePt: number;
+    bold: boolean;
+    italic: boolean;
+  };
+  onChange: (patch: Partial<CoverLineStyle>) => void;
+}) {
+  const font = style?.font ?? defaults.font;
+  const sizePt =
+    style?.sizePt != null && Number.isFinite(style.sizePt)
+      ? style.sizePt
+      : defaults.sizePt;
+  const boldOn = style?.bold ?? defaults.bold;
+  const italicOn = style?.italic ?? defaults.italic;
+  return (
+    <div className="cover-line-tools">
+      <select
+        className="cover-line-font"
+        aria-label={`Fuente de ${ariaLabel}`}
+        value={font}
+        onChange={(event) =>
+          onChange({
+            font: event.target.value || defaults.font,
+            sizePt,
+            bold: boldOn,
+            italic: italicOn
+          })
+        }
+      >
+        {PRICELIST_FONTS.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
+      <label className="cover-line-size">
+        <select
+          aria-label={`Tamaño de ${ariaLabel}`}
+          value={String(sizePt)}
+          onChange={(event) => {
+            const n = Number(event.target.value);
+            if (!Number.isFinite(n)) return;
+            onChange({ sizePt: n });
+          }}
+        >
+          {!FONT_SIZE_PT_OPTIONS.includes(sizePt) ? (
+            <option value={sizePt}>{sizePt}</option>
+          ) : null}
+          {FONT_SIZE_PT_OPTIONS.map((pt) => (
+            <option key={pt} value={pt}>
+              {pt}
+            </option>
+          ))}
+        </select>
+        <span>pt</span>
+      </label>
+      <div
+        className="cover-line-style-toggles"
+        role="group"
+        aria-label={`Estilo de ${ariaLabel}`}
+      >
+        <button
+          type="button"
+          className={`toggle-chip${boldOn ? " on" : ""}`}
+          title="Negrita (base)"
+          onClick={() => onChange({ bold: !boldOn })}
+        >
+          N
+        </button>
+        <button
+          type="button"
+          className={`toggle-chip${italicOn ? " on" : ""}`}
+          title="Cursiva (base)"
+          onClick={() => onChange({ italic: !italicOn })}
+        >
+          <em>I</em>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function AppFormBlock({
   title,
@@ -13191,19 +13964,24 @@ function CoverLineEditor({
           ))}
         </select>
         <label className="cover-line-size">
-          <input
-            type="number"
-            min={6}
-            max={96}
-            step={0.5}
+          <select
             aria-label={`Tamaño · ${label}`}
-            value={sizeValue}
+            value={String(sizeValue)}
             onChange={(event) => {
               const n = Number(event.target.value);
               if (!Number.isFinite(n)) return;
-              onStyleChange({ sizePt: Math.min(96, Math.max(6, n)) });
+              onStyleChange({ sizePt: n });
             }}
-          />
+          >
+            {!FONT_SIZE_PT_OPTIONS.includes(sizeValue) ? (
+              <option value={sizeValue}>{sizeValue}</option>
+            ) : null}
+            {FONT_SIZE_PT_OPTIONS.map((pt) => (
+              <option key={pt} value={pt}>
+                {pt}
+              </option>
+            ))}
+          </select>
           <span>pt</span>
         </label>
         <div className="cover-line-style-toggles" role="group" aria-label="Estilo">

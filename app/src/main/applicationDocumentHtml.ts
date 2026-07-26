@@ -27,6 +27,10 @@ export interface ApplicationPdfStyle {
   framePadding?: number;
   /** When false, no gray frame border. Default true. */
   showFrame?: boolean;
+  /** Shared format for all text-section headings (encabezados). */
+  sectionHeading?: ApplicationCoverLineStyle;
+  /** Shared base format for all text-section bodies. */
+  sectionBody?: ApplicationCoverLineStyle;
 }
 
 export interface ApplicationPdfSection {
@@ -326,6 +330,9 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
   const frameBorderCss = showFrame
     ? `${frameBorderWidth}px solid ${frameBorder}`
     : "none";
+  // A4 content width is 210mm − 2 × 16mm margins = 178mm; the square is 95% of
+  // that. Expressed in mm so screen preview and printToPDF resolve identically.
+  const frameSideMm = 169;
   const coverStyles = payload.coverStyles ?? {};
   const titleLineDefaults = {
     font: (style.fontTitle || "Georgia").replace(/,.*/, "").trim() || "Georgia",
@@ -336,6 +343,27 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
   };
   const bodyFontDefault =
     (style.fontBody || "Georgia").replace(/,.*/, "").trim() || "Georgia";
+  const sectionHeadingDefaults = {
+    font: titleLineDefaults.font,
+    sizePt: 18,
+    bold: true,
+    italic: false,
+    color: titleColor,
+    extra: "border-bottom:1px solid #e0d9cd;margin:0 0 5mm;padding-bottom:3mm"
+  };
+  const sectionHeadingCss = coverLineCss(
+    style.sectionHeading,
+    sectionHeadingDefaults
+  );
+  const sectionBodyDefaults = {
+    font: bodyFontDefault,
+    sizePt: 12,
+    bold: false,
+    italic: false,
+    color: "#3a3530",
+    extra: "text-align:justify"
+  };
+  const sectionBodyCss = coverLineCss(style.sectionBody, sectionBodyDefaults);
   const aboveCss = coverLineCss(coverStyles.above, {
     font: bodyFontDefault,
     sizePt: 10,
@@ -635,19 +663,17 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
     }
 
     .section-page h2 {
-      border-bottom: 1px solid #e0d9cd;
-      color: ${titleColor};
-      font-family: ${fontTitle};
-      font-size: 17pt;
-      font-weight: 700;
-      margin: 0 0 5mm;
-      padding-bottom: 3mm;
+      ${sectionHeadingCss};
     }
     .section-page .rich {
-      color: #3a3530;
-      font-size: 12pt;
-      text-align: justify;
+      ${sectionBodyCss};
     }
+    /* Inline B / I / U from the editor still override the shared base. */
+    .section-page .rich b,
+    .section-page .rich strong { font-weight: 700; }
+    .section-page .rich i,
+    .section-page .rich em { font-style: italic; }
+    .section-page .rich u { text-decoration: underline; }
     .section-page .rich p { margin: 0 0 0.65em; }
     .section-page .rich p:last-child { margin-bottom: 0; }
 
@@ -665,8 +691,10 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
       max-width: 100%;
       min-width: 0;
     }
+    /* The work font covers the whole caption block: label, title and data. */
     .works-label {
       color: ${labelColor};
+      font-family: ${fontTitle};
       font-size: 8.5pt;
       font-weight: 500;
       letter-spacing: 0.1em;
@@ -685,16 +713,16 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
     .work-head .meta {
       color: ${metaColor};
       display: block;
+      font-family: ${fontTitle};
       font-size: 10.5pt;
       line-height: 1.4;
       margin: 0 0 0.3mm;
       overflow-wrap: anywhere;
     }
     /*
-      Square frame at 95% width, centered; painting inscribed.
-      .frame-box uses the padding-top % square trick so Chromium printToPDF
-      (which often ignores aspect-ratio) still keeps a real square.
-      Border + padding use border-box so thickness grows inward.
+      Explicit square in mm — never percentages and never measured in JS.
+      Percentage padding gives a rectangle in printToPDF, and JS measurement
+      runs against the offscreen window width, not the printed page width.
     */
     .frame-slot {
       align-items: center;
@@ -709,18 +737,18 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
     }
     .frame-box {
       flex: 0 0 auto;
+      height: ${frameSideMm}mm;
       margin: 0 auto;
-      max-width: 95%;
       position: relative;
-      width: 95%;
+      width: ${frameSideMm}mm;
     }
     .frame-box::before {
-      content: "";
-      display: block;
-      padding-top: 100%;
+      content: none;
+      display: none;
     }
     .frame {
       align-items: center;
+      background: transparent;
       border: ${frameBorderCss};
       box-sizing: border-box;
       display: flex;
@@ -793,6 +821,16 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
         min-height: 0 !important;
         overflow: hidden !important;
       }
+      /* Cover must keep its two-row grid or the title block jumps to the top. */
+      .cover .page-main {
+        display: grid !important;
+        flex: none !important;
+        gap: 4mm !important;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        overflow: hidden !important;
+      }
       .work-main {
         display: flex !important;
         flex: 1 1 auto !important;
@@ -811,19 +849,19 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
         width: 100% !important;
       }
       .frame-box {
-        /* Fixed square in mm — print engines honor this; aspect-ratio often does not. */
-        height: 160mm !important;
+        height: ${frameSideMm}mm !important;
         margin: 0 auto !important;
-        max-width: 95% !important;
         padding: 0 !important;
         position: relative !important;
-        width: 160mm !important;
+        width: ${frameSideMm}mm !important;
       }
       .frame-box::before {
+        content: none !important;
         display: none !important;
         padding-top: 0 !important;
       }
       .frame {
+        background: transparent !important;
         border: ${frameBorderCss} !important;
         box-sizing: border-box !important;
         height: 100% !important;
@@ -834,7 +872,10 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
       }
       .frame img {
         height: 100% !important;
+        max-height: 100% !important;
+        max-width: 100% !important;
         object-fit: contain !important;
+        object-position: center !important;
         width: 100% !important;
       }
       .page-foot {
@@ -885,6 +926,7 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
   <script>
     (function () {
       window.__previewZoom = 1;
+
       function fitPages() {
         if (window.matchMedia && window.matchMedia("print").matches) return;
         var pages = document.querySelectorAll(".page");
@@ -910,7 +952,12 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
             Math.round(page.offsetHeight * (scale - 1) + 18) + "px";
         });
       }
-      /** Size painting frames to a centered square before PDF print. */
+
+      /**
+       * Undo the preview-only zoom transform before printToPDF.
+       * Frame geometry is pure CSS (fixed mm square) so it must not be
+       * recomputed here: the offscreen window is wider than the printed page.
+       */
       window.__preparePrintLayout = function () {
         document.body.style.display = "";
         document.body.style.flexDirection = "";
@@ -922,27 +969,6 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
           page.style.marginLeft = "";
           page.style.marginRight = "";
           page.style.marginBottom = "";
-        });
-        document.querySelectorAll(".work-page").forEach(function (page) {
-          var box = page.querySelector(".frame-box");
-          var frame = page.querySelector(".frame");
-          var head = page.querySelector(".work-head");
-          if (!box || !frame) return;
-          var pageW = page.clientWidth || 794;
-          var pageH = page.clientHeight || 1023;
-          var headH = head ? head.offsetHeight : 0;
-          var side = Math.floor(Math.min(pageW * 0.95, Math.max(120, pageH - headH - 48)));
-          side = Math.max(140, side);
-          box.style.setProperty("width", side + "px", "important");
-          box.style.setProperty("height", side + "px", "important");
-          box.style.setProperty("max-width", "95%", "important");
-          box.style.setProperty("margin-left", "auto", "important");
-          box.style.setProperty("margin-right", "auto", "important");
-          frame.style.setProperty("position", "absolute", "important");
-          frame.style.setProperty("inset", "0", "important");
-          frame.style.setProperty("width", "100%", "important");
-          frame.style.setProperty("height", "100%", "important");
-          frame.style.setProperty("box-sizing", "border-box", "important");
         });
       };
       window.setPreviewZoom = function (zoom) {

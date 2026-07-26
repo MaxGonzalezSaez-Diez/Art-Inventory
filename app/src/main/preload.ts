@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
-  PriceListFormat,
   PriceListPayload
 } from "./pricelist";
 import type {
@@ -41,10 +40,24 @@ const api = {
   ): Promise<InventoryData> =>
     ipcRenderer.invoke("exhibition:save", input, artworkIds, listedPrices ?? {}),
   generatePriceList: (
-    format: PriceListFormat,
     payload: PriceListPayload
   ): Promise<string | null> =>
-    ipcRenderer.invoke("pricelist:generate", format, payload),
+    ipcRenderer.invoke("pricelist:generate", payload),
+  generateCertificateOfAuthenticity: (payload: {
+    title: string;
+    year?: string;
+    medium?: string;
+    size?: string;
+    series?: string;
+    edition?: string;
+    editionMode?: "unique" | "multiple";
+    editionCount?: number;
+    copyNumber?: number;
+    copyLabel?: string;
+    artistName?: string;
+    language?: "es" | "en" | "de";
+  }): Promise<string | null> =>
+    ipcRenderer.invoke("certificate:generate", payload),
   deleteExhibition: (exhibitionId: string): Promise<InventoryData> =>
     ipcRenderer.invoke("exhibition:delete", exhibitionId),
   addExhibitionSale: (
@@ -70,6 +83,11 @@ const api = {
     ipcRenderer.invoke("textGenerator:saveExamples", examples),
   writeClipboardText: (text: string): Promise<boolean> =>
     ipcRenderer.invoke("clipboard:writeText", text),
+  writeClipboardPrompt: (payload: {
+    text: string;
+    html?: string;
+    imageDataUrl?: string;
+  }): Promise<boolean> => ipcRenderer.invoke("clipboard:writePrompt", payload),
   exportPricingSheet: (payload: {
     filename: string;
     sheetName: string;
