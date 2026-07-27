@@ -151,7 +151,7 @@ export const DEFAULT_LOOKUPS: LookupOption[] = [
   { category: "status", value: "loaned", label: "Prestada" },
   { category: "status", value: "consigned", label: "En galería" },
   { category: "status", value: "in_exhibition", label: "En exposición" },
-  { category: "status", value: "post_show_gallery", label: "Con galería (tras exposición)" },
+  { category: "status", value: "post_show_gallery", label: "Tras exposición" },
   { category: "status", value: "payment_gallery", label: "Entregada como pago" },
   { category: "status", value: "per_copy", label: "Ver cada copia" },
   { category: "status", value: "archived", label: "Archivada" },

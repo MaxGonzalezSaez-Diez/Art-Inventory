@@ -192,43 +192,58 @@ function buildHtml(payload: CertificatePayload): string {
     @page { size: A4; margin: 0; }
     * { box-sizing: border-box; }
     /*
-      Typewriter face, flush-left text. Monospace keeps the label column of the
-      data block perfectly aligned without a table.
+      Editorial pairing: a high-contrast display serif for the headings and an
+      old-style text serif for reading copy. Both ship with macOS; the stacks
+      fall back to widely installed serifs elsewhere.
     */
     html, body {
       background: #fff;
       color: #17150f;
-      font-family: "American Typewriter", "Courier New", Courier, monospace;
+      font-family: "Hoefler Text", Baskerville, "Palatino Linotype", Palatino,
+        Georgia, "Times New Roman", serif;
+      font-kerning: normal;
       height: 100%;
       margin: 0;
       padding: 0;
+      text-rendering: geometricPrecision;
       width: 100%;
+    }
+    .display {
+      font-family: Didot, "Bodoni 72", "Hoefler Text", Baskerville, Georgia,
+        "Times New Roman", serif;
     }
     .page {
       display: flex;
       flex-direction: column;
       min-height: 297mm;
-      padding: 18mm;
+      padding: 16mm;
       width: 210mm;
     }
-    /* Hairline certificate frame, inset from the trim edge. */
+    /* Double hairline frame: the classic engraved-certificate border. */
     .frame {
-      border: 1px solid #b9b0a1;
+      border: 1.6pt solid #1d1a15;
       display: flex;
       flex: 1 1 auto;
       flex-direction: column;
-      padding: 16mm 18mm 14mm;
+      padding: 2.4mm;
+    }
+    .frame-inner {
+      border: 0.5pt solid #9a9184;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      padding: 15mm 17mm 13mm;
       text-align: left;
     }
     .letterhead {
-      border-bottom: 1px solid #d8d1c4;
+      border-bottom: 0.5pt solid #cdc5b6;
       flex: 0 0 auto;
       padding-bottom: 4mm;
     }
     .letterhead .who {
-      font-size: 10pt;
-      font-weight: 700;
-      letter-spacing: 0.22em;
+      font-size: 9.5pt;
+      font-weight: 400;
+      letter-spacing: 0.3em;
       text-transform: uppercase;
     }
     .main {
@@ -236,50 +251,52 @@ function buildHtml(payload: CertificatePayload): string {
       flex: 1 1 auto;
       flex-direction: column;
       justify-content: center;
-      padding: 10mm 0;
+      padding: 11mm 0;
     }
     h1 {
-      font-size: 19pt;
-      font-weight: 700;
-      letter-spacing: 0.16em;
-      line-height: 1.3;
-      margin: 0 0 3mm;
+      font-size: 23pt;
+      font-weight: 400;
+      letter-spacing: 0.22em;
+      line-height: 1.28;
+      margin: 0 0 4mm;
       text-transform: uppercase;
     }
     .rule {
       border: 0;
-      border-top: 2px solid #17150f;
+      border-top: 1.2pt solid #1d1a15;
       height: 0;
-      margin: 0 0 10mm;
-      width: 34mm;
+      margin: 0 0 11mm;
+      width: 30mm;
     }
     .lede {
       font-size: 11.5pt;
-      line-height: 1.7;
+      line-height: 1.75;
       margin: 0;
-      max-width: 140mm;
+      max-width: 138mm;
     }
     .work-title {
-      font-size: 15pt;
-      font-weight: 700;
-      line-height: 1.35;
+      font-size: 18pt;
+      font-style: italic;
+      font-weight: 400;
+      line-height: 1.32;
       margin: 6mm 0 9mm;
       overflow-wrap: anywhere;
     }
-    /* Label column is fixed so every value starts on the same character. */
     .details {
-      border-left: 2px solid #e0d9cb;
+      border-left: 0.5pt solid #cdc5b6;
       display: grid;
-      gap: 2.6mm 6mm;
-      grid-template-columns: 46mm minmax(0, 1fr);
-      margin: 0 0 9mm;
+      gap: 3.4mm 7mm;
+      /* Wide enough for the longest label in any language, e.g. AÑO DE PRODUCCIÓN. */
+      grid-template-columns: 50mm minmax(0, 1fr);
+      margin: 0 0 10mm;
       padding-left: 7mm;
     }
     .detail-label {
-      color: #6f675b;
-      font-size: 9pt;
-      letter-spacing: 0.1em;
-      padding-top: 0.6mm;
+      color: #6b6355;
+      font-size: 8.5pt;
+      letter-spacing: 0.14em;
+      line-height: 1.5;
+      padding-top: 0.7mm;
       text-transform: uppercase;
     }
     .detail-value {
@@ -289,16 +306,18 @@ function buildHtml(payload: CertificatePayload): string {
     }
     .closing {
       font-size: 11.5pt;
-      line-height: 1.7;
+      line-height: 1.75;
       margin: 0 0 4mm;
-      max-width: 140mm;
+      max-width: 138mm;
     }
+    .closing strong { font-weight: 600; }
     .confirm {
       color: #4a453e;
-      font-size: 10.5pt;
-      line-height: 1.65;
+      font-size: 10pt;
+      font-style: italic;
+      line-height: 1.7;
       margin: 0;
-      max-width: 140mm;
+      max-width: 138mm;
     }
     .foot {
       align-items: start;
@@ -309,15 +328,15 @@ function buildHtml(payload: CertificatePayload): string {
     }
     /* Equal writing band so both underlines sit on the same baseline. */
     .field-line {
-      border-bottom: 1px solid #17150f;
+      border-bottom: 0.7pt solid #1d1a15;
       height: 18mm;
       margin: 0;
       width: 100%;
     }
     .field-label {
-      color: #6f675b;
-      font-size: 8.5pt;
-      letter-spacing: 0.14em;
+      color: #6b6355;
+      font-size: 8pt;
+      letter-spacing: 0.18em;
       margin-top: 2.5mm;
       text-transform: uppercase;
     }
@@ -331,32 +350,38 @@ function buildHtml(payload: CertificatePayload): string {
 <body>
   <div class="page">
     <div class="frame">
-      <div class="letterhead">
-        <div class="who">${artist ? escapeHtml(artist) : escapeHtml(t.title)}</div>
-      </div>
-      <div class="main">
-        <h1>${escapeHtml(t.title)}</h1>
-        <hr class="rule" />
-        <p class="lede">${escapeHtml(t.certify)}</p>
-        <p class="work-title">${escapeHtml(t.openQuote)}${escapeHtml(
-          title
-        )}${escapeHtml(t.closeQuote)}</p>
-        <div class="details">
+      <div class="frame-inner">
+        <div class="letterhead">
+          <div class="who display">${
+            artist ? escapeHtml(artist) : escapeHtml(t.title)
+          }</div>
+        </div>
+        <div class="main">
+          <h1 class="display">${escapeHtml(t.title)}</h1>
+          <hr class="rule" />
+          <p class="lede">${escapeHtml(t.certify)}</p>
+          <p class="work-title display">${escapeHtml(t.openQuote)}${escapeHtml(
+            title
+          )}${escapeHtml(t.closeQuote)}</p>
+          <div class="details">
 ${detailLines.join("\n")}
+          </div>
+          <p class="closing">${artistClause}.</p>
+          <p class="confirm">${escapeHtml(t.confirms)}</p>
         </div>
-        <p class="closing">${artistClause}.</p>
-        <p class="confirm">${escapeHtml(t.confirms)}</p>
-      </div>
-      <div class="foot">
-        <div class="field">
-          <div class="field-line"></div>
-          <div class="field-label">${escapeHtml(t.signature)}</div>
-          <div class="field-value">${artist ? escapeHtml(artist) : "&nbsp;"}</div>
-        </div>
-        <div class="field">
-          <div class="field-line"></div>
-          <div class="field-label">${escapeHtml(t.date)}</div>
-          <div class="field-value">&nbsp;</div>
+        <div class="foot">
+          <div class="field">
+            <div class="field-line"></div>
+            <div class="field-label">${escapeHtml(t.signature)}</div>
+            <div class="field-value">${
+              artist ? escapeHtml(artist) : "&nbsp;"
+            }</div>
+          </div>
+          <div class="field">
+            <div class="field-line"></div>
+            <div class="field-label">${escapeHtml(t.date)}</div>
+            <div class="field-value">&nbsp;</div>
+          </div>
         </div>
       </div>
     </div>

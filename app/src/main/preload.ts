@@ -19,7 +19,7 @@ import type {
   SeriesInfoInput,
   TextGeneratorExample
 } from "./types/inventory";
-import type { ApplicationDocFormat, ApplicationPdfPayload } from "./applicationPdf";
+import type { ApplicationPdfPayload } from "./applicationPdf";
 
 const api = {
   getLibraryPath: (): Promise<string> => ipcRenderer.invoke("library:getPath"),
@@ -83,11 +83,16 @@ const api = {
     ipcRenderer.invoke("textGenerator:saveExamples", examples),
   writeClipboardText: (text: string): Promise<boolean> =>
     ipcRenderer.invoke("clipboard:writeText", text),
-  writeClipboardPrompt: (payload: {
-    text: string;
-    html?: string;
-    imageDataUrl?: string;
-  }): Promise<boolean> => ipcRenderer.invoke("clipboard:writePrompt", payload),
+  writeClipboardImageFiles: (
+    files: Array<{ name: string; sourcePath: string }>
+  ): Promise<{ count: number }> =>
+    ipcRenderer.invoke("clipboard:writeImageFiles", files),
+  openPhotoFolder: (
+    files: Array<{ name: string; sourcePath: string }>
+  ): Promise<{ count: number; folder: string }> =>
+    ipcRenderer.invoke("photos:openFolder", files),
+  startPhotoDrag: (files: Array<{ name: string; sourcePath: string }>): void =>
+    ipcRenderer.send("photos:startDrag", files),
   exportPricingSheet: (payload: {
     filename: string;
     sheetName: string;
@@ -108,10 +113,9 @@ const api = {
   deleteApplication: (applicationId: string): Promise<InventoryData> =>
     ipcRenderer.invoke("application:delete", applicationId),
   generateApplicationPdf: (
-    formatOrPayload: ApplicationDocFormat | ApplicationPdfPayload,
-    payload?: ApplicationPdfPayload
+    payload: ApplicationPdfPayload
   ): Promise<string | null> =>
-    ipcRenderer.invoke("application:generatePdf", formatOrPayload, payload),
+    ipcRenderer.invoke("application:generatePdf", payload),
   exportFinancialsSheet: (payload: {
     filename: string;
     fromDate?: string;

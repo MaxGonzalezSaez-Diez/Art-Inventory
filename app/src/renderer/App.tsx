@@ -92,7 +92,8 @@ type Page =
   | "financials"
   | "series"
   | "applications"
-  | "textGenerator";
+  | "textGenerator"
+  | "examples";
 
 interface PriceListPreset {
   exhibitionId?: string;
@@ -248,14 +249,11 @@ export function App() {
           <h1>Obras de arte</h1>
         </div>
         <nav>
-          <NavButton active={page === "library"} onClick={() => guarded(() => goTo("library"))}>
+          <NavButton active={page === "library" || page === "form" || page === "detail"} onClick={() => guarded(() => goTo("library"))}>
             <span className="nav-dot dot-obras" /> Lista de obras
           </NavButton>
           <NavButton active={page === "series"} onClick={() => guarded(() => goTo("series"))}>
             <span className="nav-dot dot-series" /> Series (metadatos)
-          </NavButton>
-          <NavButton active={page === "form"} onClick={() => guarded(startAdd)}>
-            <span className="nav-dot dot-add" /> Añadir obra
           </NavButton>
           <NavButton active={page === "contacts"} onClick={() => guarded(() => goTo("contacts"))}>
             <span className="nav-dot dot-people" /> Personas y galerías
@@ -301,6 +299,12 @@ export function App() {
           >
             <span className="nav-dot dot-textgen" /> Generador de texto
           </NavButton>
+          <NavButton
+            active={page === "examples"}
+            onClick={() => guarded(() => goTo("examples"))}
+          >
+            <span className="nav-dot dot-examples" /> Biblioteca de ejemplos
+          </NavButton>
         </nav>
         <div className="library-path">
           <span>Carpeta local</span>
@@ -341,7 +345,6 @@ export function App() {
               setSelectedArtworkId(artwork.id);
               goTo("detail");
             }}
-            onEdit={startEdit}
           />
         ) : page === "form" ? (
           <ArtworkForm
@@ -473,6 +476,17 @@ export function App() {
             setInventory={setInventory}
             onError={setMessage}
             onToast={setToast}
+            onOpenExampleLibrary={() => guarded(() => goTo("examples"))}
+          />
+        ) : page === "examples" ? (
+          <ExampleLibraryPage
+            inventory={inventory}
+            setInventory={setInventory}
+            onError={setMessage}
+            onToast={setToast}
+            onDirtyChange={setDirty}
+            saveRef={saveRef}
+            onOpenGenerator={() => guarded(() => goTo("textGenerator"))}
           />
         ) : (
           <div className="empty-state">Selecciona una obra.</div>
@@ -553,14 +567,12 @@ function LibraryPage({
   inventory,
   setInventory,
   onAdd,
-  onSelect,
-  onEdit
+  onSelect
 }: {
   inventory: InventoryData;
   setInventory: (data: InventoryData) => void;
   onAdd: () => void;
   onSelect: (artwork: Artwork) => void;
-  onEdit: (artwork: Artwork) => void;
 }) {
   const [showFilters, setShowFilters] = useState(true);
   const [sort, setSort] = useState<SortKey>("recent");
@@ -742,13 +754,12 @@ function LibraryPage({
         <div className="library-table-wrap">
           <div className="art-table">
             <div className="art-row art-row-header">
-              <span>Imagen</span>
-              <span>Nombre</span>
+              <span>Foto</span>
+              <span>Obra</span>
               <span>Serie</span>
               <span>Tipo</span>
               <span>Año</span>
               <span>Estado</span>
-              <span />
             </div>
             {artworks.length === 0 ? (
               <div className="table-empty">No hay obras que coincidan.</div>
@@ -760,7 +771,6 @@ function LibraryPage({
                   inventory={inventory}
                   setInventory={setInventory}
                   onSelect={() => onSelect(artwork)}
-                  onEdit={() => onEdit(artwork)}
                 />
               ))
             )}
@@ -775,34 +785,46 @@ function ArtworkRow({
   artwork,
   inventory,
   setInventory,
-  onSelect,
-  onEdit
+  onSelect
 }: {
   artwork: Artwork;
   inventory: InventoryData;
   setInventory: (data: InventoryData) => void;
   onSelect: () => void;
-  onEdit: () => void;
 }) {
   const image = mainImageFor(artwork, inventory);
   const imageUrl = useImageDataUrl(image?.absolutePath);
   const overdue = overdueMovement(artwork, inventory);
+  const statusLabel = labelFor(inventory, "status", artwork.status);
 
   return (
-    <div className="art-row">
-      <button className="thumb" onClick={onSelect}>
-        {imageUrl ? <img src={imageUrl} alt={artwork.title} /> : <span>Sin foto</span>}
-      </button>
-      <button className="link-button title-cell" onClick={onSelect}>
+    <div className="art-row" onClick={onSelect} role="button" tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="thumb">
+        {imageUrl ? <img src={imageUrl} alt="" /> : <span>Sin foto</span>}
+      </div>
+      <div className="title-cell">
         <strong>{artwork.title}</strong>
-        <small>{artwork.id}</small>
-      </button>
-      <span>{artwork.series || "-"}</span>
-      <span>{labelFor(inventory, "artworkType", artwork.type)}</span>
-      <span>{artwork.yearMade || "-"}</span>
-      <span className={`status-cell status-${slugify(artwork.status)}`}>
-        <span className={`status-pill st-${slugify(artwork.status)}`}>
-          {labelFor(inventory, "status", artwork.status)}
+      </div>
+      <span className="art-cell-text" title={artwork.series || undefined}>
+        {artwork.series || "—"}
+      </span>
+      <span className="art-cell-text">
+        {labelFor(inventory, "artworkType", artwork.type)}
+      </span>
+      <span className="art-cell-year">{artwork.yearMade || "—"}</span>
+      <div className={`status-cell status-${slugify(artwork.status)}`}>
+        <span
+          className={`status-pill st-${slugify(artwork.status)}`}
+          title={statusLabel}
+        >
+          {statusLabel}
         </span>
         {overdue && (
           <RetrievalMark
@@ -812,10 +834,7 @@ function ArtworkRow({
             setInventory={setInventory}
           />
         )}
-      </span>
-      <button className="ghost small" onClick={onEdit}>
-        Editar
-      </button>
+      </div>
     </div>
   );
 }
@@ -1021,31 +1040,35 @@ function ArtworkForm({
   const editions = form.editions ?? [];
 
   return (
-    <div className="form-card">
-      <div className="form-head">
+    <div className="form-card artwork-form">
+      <div className="form-head artwork-form-head">
         <div>
-          <p className="eyebrow">{form.id ? form.id : "Nueva obra"}</p>
-          <h2>{form.title || "Añadir obra"}</h2>
+          <p className="eyebrow">{form.id ? "Editar obra" : "Nueva obra"}</p>
+          <h2>{form.title.trim() || "Añadir obra"}</h2>
         </div>
         <div className="form-head-actions">
           {locked ? (
             <>
-              <span className="saved-badge">Guardado ✓</span>
-              <button onClick={() => setLocked(false)}>Editar</button>
-              <button className="ghost" onClick={onNew}>
-                + Nueva obra
+              <span className="saved-badge">Guardado</span>
+              <button type="button" onClick={() => setLocked(false)}>
+                Editar
               </button>
-              <button className="ghost" onClick={onBackToList}>
+              <button type="button" className="ghost" onClick={onNew}>
+                Nueva obra
+              </button>
+              <button type="button" className="ghost" onClick={onBackToList}>
                 Volver
               </button>
             </>
           ) : (
             <>
-              <button onClick={save}>Guardar</button>
-              <button className="ghost" onClick={onNew}>
-                + Nueva obra
+              <button type="button" onClick={() => void save()}>
+                Guardar
               </button>
-              <button className="ghost" onClick={onBackToList}>
+              <button type="button" className="ghost" onClick={onNew}>
+                Nueva obra
+              </button>
+              <button type="button" className="ghost" onClick={onBackToList}>
                 Cancelar
               </button>
             </>
@@ -1053,25 +1076,210 @@ function ArtworkForm({
         </div>
       </div>
 
-      <div className="image-strip">
-        <div className="image-strip-thumb">
-          {pendingImage ? (
-            <img src={pendingImage.dataUrl} alt={form.title} />
-          ) : imageUrl ? (
-            <img src={imageUrl} alt={form.title} />
-          ) : (
-            <span>Sin foto</span>
-          )}
-        </div>
-        <div className="image-strip-text">
-          <button className="ghost" onClick={addImage} disabled={locked}>
-            {pendingImage || imageUrl ? "Cambiar foto" : "Añadir foto"}
+      <div className="artwork-form-layout">
+        <aside className="artwork-form-photo">
+          <button
+            type="button"
+            className={`artwork-photo-frame${
+              pendingImage || imageUrl ? " has-image" : ""
+            }`}
+            onClick={() => {
+              if (!locked) void addImage();
+            }}
+            disabled={locked}
+            title={pendingImage || imageUrl ? "Cambiar foto" : "Añadir foto"}
+          >
+            {pendingImage ? (
+              <img src={pendingImage.dataUrl} alt="" />
+            ) : imageUrl ? (
+              <img src={imageUrl} alt="" />
+            ) : (
+              <span className="artwork-photo-empty">
+                <span className="artwork-photo-plus">+</span>
+                <span>Añadir foto</span>
+              </span>
+            )}
           </button>
-          <span className="muted">
+          <p className="muted small-note artwork-photo-hint">
             {pendingImage
-              ? "Foto lista. Se guardará al pulsar «Guardar»."
-              : "Elige la foto, recórtala y ajústala; se guarda con la obra."}
-          </span>
+              ? "Listo — se guarda con la obra."
+              : locked
+                ? "Pulsa «Editar» para cambiar la foto."
+                : "Clic para elegir y recortar."}
+          </p>
+        </aside>
+
+        <div className="artwork-form-main">
+          <div className="subtabs artwork-form-tabs">
+            <SubTab active={tab === "info"} onClick={() => setTab("info")}>
+              Información
+            </SubTab>
+            <SubTab
+              active={tab === "movimientos"}
+              onClick={() => setTab("movimientos")}
+            >
+              Movimientos
+              {(form.movements?.length ?? 0) > 0
+                ? ` · ${form.movements!.length}`
+                : ""}
+            </SubTab>
+          </div>
+
+          <fieldset className="tab-fieldset" disabled={locked}>
+            {tab === "info" && (
+              <div className="form-section artwork-form-section">
+                <div className="form-group">
+                  <p className="form-group-label">Identidad</p>
+                  <label className="field">
+                    Nombre / título
+                    <input
+                      value={form.title}
+                      placeholder="Título de la obra"
+                      onChange={(event) => update("title", event.target.value)}
+                    />
+                  </label>
+
+                  <div className="form-row">
+                    <LookupSelect
+                      inventory={inventory}
+                      setInventory={setInventory}
+                      category="artworkType"
+                      label="Tipo de arte"
+                      value={form.type}
+                      onChange={(value) => update("type", value)}
+                    />
+                    <SeriesField
+                      inventory={inventory}
+                      value={form.series ?? ""}
+                      onChange={(value) => update("series", value)}
+                    />
+                  </div>
+
+                  <div className="form-row">
+                    <label className="field">
+                      Año
+                      <input
+                        inputMode="numeric"
+                        maxLength={4}
+                        placeholder="YYYY"
+                        value={form.yearMade ?? ""}
+                        onChange={(event) =>
+                          update(
+                            "yearMade",
+                            event.target.value.replace(/[^0-9]/g, "").slice(0, 4)
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      Estado
+                      <input
+                        className="artwork-status-readonly"
+                        value={
+                          isSeries
+                            ? "Ver cada copia"
+                            : labelFor(
+                                inventory,
+                                "status",
+                                displayStatusFromMovements(
+                                  form.movements ?? [],
+                                  inventory
+                                )
+                              )
+                        }
+                        disabled
+                        readOnly
+                      />
+                    </label>
+                  </div>
+                  <p className="muted small-note">
+                    El estado se calcula solo a partir de los movimientos.
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <p className="form-group-label">Medidas</p>
+                  <div className="dimensions-row">
+                    <label className="field">
+                      Alto
+                      <input
+                        inputMode="decimal"
+                        value={form.height ?? ""}
+                        onChange={(event) => update("height", event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      Ancho
+                      <input
+                        inputMode="decimal"
+                        value={form.width ?? ""}
+                        onChange={(event) => update("width", event.target.value)}
+                      />
+                    </label>
+                    <label className={is3D ? "field" : "field disabled-field"}>
+                      Profundidad
+                      <input
+                        inputMode="decimal"
+                        disabled={!is3D}
+                        value={is3D ? form.depth ?? "" : ""}
+                        placeholder={is3D ? "" : "Solo 3D"}
+                        onChange={(event) => update("depth", event.target.value)}
+                      />
+                    </label>
+                    <label className="field unit-field">
+                      Unidad
+                      <select
+                        value={form.unit}
+                        onChange={(event) =>
+                          update("unit", event.target.value as "cm" | "in")
+                        }
+                      >
+                        <option value="cm">cm</option>
+                        <option value="in">pulgadas</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <p className="form-group-label">Edición</p>
+                  <EditionBlock
+                    inventory={inventory}
+                    setInventory={setInventory}
+                    form={form}
+                    update={update}
+                    setForm={setForm}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <p className="form-group-label">Notas</p>
+                  <label className="field">
+                    <span className="sr-only">Notas</span>
+                    <textarea
+                      className="notes-area"
+                      placeholder="Observaciones internas…"
+                      value={form.notes ?? ""}
+                      onChange={(event) => update("notes", event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {tab === "movimientos" && (
+              <MovementEditor
+                inventory={inventory}
+                setInventory={setInventory}
+                isSeries={isSeries}
+                editions={editions}
+                movements={form.movements ?? []}
+                onChange={setMovements}
+                artworkDraft={form}
+                collapseSignal={collapseSignal}
+              />
+            )}
+          </fieldset>
         </div>
       </div>
 
@@ -1083,162 +1291,14 @@ function ArtworkForm({
         />
       ) : null}
 
-      <div className="subtabs">
-        <SubTab active={tab === "info"} onClick={() => setTab("info")}>
-          Información
-        </SubTab>
-        <SubTab
-          active={tab === "movimientos"}
-          onClick={() => setTab("movimientos")}
-        >
-          Movimientos ({form.movements?.length ?? 0})
-        </SubTab>
-      </div>
-
-      <fieldset className="tab-fieldset" disabled={locked}>
-        {tab === "info" && (
-          <div className="form-section">
-            <label className="field">
-              Nombre / título
-              <input
-                value={form.title}
-                onChange={(event) => update("title", event.target.value)}
-              />
-            </label>
-
-            <div className="form-row">
-              <LookupSelect
-                inventory={inventory}
-                setInventory={setInventory}
-                category="artworkType"
-                label="Tipo de arte"
-                value={form.type}
-                onChange={(value) => update("type", value)}
-              />
-              <SeriesField
-                inventory={inventory}
-                value={form.series ?? ""}
-                onChange={(value) => update("series", value)}
-              />
-            </div>
-
-            <div className="form-row">
-              <label className="field">
-                Año
-                <input
-                  inputMode="numeric"
-                  maxLength={4}
-                  placeholder="YYYY"
-                  value={form.yearMade ?? ""}
-                  onChange={(event) =>
-                    update("yearMade", event.target.value.replace(/[^0-9]/g, "").slice(0, 4))
-                  }
-                />
-              </label>
-              <label className="field">
-                Estado (automático)
-                <input
-                  value={
-                    isSeries
-                      ? "Ver cada copia"
-                      : labelFor(
-                          inventory,
-                          "status",
-                          displayStatusFromMovements(form.movements ?? [], inventory)
-                        )
-                  }
-                  disabled
-                  readOnly
-                />
-              </label>
-            </div>
-
-            <p className="muted small-note">
-              El estado se calcula solo a partir de los <strong>movimientos</strong>.
-              Registra una venta, préstamo o exposición y el estado se actualizará.
-            </p>
-
-            <div className="dimensions">
-              <span className="dimensions-label">Medidas</span>
-              <div className="dimensions-row">
-                <label className="field">
-                  Alto
-                  <input
-                    inputMode="decimal"
-                    value={form.height ?? ""}
-                    onChange={(event) => update("height", event.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  Ancho
-                  <input
-                    inputMode="decimal"
-                    value={form.width ?? ""}
-                    onChange={(event) => update("width", event.target.value)}
-                  />
-                </label>
-                <label className={is3D ? "field" : "field disabled-field"}>
-                  Profundidad
-                  <input
-                    inputMode="decimal"
-                    disabled={!is3D}
-                    value={is3D ? form.depth ?? "" : ""}
-                    placeholder={is3D ? "" : "Solo 3D"}
-                    onChange={(event) => update("depth", event.target.value)}
-                  />
-                </label>
-                <label className="field unit-field">
-                  Unidad
-                  <select
-                    value={form.unit}
-                    onChange={(event) => update("unit", event.target.value as "cm" | "in")}
-                  >
-                    <option value="cm">cm</option>
-                    <option value="in">pulgadas</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            <EditionBlock
-              inventory={inventory}
-              setInventory={setInventory}
-              form={form}
-              update={update}
-              setForm={setForm}
-            />
-
-            <label className="field">
-              Notas
-              <textarea
-                className="notes-area"
-                value={form.notes ?? ""}
-                onChange={(event) => update("notes", event.target.value)}
-              />
-            </label>
-          </div>
-        )}
-
-        {tab === "movimientos" && (
-          <MovementEditor
-            inventory={inventory}
-            setInventory={setInventory}
-            isSeries={isSeries}
-            editions={editions}
-            movements={form.movements ?? []}
-            onChange={setMovements}
-            artworkDraft={form}
-            collapseSignal={collapseSignal}
-          />
-        )}
-      </fieldset>
-
       {error && <div className="error-banner">{error}</div>}
 
       {!locked && (
-        <div className="form-actions">
-          <button onClick={save}>Guardar</button>
-          <button className="ghost" onClick={onBackToList}>
+        <div className="form-actions artwork-form-actions">
+          <button type="button" onClick={() => void save()}>
+            Guardar
+          </button>
+          <button type="button" className="ghost" onClick={onBackToList}>
             Cancelar
           </button>
         </div>
@@ -1305,21 +1365,18 @@ function EditionBlock({
 
   return (
     <div className="edition-block">
-      <div className="form-row">
-        <label className="field">
-          ¿Obra única o varias copias?
-          <select
-            value={form.editionMode ?? "unique"}
-            onChange={(event) =>
-              update("editionMode", event.target.value as ArtworkInput["editionMode"])
-            }
-          >
-            <option value="unique">Única</option>
-            <option value="multiple">Varias copias</option>
-          </select>
-        </label>
-        <div className="field" />
-      </div>
+      <label className="field">
+        ¿Obra única o varias copias?
+        <select
+          value={form.editionMode ?? "unique"}
+          onChange={(event) =>
+            update("editionMode", event.target.value as ArtworkInput["editionMode"])
+          }
+        >
+          <option value="unique">Única</option>
+          <option value="multiple">Varias copias</option>
+        </select>
+      </label>
 
       {form.editionMode === "multiple" && (
         <div className="edition-detail">
@@ -1343,7 +1400,7 @@ function EditionBlock({
               />
             </label>
           </div>
-          <button type="button" className="ghost" onClick={generate}>
+          <button type="button" className="ghost small" onClick={generate}>
             Generar lista de copias
           </button>
           {editions.length > 0 && (
@@ -1372,7 +1429,7 @@ function EditionBlock({
           )}
           <p className="muted small-note">
             Cada copia tiene su propio estado. Registra ventas, regalos o
-            exposiciones de una copia en la pestaña Movimientos eligiendo «¿Qué copia?».
+            exposiciones de una copia en Movimientos eligiendo «¿Qué copia?».
           </p>
         </div>
       )}
@@ -8580,119 +8637,29 @@ async function copyTextToClipboard(text: string): Promise<void> {
   if (!ok) throw new Error("No se pudo copiar al portapapeles.");
 }
 
-function escapeHtmlText(value: string): string {
+/** Accent- and case-insensitive haystack for the example searches. */
+function searchKey(value: string): string {
   return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
-/** Build a single PNG collage so ChatGPT can see several paintings in one paste. */
-async function buildArtworkCollageDataUrl(
-  dataUrls: string[],
-  labels: string[]
-): Promise<string | undefined> {
-  const urls = dataUrls.filter(Boolean);
-  if (urls.length === 0) return undefined;
-
-  const loadImage = (src: string) =>
-    new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("No se pudo cargar la imagen"));
-      img.src = src;
-    });
-
-  const images: HTMLImageElement[] = [];
-  for (const url of urls) {
-    try {
-      images.push(await loadImage(url));
-    } catch {
-      /* skip broken */
-    }
-  }
-  if (images.length === 0) return undefined;
-
-  const cell = 360;
-  const gap = 16;
-  const labelH = 28;
-  const cols = Math.min(3, images.length);
-  const rows = Math.ceil(images.length / cols);
-  const canvas = document.createElement("canvas");
-  canvas.width = cols * cell + (cols + 1) * gap;
-  canvas.height = rows * (cell + labelH) + (rows + 1) * gap;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return undefined;
-  ctx.fillStyle = "#f4f0e8";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.font = "14px Georgia, serif";
-  ctx.fillStyle = "#2a2620";
-  ctx.textAlign = "center";
-
-  images.forEach((img, index) => {
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    const x = gap + col * (cell + gap);
-    const y = gap + row * (cell + labelH + gap);
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(x, y, cell, cell);
-    const scale = Math.min(cell / img.width, cell / img.height);
-    const w = Math.max(1, Math.round(img.width * scale));
-    const h = Math.max(1, Math.round(img.height * scale));
-    const dx = x + Math.round((cell - w) / 2);
-    const dy = y + Math.round((cell - h) / 2);
-    ctx.drawImage(img, dx, dy, w, h);
-    ctx.strokeStyle = "#d8d0c2";
-    ctx.strokeRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
-    const label = (labels[index] || `Obra ${index + 1}`).slice(0, 42);
-    ctx.fillStyle = "#2a2620";
-    ctx.fillText(label, x + cell / 2, y + cell + 18, cell - 8);
-  });
-
-  return canvas.toDataURL("image/png");
+function countWords(value: string): number {
+  const trimmed = value.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
 }
 
-/**
- * Puts the prompt on the clipboard. Paintings travel as one PNG collage,
- * because ChatGPT attaches clipboard images but ignores data: URLs inside HTML.
- * Passing an empty text copies the collage on its own.
- */
-async function copyPromptWithPaintings(options: {
-  text: string;
-  imageDataUrls: string[];
-  labels: string[];
-}): Promise<{ imageCount: number }> {
-  const usableImages = options.imageDataUrls.filter(Boolean);
-  const collage = await buildArtworkCollageDataUrl(
-    options.imageDataUrls,
-    options.labels
-  );
-  const api = window.inventoryApi?.writeClipboardPrompt;
-  if (typeof api !== "function") {
-    await copyTextToClipboard(options.text);
-    return { imageCount: 0 };
-  }
-
-  if (!options.text.trim()) {
-    await api({ text: "", imageDataUrl: collage });
-    return { imageCount: collage ? usableImages.length : 0 };
-  }
-
-  const imgsHtml = options.imageDataUrls
-    .map((src, index) => {
-      if (!src) return "";
-      const label = escapeHtmlText(options.labels[index] || `Obra ${index + 1}`);
-      return `<figure style="margin:12px 0"><img src="${src}" alt="${label}" style="max-width:420px;height:auto;display:block"/><figcaption>${label}</figcaption></figure>`;
-    })
-    .filter(Boolean)
-    .join("");
-  const html = `<div><pre style="white-space:pre-wrap;font-family:Georgia,serif">${escapeHtmlText(
-    options.text
-  )}</pre>${imgsHtml}</div>`;
-
-  await api({ text: options.text, html, imageDataUrl: collage });
-  return { imageCount: collage ? usableImages.length : 0 };
+function exampleMatchesSearch(
+  example: TextGeneratorExample,
+  search: string
+): boolean {
+  const term = searchKey(search.trim());
+  if (!term) return true;
+  const haystack = searchKey(`${example.topic} ${example.body}`);
+  return term
+    .split(/\s+/)
+    .every((word) => haystack.includes(word));
 }
 
 function normalizeTextExample(
@@ -10599,16 +10566,259 @@ function SeriesDetailPanel({
   );
 }
 
-function TextGeneratorPage({
+function ExampleLibraryPage({
   inventory,
   setInventory,
   onError,
-  onToast
+  onToast,
+  onDirtyChange,
+  saveRef,
+  onOpenGenerator
 }: {
   inventory: InventoryData;
   setInventory: (data: InventoryData) => void;
   onError: (message: string) => void;
   onToast: (message: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
+  onOpenGenerator: () => void;
+}) {
+  const stored = useMemo(
+    () => (inventory.textGeneratorExamples ?? []).map(normalizeTextExample),
+    [inventory.textGeneratorExamples]
+  );
+  const [examples, setExamples] = useState<TextGeneratorExample[]>(stored);
+  const [search, setSearch] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setExamples(stored);
+  }, [stored]);
+
+  const dirty = JSON.stringify(examples) !== JSON.stringify(stored);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    return () => onDirtyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function persist(): Promise<boolean> {
+    setSaving(true);
+    try {
+      const cleaned = examples
+        .map(normalizeTextExample)
+        .filter((example) => example.topic.trim() || example.body.trim());
+      const data = await requireApi("saveTextGeneratorExamples")(cleaned);
+      setInventory(data);
+      onDirtyChange?.(false);
+      onToast("Biblioteca guardada.");
+      return true;
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : "No se pudo guardar la biblioteca."
+      );
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!saveRef) return;
+    saveRef.current = () => persist();
+    return () => {
+      if (saveRef) saveRef.current = null;
+    };
+  });
+
+  function addExample() {
+    const id = `example-${Date.now()}`;
+    setSearch("");
+    setExamples((current) => [{ id, topic: "", body: "" }, ...current]);
+    setEditingId(id);
+  }
+
+  function update(id: string, patch: Partial<TextGeneratorExample>) {
+    setExamples((current) =>
+      current.map((example) =>
+        example.id === id ? { ...example, ...patch } : example
+      )
+    );
+  }
+
+  function remove(id: string) {
+    setExamples((current) => current.filter((example) => example.id !== id));
+    if (editingId === id) setEditingId(null);
+  }
+
+  const list = examples.filter((example) =>
+    exampleMatchesSearch(example, search)
+  );
+
+  return (
+    <section className="list-page examples-page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Textos de referencia</p>
+          <h2>Biblioteca de ejemplos</h2>
+          <p className="page-lead">
+            Guarda aquí textos que te gusten (tuyos o de otros). En el Generador
+            de texto podrás elegir cuáles usar como referencia de tono.
+          </p>
+        </div>
+        <div className="row-actions">
+          <button type="button" className="ghost" onClick={onOpenGenerator}>
+            Ir al generador
+          </button>
+          <button
+            type="button"
+            className="cuentas-primary"
+            disabled={!dirty || saving}
+            onClick={() => void persist()}
+          >
+            {saving ? "Guardando…" : dirty ? "Guardar cambios" : "Todo guardado"}
+          </button>
+        </div>
+      </div>
+
+      <div className="examples-toolbar">
+        <input
+          className="search-input grow"
+          placeholder="Buscar por tema o por palabras del texto..."
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        <span className="count-pill">
+          {search ? `${list.length} de ${examples.length}` : `${examples.length}`}{" "}
+          ejemplo{examples.length === 1 ? "" : "s"}
+        </span>
+        <button type="button" onClick={addExample}>
+          + Nuevo ejemplo
+        </button>
+      </div>
+
+      {examples.length === 0 ? (
+        <div className="empty-state">
+          Todavía no hay ejemplos. Pulsa «+ Nuevo ejemplo» y pega un texto que
+          te guste.
+        </div>
+      ) : list.length === 0 ? (
+        <p className="muted">Ningún ejemplo coincide con esa búsqueda.</p>
+      ) : (
+        <div className="examples-grid">
+          {list.map((example) => {
+            const editing = editingId === example.id;
+            const body = example.body.trim();
+            const open = expandedId === example.id;
+            return (
+              <article
+                className={`example-card${editing ? " is-editing" : ""}`}
+                key={example.id}
+              >
+                {editing ? (
+                  <>
+                    <input
+                      className="example-topic-input"
+                      value={example.topic}
+                      placeholder="Tema (ej. declaración de artista)"
+                      autoFocus
+                      onChange={(event) =>
+                        update(example.id, { topic: event.target.value })
+                      }
+                    />
+                    <textarea
+                      rows={12}
+                      value={example.body}
+                      placeholder="Pega aquí el texto de ejemplo…"
+                      onChange={(event) =>
+                        update(example.id, { body: event.target.value })
+                      }
+                    />
+                    <div className="example-card-actions">
+                      <button
+                        type="button"
+                        className="ghost danger small"
+                        onClick={() => remove(example.id)}
+                      >
+                        Borrar
+                      </button>
+                      <button
+                        type="button"
+                        className="small"
+                        onClick={() => setEditingId(null)}
+                      >
+                        Listo
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="example-card-head">
+                      <strong>{example.topic || "Sin tema"}</strong>
+                      <span className="muted small-note">
+                        {countWords(body)} palabras
+                      </span>
+                    </div>
+                    <p className={`example-card-body${open ? " is-open" : ""}`}>
+                      {body || (
+                        <span className="muted">Sin texto todavía.</span>
+                      )}
+                    </p>
+                    <div className="example-card-actions">
+                      {body.length > 260 && (
+                        <button
+                          type="button"
+                          className="ghost small"
+                          onClick={() =>
+                            setExpandedId(open ? null : example.id)
+                          }
+                        >
+                          {open ? "Ver menos" : "Ver entero"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => setEditingId(example.id)}
+                      >
+                        Editar
+                      </button>
+                    </div>
+                  </>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {dirty && (
+        <p className="muted small-note examples-dirty-note">
+          Tienes cambios sin guardar.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function TextGeneratorPage({
+  inventory,
+  setInventory,
+  onError,
+  onToast,
+  onOpenExampleLibrary
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+  onOpenExampleLibrary: () => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showPicker, setShowPicker] = useState(false);
@@ -10630,8 +10840,9 @@ function TextGeneratorPage({
     Array<{ id: string; url: string; note: string }>
   >([]);
   const [dictationHelpOpen, setDictationHelpOpen] = useState(false);
-  const [examples, setExamples] = useState<TextGeneratorExample[]>(() =>
-    (inventory.textGeneratorExamples ?? []).map(normalizeTextExample)
+  const examples = useMemo(
+    () => (inventory.textGeneratorExamples ?? []).map(normalizeTextExample),
+    [inventory.textGeneratorExamples]
   );
   const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>([]);
   const [selectedSeriesTextKeys, setSelectedSeriesTextKeys] = useState<string[]>(
@@ -10641,17 +10852,22 @@ function TextGeneratorPage({
   const [expandedTextKey, setExpandedTextKey] = useState<string | null>(null);
   const [seriesOpen, setSeriesOpen] = useState(false);
   const [showOtherSeries, setShowOtherSeries] = useState(false);
-  const [examplesOpen, setExamplesOpen] = useState(false);
-  const [editingExampleId, setEditingExampleId] = useState<string | null>(null);
-  const [savingExamples, setSavingExamples] = useState(false);
-  const [copying, setCopying] = useState<null | "all" | "text" | "images">(null);
-  const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
+  const [examplePickerOpen, setExamplePickerOpen] = useState(false);
+  const [copying, setCopying] = useState<null | "text" | "images" | "folder">(
+    null
+  );
+  const [photos, setPhotos] = useState<
+    Record<string, { dataUrl: string; sourcePath: string }>
+  >({});
   const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const autoSeriesKeysRef = useRef<Set<string>>(new Set());
 
+  // Drop picks that no longer exist in the library.
   useEffect(() => {
-    setExamples((inventory.textGeneratorExamples ?? []).map(normalizeTextExample));
-  }, [inventory.textGeneratorExamples]);
+    setSelectedExampleIds((current) =>
+      current.filter((id) => examples.some((example) => example.id === id))
+    );
+  }, [examples]);
 
   useEffect(() => {
     setSystemPrompt(
@@ -10667,37 +10883,42 @@ function TextGeneratorPage({
     selectedArtworks.map((artwork) => artwork.series)
   );
   const artworksWithPhoto = selectedArtworks.filter((art) =>
-    Boolean(previewImages[art.id])
+    Boolean(photos[art.id])
   );
   const missingPhotoCount = selectedArtworks.length - artworksWithPhoto.length;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const next: Record<string, string> = {};
+      const next: Record<string, { dataUrl: string; sourcePath: string }> = {};
       for (const art of selectedArtworks) {
-        const image = inventory.images.find(
-          (img) =>
-            img.targetType === "artwork" &&
-            img.targetId === art.id &&
-            img.category === "main"
-        );
-        if (image?.absolutePath) {
-          try {
-            next[art.id] = await window.inventoryApi.imageToDataUrl(
+        const image = mainImageFor(art, inventory);
+        if (!image?.absolutePath) continue;
+        try {
+          next[art.id] = {
+            dataUrl: await window.inventoryApi.imageToDataUrl(
               image.absolutePath
-            );
-          } catch {
-            /* skip */
-          }
+            ),
+            sourcePath: image.absolutePath
+          };
+        } catch {
+          /* skip unreadable photo */
         }
       }
-      if (!cancelled) setPreviewImages(next);
+      if (!cancelled) setPhotos(next);
     })();
     return () => {
       cancelled = true;
     };
   }, [selectedArtworks.map((a) => a.id).join("|"), inventory.images]);
+
+  const pickedExamples = useMemo(
+    () =>
+      selectedExampleIds
+        .map((id) => examples.find((example) => example.id === id))
+        .filter((example): example is TextGeneratorExample => Boolean(example)),
+    [selectedExampleIds, examples]
+  );
 
   const seriesForPrompt = useMemo(() => {
     const fromWorks = selectedSeriesNames
@@ -10753,7 +10974,7 @@ function TextGeneratorPage({
     if (selectedArtworks.length > 0) {
       blocks.push(
         "OBRAS SELECCIONADAS",
-        "Las imágenes de estas obras van adjuntas en el portapapeles (collage / HTML). Úsalas como referencia visual.",
+        "Las fotos de estas obras se adjuntan en el mismo chat, justo después de este texto. Úsalas como referencia visual.",
         selectedArtworks
           .map((artwork, index) => {
             const lines = [
@@ -10801,15 +11022,13 @@ function TextGeneratorPage({
       );
     }
 
-    const pickedExamples = examples.filter(
-      (example) =>
-        selectedExampleIds.includes(example.id) &&
-        (example.topic.trim() || example.body.trim())
+    const usableExamples = pickedExamples.filter(
+      (example) => example.topic.trim() || example.body.trim()
     );
-    if (pickedExamples.length > 0) {
+    if (usableExamples.length > 0) {
       blocks.push(
         "EJEMPLOS DE TEXTOS / REFERENCIAS DE ESTILO",
-        pickedExamples
+        usableExamples
           .map(
             (example, index) =>
               `EJEMPLO ${index + 1}${
@@ -10849,8 +11068,7 @@ function TextGeneratorPage({
     freeText,
     selectedArtworks,
     selectedSeriesTextKeys,
-    selectedExampleIds,
-    examples,
+    pickedExamples,
     referenceLinks,
     inventory,
     responseLanguageLine
@@ -10870,42 +11088,11 @@ function TextGeneratorPage({
     setDictationHelpOpen(true);
   }
 
-  function addExample() {
-    const id = `example-${Date.now()}`;
-    setExamples((current) => [...current, { id, topic: "", body: "" }]);
-    setSelectedExampleIds((current) => [...current, id]);
-    setExamplesOpen(true);
-    setEditingExampleId(id);
-  }
-
   function addReferenceLink() {
     setReferenceLinks((current) => [
       ...current,
       { id: `link-${Date.now()}`, url: "", note: "" }
     ]);
-  }
-
-  async function saveExamples() {
-    setSavingExamples(true);
-    try {
-      const cleaned = examples.map(normalizeTextExample);
-      const data = await requireApi("saveTextGeneratorExamples")(cleaned);
-      setInventory(data);
-      setExamples((data.textGeneratorExamples ?? []).map(normalizeTextExample));
-      onToast("Biblioteca de ejemplos guardada.");
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudieron guardar.");
-    } finally {
-      setSavingExamples(false);
-    }
-  }
-
-  function toggleExample(id: string) {
-    setSelectedExampleIds((current) =>
-      current.includes(id)
-        ? current.filter((item) => item !== id)
-        : [...current, id]
-    );
   }
 
   function toggleSeriesText(key: string) {
@@ -10942,7 +11129,7 @@ function TextGeneratorPage({
     }
   }
 
-  async function copyPrompt(mode: "all" | "text" | "images") {
+  async function copyText() {
     const hasSomething =
       selectedArtworks.length > 0 ||
       freeText.trim() ||
@@ -10953,39 +11140,78 @@ function TextGeneratorPage({
       onError("Añade al menos una obra, una nota, un enlace, un texto de serie o un ejemplo.");
       return;
     }
-    if (mode === "images" && artworksWithPhoto.length === 0) {
-      onError("Ninguna de las obras elegidas tiene foto principal.");
-      return;
-    }
-    setCopying(mode);
+    setCopying("text");
     try {
-      const labels = artworksWithPhoto.map((art) => art.title);
-      const imageDataUrls = artworksWithPhoto.map((art) => previewImages[art.id]);
-      const { imageCount } = await copyPromptWithPaintings({
-        text: mode === "images" ? "" : generatedText,
-        imageDataUrls: mode === "text" ? [] : imageDataUrls,
-        labels: mode === "text" ? [] : labels
-      });
-      if (mode === "text") {
-        onToast("Texto copiado. Pégalo en ChatGPT con ⌘V.");
-      } else if (mode === "images") {
-        onToast(
-          `${imageCount} foto${imageCount === 1 ? "" : "s"} copiada${
-            imageCount === 1 ? "" : "s"
-          }. Pega en ChatGPT con ⌘V para adjuntarlas.`
-        );
-      } else {
-        onToast(
-          imageCount > 0
-            ? `Texto + ${imageCount} foto${imageCount === 1 ? "" : "s"} copiados. Pega en el chat (⌘V).`
-            : "Texto copiado. Ya puedes pegarlo en ChatGPT."
-        );
-      }
+      await copyTextToClipboard(generatedText);
+      onToast("Texto copiado. Pégalo en ChatGPT con ⌘V.");
     } catch (error) {
       onError(
         error instanceof Error
           ? error.message
           : "No se pudo copiar. Selecciona el texto a la derecha y cópialo con ⌘C."
+      );
+    } finally {
+      setCopying(null);
+    }
+  }
+
+  function photoFiles() {
+    return artworksWithPhoto.map((art) => ({
+      name: art.title,
+      sourcePath: photos[art.id].sourcePath
+    }));
+  }
+
+  function startPhotoDrag() {
+    const api = window.inventoryApi?.startPhotoDrag;
+    if (typeof api !== "function") {
+      onError(
+        "La app necesita reiniciarse para arrastrar las fotos. Cierra la ventana y vuelve a abrirla."
+      );
+      return;
+    }
+    api(photoFiles());
+  }
+
+  async function openPhotoFolder() {
+    if (artworksWithPhoto.length === 0) {
+      onError("Ninguna de las obras elegidas tiene foto principal.");
+      return;
+    }
+    setCopying("folder");
+    try {
+      const { count } = await requireApi("openPhotoFolder")(photoFiles());
+      onToast(
+        `${count} foto${count === 1 ? "" : "s"} en la carpeta «Fotos para el chat». Arrástralas al chat desde ahí.`
+      );
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : "No se pudo abrir la carpeta."
+      );
+    } finally {
+      setCopying(null);
+    }
+  }
+
+  async function copyPhotos() {
+    if (artworksWithPhoto.length === 0) {
+      onError("Ninguna de las obras elegidas tiene foto principal.");
+      return;
+    }
+    setCopying("images");
+    try {
+      const { count } = await requireApi("writeClipboardImageFiles")(
+        photoFiles()
+      );
+      if (count === 0) throw new Error("No se pudo leer ninguna de las fotos.");
+      onToast(
+        `${count} foto${count === 1 ? "" : "s"} copiada${
+          count === 1 ? "" : "s"
+        }. Pega en el chat con ⌘V para adjuntarla${count === 1 ? "" : "s"}.`
+      );
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : "No se pudieron copiar las fotos."
       );
     } finally {
       setCopying(null);
@@ -11094,18 +11320,10 @@ function TextGeneratorPage({
           <p className="eyebrow">Ayuda para redactar</p>
           <h2>Generador de texto</h2>
           <p className="page-lead">
-            Reúne obras (con foto), textos de series, notas y ejemplos. Copia el
-            resultado y pégalo en ChatGPT.
+            Reúne obras, textos de series, notas y ejemplos. Después copia el
+            texto y las fotos al chat, en dos pasos.
           </p>
         </div>
-        <button
-          type="button"
-          className="cuentas-primary"
-          disabled={copying !== null}
-          onClick={() => void copyPrompt("all")}
-        >
-          {copying === "all" ? "Copiando…" : "Copiar para ChatGPT"}
-        </button>
       </div>
 
       <div className="textgen-summary">
@@ -11120,8 +11338,7 @@ function TextGeneratorPage({
           {selectedSeriesTextKeys.length === 1 ? "" : "s"} de serie
         </span>
         <span className="textgen-chip">
-          {selectedExampleIds.length} ejemplo
-          {selectedExampleIds.length === 1 ? "" : "s"}
+          {pickedExamples.length} ejemplo{pickedExamples.length === 1 ? "" : "s"}
         </span>
         {missingPhotoCount > 0 && (
           <span className="textgen-chip warn">
@@ -11214,11 +11431,8 @@ function TextGeneratorPage({
                       }
                     />
                     <div className="textgen-work-thumb">
-                      {previewImages[artwork.id] ? (
-                        <img
-                          src={previewImages[artwork.id]}
-                          alt=""
-                        />
+                      {photos[artwork.id] ? (
+                        <img src={photos[artwork.id].dataUrl} alt="" />
                       ) : (
                         <span className="muted">Sin foto</span>
                       )}
@@ -11455,180 +11669,150 @@ function TextGeneratorPage({
 
           <div className="pl-block">
             <div className="pl-block-head">
-              <button
-                type="button"
-                className="textgen-collapse-toggle"
-                onClick={() => setExamplesOpen((open) => !open)}
-              >
-                <span className="pl-block-title">
-                  4. Biblioteca de ejemplos
-                  {selectedExampleIds.length > 0
-                    ? ` (${selectedExampleIds.length})`
-                    : ""}
-                </span>
-                <span className="muted">{examplesOpen ? "▲" : "▼"}</span>
-              </button>
-              {examplesOpen && (
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    className="ghost small"
-                    onClick={addExample}
-                  >
-                    + Ejemplo
-                  </button>
-                  <button
-                    type="button"
-                    className="small"
-                    disabled={savingExamples}
-                    onClick={() => void saveExamples()}
-                  >
-                    {savingExamples ? "…" : "Guardar"}
-                  </button>
-                </div>
-              )}
+              <span className="pl-block-title">
+                4. Ejemplos de estilo
+                {pickedExamples.length > 0 ? ` (${pickedExamples.length})` : ""}
+              </span>
+              <div className="row-actions">
+                <button
+                  type="button"
+                  className="ghost small"
+                  onClick={onOpenExampleLibrary}
+                >
+                  Abrir biblioteca
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExamplePickerOpen(true)}
+                >
+                  + Elegir ejemplos
+                </button>
+              </div>
             </div>
-            {!examplesOpen ? (
+            {examples.length === 0 ? (
               <p className="muted small-note">
-                Cerrado. Ábrelo para marcar o editar ejemplos de estilo.
+                Tu biblioteca está vacía. Guarda ahí los textos que te gusten
+                («Abrir biblioteca») y luego elígelos desde aquí.
               </p>
-            ) : examples.length === 0 ? (
+            ) : pickedExamples.length === 0 ? (
               <p className="muted small-note">
-                Aún no hay ejemplos. Pulsa «+ Ejemplo» arriba a la derecha.
+                Ningún ejemplo elegido. ChatGPT los usa como referencia de tono,
+                nunca los copia.
               </p>
             ) : (
               <div className="textgen-example-list">
-                {examples.map((example) => {
-                  const isEditing = editingExampleId === example.id;
-                  return (
-                    <div
-                      className={`textgen-example${isEditing ? " is-editing" : ""}`}
-                      key={example.id}
-                    >
-                      <div className="textgen-example-head">
-                        <label className="textgen-check textgen-check-inline">
-                          <input
-                            type="checkbox"
-                            checked={selectedExampleIds.includes(example.id)}
-                            onChange={() => toggleExample(example.id)}
-                          />
-                          <span>
-                            <strong>{example.topic || "Sin tema"}</strong>
-                          </span>
-                        </label>
-                        <div className="row-actions">
-                          <button
-                            type="button"
-                            className="ghost small"
-                            onClick={() =>
-                              setEditingExampleId(isEditing ? null : example.id)
-                            }
-                          >
-                            {isEditing ? "Cerrar" : "Editar"}
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost danger small"
-                            onClick={() => {
-                              setExamples((current) =>
-                                current.filter((item) => item.id !== example.id)
-                              );
-                              setSelectedExampleIds((current) =>
-                                current.filter((id) => id !== example.id)
-                              );
-                              if (editingExampleId === example.id) {
-                                setEditingExampleId(null);
-                              }
-                            }}
-                          >
-                            Borrar
-                          </button>
-                        </div>
-                      </div>
-                      {!isEditing && example.body.trim() && (
-                        <p className="muted small-note textgen-example-preview">
-                          {example.body.trim().slice(0, 110)}
-                          {example.body.trim().length > 110 ? "…" : ""}
-                        </p>
-                      )}
-                      {isEditing && (
-                        <div className="textgen-example-edit">
-                          <input
-                            value={example.topic}
-                            placeholder="Tema (ej. declaración de artista)"
-                            onChange={(event) =>
-                              setExamples((current) =>
-                                current.map((item) =>
-                                  item.id === example.id
-                                    ? { ...item, topic: event.target.value }
-                                    : item
-                                )
-                              )
-                            }
-                          />
-                          <textarea
-                            rows={6}
-                            value={example.body}
-                            placeholder="Pega aquí el texto de ejemplo…"
-                            onChange={(event) =>
-                              setExamples((current) =>
-                                current.map((item) =>
-                                  item.id === example.id
-                                    ? { ...item, body: event.target.value }
-                                    : item
-                                )
-                              )
-                            }
-                          />
-                        </div>
-                      )}
+                {pickedExamples.map((example) => (
+                  <div className="textgen-example" key={example.id}>
+                    <div className="textgen-example-head">
+                      <strong>{example.topic || "Sin tema"}</strong>
+                      <button
+                        type="button"
+                        className="ghost danger small"
+                        onClick={() =>
+                          setSelectedExampleIds((current) =>
+                            current.filter((id) => id !== example.id)
+                          )
+                        }
+                      >
+                        Quitar
+                      </button>
                     </div>
-                  );
-                })}
+                    {example.body.trim() && (
+                      <p className="muted small-note textgen-example-preview">
+                        {example.body.trim().slice(0, 110)}
+                        {example.body.trim().length > 110 ? "…" : ""}
+                      </p>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>
         </div>
 
         <div className="textgen-preview-pane">
+          <div className="textgen-steps">
+            <div className="textgen-step">
+              <span className="textgen-step-num">1</span>
+              <div className="textgen-step-text">
+                <strong>Copia el texto</strong>
+                <span className="muted small-note">
+                  Pégalo en ChatGPT con ⌘V.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="cuentas-primary"
+                disabled={copying !== null}
+                onClick={() => void copyText()}
+              >
+                {copying === "text" ? "…" : "Copiar texto"}
+              </button>
+            </div>
+            <div className="textgen-step">
+              <span className="textgen-step-num">2</span>
+              <div className="textgen-step-text">
+                <strong>Copia las fotos</strong>
+                <span className="muted small-note">
+                  {artworksWithPhoto.length === 0
+                    ? "Ninguna obra elegida tiene foto principal."
+                    : artworksWithPhoto.length === 1
+                      ? "1 foto. Vuelve al mismo chat y pega otra vez con ⌘V."
+                      : `${artworksWithPhoto.length} fotos. Al pegar solo entra una; para llevarlas todas usa el recuadro de abajo.`}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="cuentas-primary"
+                disabled={copying !== null || artworksWithPhoto.length === 0}
+                onClick={() => void copyPhotos()}
+              >
+                {copying === "images" ? "…" : "Copiar fotos"}
+              </button>
+            </div>
+            <div className="textgen-steps-note">
+              <p className="muted small-note">
+                El Mac solo guarda una cosa a la vez en el portapapeles, por eso
+                van en dos pasos: primero el texto, después las fotos.
+              </p>
+              {artworksWithPhoto.length > 1 && (
+                <div className="textgen-fallback">
+                  <p className="muted small-note">
+                    Arrastra este recuadro hasta la ventana del chat y se
+                    adjuntan las {artworksWithPhoto.length} de una vez.
+                  </p>
+                  <div
+                    className="textgen-drag-tile"
+                    draggable
+                    onDragStart={(event) => {
+                      event.preventDefault();
+                      startPhotoDrag();
+                    }}
+                  >
+                    <span aria-hidden>⇧</span>
+                    Arrastrar {artworksWithPhoto.length} fotos al chat
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost small"
+                    disabled={copying !== null}
+                    onClick={() => void openPhotoFolder()}
+                  >
+                    {copying === "folder"
+                      ? "…"
+                      : "O abrir la carpeta con las fotos"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
           <div className="textgen-preview-head">
             <div>
               <span className="pl-block-title">Texto preparado</span>
               <p className="muted small-note">
-                Solo incluye lo que hayas marcado arriba.
+                Solo incluye lo que hayas marcado a la izquierda.
               </p>
             </div>
-            <button
-              type="button"
-              disabled={copying !== null}
-              onClick={() => void copyPrompt("all")}
-            >
-              {copying === "all" ? "…" : "Copiar texto + fotos"}
-            </button>
-          </div>
-          <div className="textgen-copy-split">
-            <button
-              type="button"
-              className="ghost small"
-              disabled={copying !== null}
-              onClick={() => void copyPrompt("text")}
-            >
-              {copying === "text" ? "…" : "Solo el texto"}
-            </button>
-            <button
-              type="button"
-              className="ghost small"
-              disabled={copying !== null || artworksWithPhoto.length === 0}
-              onClick={() => void copyPrompt("images")}
-            >
-              {copying === "images"
-                ? "…"
-                : `Solo las fotos (${artworksWithPhoto.length})`}
-            </button>
-            <span className="muted small-note">
-              Si ChatGPT no coge las fotos al pegar, usa «Solo las fotos» y pega
-              otra vez.
-            </span>
           </div>
           <textarea
             className="textgen-output"
@@ -11653,7 +11837,139 @@ function TextGeneratorPage({
           onClose={() => setShowPicker(false)}
         />
       )}
+
+      {examplePickerOpen && (
+        <ExamplePickerModal
+          examples={examples}
+          initialIds={selectedExampleIds}
+          onConfirm={(ids) => {
+            setSelectedExampleIds(ids);
+            setExamplePickerOpen(false);
+          }}
+          onOpenLibrary={() => {
+            setExamplePickerOpen(false);
+            onOpenExampleLibrary();
+          }}
+          onClose={() => setExamplePickerOpen(false)}
+        />
+      )}
     </section>
+  );
+}
+
+function ExamplePickerModal({
+  examples,
+  initialIds,
+  onConfirm,
+  onOpenLibrary,
+  onClose
+}: {
+  examples: TextGeneratorExample[];
+  initialIds: string[];
+  onConfirm: (ids: string[]) => void;
+  onOpenLibrary: () => void;
+  onClose: () => void;
+}) {
+  const [picked, setPicked] = useState<string[]>(initialIds);
+  const [search, setSearch] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const list = examples.filter((example) =>
+    exampleMatchesSearch(example, search)
+  );
+
+  function toggle(id: string) {
+    setPicked((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    );
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal modal-wide"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h3>Elegir ejemplos de estilo</h3>
+          <button className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-toolbar">
+          <input
+            className="search-input grow"
+            placeholder="Buscar por tema o por palabras del texto..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            autoFocus
+          />
+          <button type="button" className="ghost small" onClick={onOpenLibrary}>
+            Abrir biblioteca
+          </button>
+        </div>
+        <div className="modal-body modal-pick-list">
+          {examples.length === 0 ? (
+            <p className="muted">
+              Todavía no hay ejemplos guardados. Añádelos en la Biblioteca de
+              ejemplos.
+            </p>
+          ) : list.length === 0 ? (
+            <p className="muted">Ningún ejemplo coincide con esa búsqueda.</p>
+          ) : (
+            list.map((example) => {
+              const open = openId === example.id;
+              const body = example.body.trim();
+              return (
+                <div
+                  className={`example-pick${
+                    picked.includes(example.id) ? " is-picked" : ""
+                  }`}
+                  key={example.id}
+                >
+                  <label className="example-pick-head">
+                    <input
+                      type="checkbox"
+                      className="picker-check"
+                      checked={picked.includes(example.id)}
+                      onChange={() => toggle(example.id)}
+                    />
+                    <span className="pick-title">
+                      {example.topic || "Sin tema"}
+                    </span>
+                    <span className="muted picker-meta">
+                      {countWords(body)} palabras
+                    </span>
+                  </label>
+                  <p className="muted small-note example-pick-preview">
+                    {open ? body : `${body.slice(0, 160)}${body.length > 160 ? "…" : ""}`}
+                  </p>
+                  {body.length > 160 && (
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={() => setOpenId(open ? null : example.id)}
+                    >
+                      {open ? "Ocultar" : "Ver entero"}
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+        <div className="modal-actions">
+          <button type="button" onClick={() => onConfirm(picked)}>
+            Usar {picked.length} ejemplo{picked.length === 1 ? "" : "s"}
+          </button>
+          <button type="button" className="ghost" onClick={onClose}>
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -12034,12 +12350,7 @@ function ApplicationEditor({
     (async () => {
       const next: Record<string, string> = {};
       for (const art of selectedArts) {
-        const image = inventory.images.find(
-          (img) =>
-            img.targetType === "artwork" &&
-            img.targetId === art.id &&
-            img.category === "main"
-        );
+        const image = mainImageFor(art, inventory);
         if (image?.absolutePath) {
           next[art.id] = await window.inventoryApi.imageToDataUrl(image.absolutePath);
         }
@@ -12396,12 +12707,12 @@ function ApplicationEditor({
     window.addEventListener("pointerup", onUp);
   }
 
-  async function exportDoc(format: "pdf" | "docx") {
+  async function exportPdf() {
     await persist();
     setExportBusy(true);
     try {
-      const path = await requireApi("generateApplicationPdf")(format, buildPayload());
-      if (path) onToast(format === "docx" ? "Word generado." : "PDF generado.");
+      const path = await requireApi("generateApplicationPdf")(buildPayload());
+      if (path) onToast("PDF generado.");
     } catch (error) {
       onError(error instanceof Error ? error.message : "No se pudo generar.");
     } finally {
@@ -12424,17 +12735,9 @@ function ApplicationEditor({
             type="button"
             className="ghost"
             disabled={exportBusy}
-            onClick={() => void exportDoc("pdf")}
+            onClick={() => void exportPdf()}
           >
-            {exportBusy ? "…" : "PDF"}
-          </button>
-          <button
-            type="button"
-            className="ghost"
-            disabled={exportBusy}
-            onClick={() => void exportDoc("docx")}
-          >
-            Word
+            {exportBusy ? "…" : "Generar PDF"}
           </button>
           <button type="button" disabled={busy} onClick={() => void persist()}>
             {busy ? "Guardando…" : "Guardar"}

@@ -8,7 +8,8 @@ import {
   shell,
   type OpenDialogOptions
 } from "electron";
-import { readFile, copyFile, writeFile } from "fs/promises";
+import { readFile, copyFile, mkdir, rm, writeFile } from "fs/promises";
+import { copyFileSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import path from "path";
@@ -25,7 +26,6 @@ import {
 } from "./certificateOfAuthenticity";
 import {
   generateApplicationDocument,
-  type ApplicationDocFormat,
   type ApplicationPdfPayload
 } from "./applicationPdf";
 import { exportImage, probeImage, type ImageExportOptions } from "./imageExport";
@@ -166,31 +166,165 @@ ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
   return true;
 });
 
+/** Folder holding the last batch of photos handed to the clipboard. */
+let clipboardPhotoDir = "";
+
+/** 1x1 transparent PNG, only used if a photo cannot be read as a drag icon. */
+const DRAG_FALLBACK_ICON =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+function safeFileName(value: string): string {
+  return value
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+}
+
+function filenamesPlist(paths: string[]): string {
+  const items = paths
+    .map(
+      (item) =>
+        `<string>${item
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")}</string>`
+    )
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><array>${items}</array></plist>`;
+}
+
+/**
+ * Puts the photos on the clipboard as real files, the same shape Finder uses,
+ * so pasting into ChatGPT attaches them. A pasteboard holds one kind of
+ * content at a time, so this always replaces any copied text.
+ */
+async function writeImageFilesToClipboard(
+  files: Array<{ name?: string; sourcePath?: string }>
+): Promise<{ count: number }> {
+  const dir = path.join(tmpdir(), "obras-portapapeles", randomUUID());
+  await mkdir(dir, { recursive: true });
+  const copied: string[] = [];
+  for (const [index, file] of files.entries()) {
+    const source = String(file?.sourcePath ?? "");
+    if (!source) continue;
+    const position = String(index + 1).padStart(2, "0");
+    const label = safeFileName(String(file?.name ?? "")) || `obra ${position}`;
+    const target = path.join(
+      dir,
+      `${position} ${label}${path.extname(source) || ".jpg"}`
+    );
+    try {
+      await copyFile(source, target);
+      copied.push(target);
+    } catch {
+      /* skip unreadable photo */
+    }
+  }
+  if (copied.length === 0) {
+    await rm(dir, { recursive: true, force: true });
+    return { count: 0 };
+  }
+
+  if (process.platform === "darwin") {
+    clipboard.writeBuffer(
+      "NSFilenamesPboardType",
+      Buffer.from(filenamesPlist(copied), "utf8")
+    );
+  } else {
+    const image = nativeImage.createFromPath(copied[0]);
+    if (image.isEmpty()) return { count: 0 };
+    clipboard.writeImage(image);
+  }
+
+  const previous = clipboardPhotoDir;
+  clipboardPhotoDir = dir;
+  if (previous) await rm(previous, { recursive: true, force: true });
+  return { count: process.platform === "darwin" ? copied.length : 1 };
+}
+
 ipcMain.handle(
-  "clipboard:writePrompt",
-  async (
-    _event,
-    payload: { text?: string; html?: string; imageDataUrl?: string }
-  ) => {
-    const text = String(payload?.text ?? "");
-    const html = payload?.html != null ? String(payload.html) : "";
-    const dataUrl = String(payload?.imageDataUrl ?? "");
-    const data: {
-      text: string;
-      html?: string;
-      image?: Electron.NativeImage;
-    } = { text };
-    if (html.trim()) data.html = html;
-    if (dataUrl.startsWith("data:image")) {
+  "clipboard:writeImageFiles",
+  async (_event, files: Array<{ name?: string; sourcePath?: string }>) =>
+    writeImageFilesToClipboard(Array.isArray(files) ? files : [])
+);
+
+/**
+ * ChatGPT attaches only the first pasted photo, but it takes every dropped one,
+ * so the photos can also be dragged straight out of the window.
+ */
+ipcMain.on(
+  "photos:startDrag",
+  (event, files: Array<{ name?: string; sourcePath?: string }>) => {
+    const staged = stagePhotosSync(Array.isArray(files) ? files : []);
+    if (staged.length === 0) return;
+    let icon = nativeImage.createFromPath(staged[0]);
+    icon = icon.isEmpty()
+      ? nativeImage.createFromDataURL(DRAG_FALLBACK_ICON)
+      : icon.resize({ width: 128 });
+    event.sender.startDrag({ file: staged[0], files: staged, icon });
+  }
+);
+
+/**
+ * Same folder trick as the clipboard copy, but synchronous: a drag has to start
+ * within the gesture or macOS drops it.
+ */
+function stagePhotosSync(
+  files: Array<{ name?: string; sourcePath?: string }>
+): string[] {
+  const dir = path.join(tmpdir(), "obras-portapapeles", randomUUID());
+  mkdirSync(dir, { recursive: true });
+  const staged: string[] = [];
+  for (const [index, file] of files.entries()) {
+    const source = String(file?.sourcePath ?? "");
+    if (!source) continue;
+    const position = String(index + 1).padStart(2, "0");
+    const label = safeFileName(String(file?.name ?? "")) || `obra ${position}`;
+    const target = path.join(
+      dir,
+      `${position} ${label}${path.extname(source) || ".jpg"}`
+    );
+    try {
+      copyFileSync(source, target);
+      staged.push(target);
+    } catch {
+      /* skip unreadable photo */
+    }
+  }
+  if (staged.length === 0) rmSync(dir, { recursive: true, force: true });
+  return staged;
+}
+
+/**
+ * All the photos in one folder, opened in the Finder, for when dragging from
+ * the window is awkward.
+ */
+ipcMain.handle(
+  "photos:openFolder",
+  async (_event, files: Array<{ name?: string; sourcePath?: string }>) => {
+    const list = Array.isArray(files) ? files : [];
+    const dir = path.join(app.getPath("downloads"), "Fotos para el chat");
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    let count = 0;
+    for (const [index, file] of list.entries()) {
+      const source = String(file?.sourcePath ?? "");
+      if (!source) continue;
+      const position = String(index + 1).padStart(2, "0");
+      const label = safeFileName(String(file?.name ?? "")) || `obra ${position}`;
       try {
-        const image = nativeImage.createFromDataURL(dataUrl);
-        if (!image.isEmpty()) data.image = image;
+        await copyFile(
+          source,
+          path.join(dir, `${position} ${label}${path.extname(source) || ".jpg"}`)
+        );
+        count += 1;
       } catch {
-        /* ignore bad image */
+        /* skip unreadable photo */
       }
     }
-    clipboard.write(data);
-    return true;
+    if (count > 0) await shell.openPath(dir);
+    return { count, folder: dir };
   }
 );
 ipcMain.handle("expense:save", async (_event, input: ExpenseInput) =>
@@ -213,17 +347,8 @@ ipcMain.handle("application:delete", async (_event, applicationId: string) =>
 );
 ipcMain.handle(
   "application:generatePdf",
-  async (
-    _event,
-    format: ApplicationDocFormat | ApplicationPdfPayload,
-    maybePayload?: ApplicationPdfPayload
-  ) => {
-    // Accept either (format, payload) or legacy (payload) only.
-    if (typeof format === "string") {
-      return generateApplicationDocument(mainWindow, format, maybePayload!);
-    }
-    return generateApplicationDocument(mainWindow, "pdf", format);
-  }
+  async (_event, payload: ApplicationPdfPayload) =>
+    generateApplicationDocument(mainWindow, payload)
 );
 ipcMain.handle(
   "pricing:exportSheet",
