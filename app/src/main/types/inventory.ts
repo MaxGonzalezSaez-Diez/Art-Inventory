@@ -306,15 +306,42 @@ export interface TaxRate {
   from?: string; // DD-MM-YYYY effective date; "" = always
 }
 
+/** One flat price that becomes effective on a given date (within a technique). */
+export interface FixedPricePeriod {
+  id: string;
+  from: string; // DD-MM-YYYY; "" = from the beginning
+  price: number;
+}
+
+/**
+ * Flat price timeline for a technique that does not use size factors
+ * (e.g. Ipad Drawings). Same idea as size-type factors: each row is
+ * «from this date, the price is this».
+ */
+export interface FixedTypePrice {
+  typeValue: string;
+  prices: FixedPricePeriod[];
+}
+
 export interface AppSettings {
   sizeTypes: SizeType[];
   taxRates: TaxRate[];
+  /** Techniques priced as a flat amount instead of (alto+ancho) × factor. */
+  fixedTypePrices?: FixedTypePrice[];
   /**
    * Fixed system instructions prepended to Generador de texto copies.
    * Editable in a quiet panel on that page.
    */
   textGeneratorSystemPrompt?: string;
 }
+
+/** Built-in flat-price techniques seeded into a new library (editable later). */
+export const DEFAULT_FIXED_TYPE_PRICES: FixedTypePrice[] = [
+  {
+    typeValue: "ipad_drawing",
+    prices: [{ id: "fp-ipad-default", from: "", price: 250 }]
+  }
+];
 
 export const DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT = `Eres el apoyo de una artista: secretaria, galerista e historiadora del arte. Redactas textos (notas de sala, dossiers, solicitudes, presentaciones de obra) con voz elocuente, precisa y humana — nunca grandilocuente ni de folleto publicitario. No inventes datos (títulos, medidas, fechas, biografía, materiales). Si falta información, márcala entre corchetes. Conserva la voz de la artista cuando haya notas o ejemplos; úsalos como referencia de tono, no como plantilla rígida.`;
 

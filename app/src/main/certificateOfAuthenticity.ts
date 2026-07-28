@@ -161,8 +161,19 @@ function buildHtml(payload: CertificatePayload): string {
   if (!edition) {
     if (payload.editionMode === "multiple") {
       edition = t.copyOf(Math.min(copyNum, total), total);
-      if (copyLabel && copyLabel !== edition) {
-        edition = `${edition} (${copyLabel})`;
+      // Only append a custom label when it adds info beyond "n of total"
+      // (e.g. a named state). Skip bare "9/10" / "9 de 10" style labels.
+      if (copyLabel) {
+        const normalized = copyLabel.replace(/\s+/g, "").toLowerCase();
+        const bareFraction = `${copyNum}/${total}`;
+        const alreadySaid =
+          normalized === bareFraction ||
+          normalized === `${copyNum}de${total}` ||
+          normalized === `${copyNum}of${total}` ||
+          normalized === `${copyNum}von${total}`;
+        if (!alreadySaid && copyLabel !== edition) {
+          edition = `${edition} (${copyLabel})`;
+        }
       }
     } else {
       edition = t.unique;

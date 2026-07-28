@@ -965,18 +965,21 @@ p {
   width: 1px;
 }
 
-.artwork-form {
+.artwork-form,
+.exhibition-form {
   gap: 1.35rem;
   padding: 1.55rem 1.65rem 1.4rem;
 }
 
-.artwork-form-head {
+.artwork-form-head,
+.exhibition-form-head {
   align-items: flex-start;
   border-bottom: 1px solid var(--line-soft);
   padding-bottom: 1.05rem;
 }
 
-.artwork-form-head .eyebrow {
+.artwork-form-head .eyebrow,
+.exhibition-form-head .eyebrow {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 700;
@@ -985,7 +988,8 @@ p {
   text-transform: uppercase;
 }
 
-.artwork-form-head h2 {
+.artwork-form-head h2,
+.exhibition-form-head h2 {
   font-family: Georgia, "Times New Roman", serif;
   font-size: 1.85rem;
   font-weight: 500;
@@ -1094,17 +1098,20 @@ p {
   padding: 0.55rem 0.95rem;
 }
 
-.artwork-form-section {
+.artwork-form-section,
+.exhibition-form-section {
   gap: 1.45rem;
   max-width: none;
 }
 
-.artwork-form .form-group {
+.artwork-form .form-group,
+.exhibition-form .form-group {
   display: grid;
   gap: 0.85rem;
 }
 
-.artwork-form .form-group-label {
+.artwork-form .form-group-label,
+.exhibition-form .form-group-label {
   color: var(--muted);
   font-size: 0.7rem;
   font-weight: 700;
@@ -1113,7 +1120,8 @@ p {
   text-transform: uppercase;
 }
 
-.artwork-form .field {
+.artwork-form .field,
+.exhibition-form .field {
   color: #6f675b;
   font-size: 0.8rem;
   font-weight: 650;
@@ -1125,7 +1133,12 @@ p {
 .artwork-form .field select,
 .artwork-form .field textarea,
 .artwork-form .lookup-row select,
-.artwork-form .notes-area {
+.artwork-form .notes-area,
+.exhibition-form .field input,
+.exhibition-form .field select,
+.exhibition-form .field textarea,
+.exhibition-form .lookup-row select,
+.exhibition-form .notes-area {
   border-radius: 11px;
   padding: 0.7rem 0.85rem;
 }
@@ -1140,18 +1153,58 @@ p {
   gap: 0.75rem;
 }
 
-.artwork-form .form-row {
+.artwork-form .form-row,
+.exhibition-form .form-row {
   gap: 0.85rem;
 }
 
-.artwork-form .small-note {
+.artwork-form .small-note,
+.exhibition-form .small-note {
   margin-top: -0.15rem;
 }
 
-.artwork-form-actions {
+.artwork-form-actions,
+.exhibition-form-actions {
   border-top: 1px solid var(--line-soft);
   justify-content: flex-end;
   padding-top: 1rem;
+}
+
+.exhibition-form .artwork-picker {
+  background: #faf8f3;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  padding: 0.95rem 1rem 1rem;
+}
+
+.exhibition-form .artwork-picker-head {
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.exhibition-form .artwork-picker-head h3 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.15rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.exhibition-form .exhibition-empty-artworks {
+  border: 1px dashed #d2c8b8;
+  border-radius: 12px;
+  margin: 0.35rem 0 0;
+  padding: 1.1rem 1rem;
+  text-align: center;
+}
+
+.exhibition-form .danger-zone {
+  border-radius: 12px;
+  margin-top: 0.35rem;
+}
+
+.exhibition-form .exhibition-artworks-group {
+  gap: 0.65rem;
 }
 
 .artwork-form .copy-list {
@@ -4606,6 +4659,24 @@ button.ghost.danger:hover {
 .pricing-line-row:hover {
   background: #f3f0e8;
   border-color: var(--line-soft);
+}
+
+.pricing-fixed-row {
+  cursor: default;
+  grid-template-columns: minmax(7rem, 1.4fr) minmax(6rem, 0.8fr) 1.5rem;
+}
+
+.pricing-fixed-row:hover {
+  background: transparent;
+}
+
+.pricing-fixed-price {
+  margin: 0;
+}
+
+.pricing-fixed-price input {
+  max-width: 7rem;
+  text-align: right;
 }
 
 .pricing-line-row strong {

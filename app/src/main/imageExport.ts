@@ -162,7 +162,7 @@ function applyDpiMetadata(
   return format === "png" ? setPngDpi(buffer, dpi) : setJpegDpi(buffer, dpi);
 }
 
-/** Fit image inside a pixel box, preserving aspect ratio (never crops). */
+/** Fit image inside a pixel box, preserving aspect ratio (never crops, never upscales). */
 function resizeToFitBox(
   image: NativeImage,
   boxW: number,
@@ -170,7 +170,8 @@ function resizeToFitBox(
 ): NativeImage {
   const { width, height } = image.getSize();
   if (width <= 0 || height <= 0) return image;
-  const scale = Math.min(boxW / width, boxH / height);
+  // Cap at 1 so a small photo is never stretched — that only makes it blurry.
+  const scale = Math.min(1, boxW / width, boxH / height);
   const newW = Math.max(1, Math.round(width * scale));
   const newH = Math.max(1, Math.round(height * scale));
   if (newW === width && newH === height) return image;

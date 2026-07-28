@@ -18,6 +18,7 @@ import type {
   ExhibitionInput,
   Expense,
   ExpenseInput,
+  FixedTypePrice,
   ImportedImage,
   InventoryData,
   LookupInput,
@@ -28,7 +29,7 @@ import type {
   TextGeneratorExample,
   EditionMode
 } from "../types/inventory";
-import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT } from "../types/inventory";
+import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT, DEFAULT_FIXED_TYPE_PRICES } from "../types/inventory";
 import {
   createEmptyWorkbook,
   ensureLibrary,
@@ -1267,37 +1268,17 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 function defaultSettings(): AppSettings {
-  const year = new Date().getFullYear();
-  const from = `01-01-${year}`;
+  // Clean install: no size bands, factors or tax rates. The user configures
+  // those under «Factores y precios» — never seed sample size data.
+  // Fixed technique prices (e.g. Ipad Drawings = 250) come from the built-in
+  // defaults and can be edited later; they are not size-factor bands.
   return {
-    sizeTypes: [
-      {
-        id: "st-pequeno",
-        label: "Pequeño",
-        fromSum: 0,
-        toSum: 100,
-        factors: [{ id: "f-peq", from, factor: 20 }]
-      },
-      {
-        id: "st-mediano",
-        label: "Mediano",
-        fromSum: 101,
-        toSum: 200,
-        factors: [{ id: "f-med", from, factor: 22 }]
-      },
-      {
-        id: "st-grande",
-        label: "Grande",
-        fromSum: 201,
-        toSum: 0,
-        factors: [{ id: "f-gran", from, factor: 24 }]
-      }
-    ],
-    taxRates: [
-      { id: "tax-es", country: "España", rate: 21, from: "" },
-      { id: "tax-de", country: "Alemania", rate: 19, from: "" },
-      { id: "tax-none", country: "Sin impuesto", rate: 0, from: "" }
-    ],
+    sizeTypes: [],
+    taxRates: [],
+    fixedTypePrices: DEFAULT_FIXED_TYPE_PRICES.map((p) => ({
+      typeValue: p.typeValue,
+      prices: p.prices.map((period) => ({ ...period }))
+    })),
     textGeneratorSystemPrompt: DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
   };
 }
@@ -1320,22 +1301,62 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
           : []
       }))
     : [];
+  const taxRates = Array.isArray(raw.taxRates)
+    ? raw.taxRates.map((tax, index) => ({
+        id: tax.id || `tax-${index}`,
+        country: String(tax.country ?? "").trim(),
+        rate: Number(tax.rate) || 0,
+        from: String(tax.from ?? "").trim()
+      }))
+    : [];
+  const storedFixed = Array.isArray(raw.fixedTypePrices)
+    ? raw.fixedTypePrices
+        .map((item, index) => {
+          const typeValue = String(item.typeValue ?? "").trim();
+          if (!typeValue) return null;
+          // New shape: prices[] timeline. Legacy shape: single `price` number.
+          const legacy = item as FixedTypePrice & { price?: number };
+          let prices: FixedTypePrice["prices"] = [];
+          if (Array.isArray(legacy.prices) && legacy.prices.length > 0) {
+            prices = legacy.prices.map((period, pIndex) => ({
+              id: period.id || `fp-${index}-${pIndex}`,
+              from: String(period.from ?? "").trim(),
+              price: Number(period.price) || 0
+            }));
+          } else if (Number(legacy.price) > 0) {
+            prices = [
+              {
+                id: `fp-${index}-legacy`,
+                from: "",
+                price: Number(legacy.price)
+              }
+            ];
+          }
+          prices = prices.filter((p) => p.price > 0);
+          if (prices.length === 0) return null;
+          return { typeValue, prices };
+        })
+        .filter((item): item is FixedTypePrice => item != null)
+    : [];
+  // Keep saved overrides; fill in any built-in technique that is still missing.
+  const fixedByType = new Map(storedFixed.map((p) => [p.typeValue, p]));
+  for (const def of DEFAULT_FIXED_TYPE_PRICES) {
+    if (!fixedByType.has(def.typeValue)) {
+      fixedByType.set(def.typeValue, {
+        typeValue: def.typeValue,
+        prices: def.prices.map((p) => ({ ...p }))
+      });
+    }
+  }
   const prompt =
     typeof raw.textGeneratorSystemPrompt === "string"
       ? raw.textGeneratorSystemPrompt.trim()
       : "";
   return {
-    // Seed starter sizes only when the user has never configured any.
-    sizeTypes: sizeTypes.length > 0 ? sizeTypes : base.sizeTypes,
-    taxRates:
-      Array.isArray(raw.taxRates) && raw.taxRates.length > 0
-        ? raw.taxRates.map((tax, index) => ({
-            id: tax.id || `tax-${index}`,
-            country: String(tax.country ?? "").trim(),
-            rate: Number(tax.rate) || 0,
-            from: String(tax.from ?? "").trim()
-          }))
-        : base.taxRates,
+    // Keep whatever is stored — including an empty list. Never re-seed size defaults.
+    sizeTypes,
+    taxRates,
+    fixedTypePrices: [...fixedByType.values()],
     textGeneratorSystemPrompt:
       prompt || base.textGeneratorSystemPrompt || DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
   };

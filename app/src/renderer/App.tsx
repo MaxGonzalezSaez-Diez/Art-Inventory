@@ -37,6 +37,8 @@ import type {
   ExpenseInput,
   SeriesInfo,
   SeriesInfoInput,
+  FixedTypePrice,
+  FixedPricePeriod,
   SeriesText,
   Application,
   ApplicationInput,
@@ -46,14 +48,18 @@ import type {
   CoverLineStyle,
   TextGeneratorExample
 } from "../main/types/inventory";
-import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT } from "../main/types/inventory";
+import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT, DEFAULT_FIXED_TYPE_PRICES } from "../main/types/inventory";
+import { DEFAULT_LOOKUPS } from "../main/excel/schema";
 import type { AppPreferences } from "../main/preferences";
 import {
   LANGUAGE_OPTIONS,
   LanguageProvider,
+  lookupLabel,
   translate,
+  useLanguage,
   useT,
   type Lang,
+  type StringKey,
   type Translate
 } from "./i18n";
 import { buildApplicationHtml } from "../main/applicationDocumentHtml";
@@ -85,7 +91,7 @@ async function importEditedArtworkImage(dataUrl: string, artworkId: string) {
     return api.importImageFromPath(tempPath, "artwork", artworkId, "main");
   }
   throw new Error(
-    "Reinicia completamente la aplicación para guardar fotos editadas."
+    "La app necesita reiniciarse para guardar la foto. Cierra la ventana y vuelve a abrirla."
   );
 }
 
@@ -181,7 +187,7 @@ export function App() {
       setInventory(data);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "No se pudo cargar.");
+      setMessage(error instanceof Error ? error.message : t("common.error.load"));
     }
   }
 
@@ -194,7 +200,7 @@ export function App() {
   async function changeLanguage(next: Lang) {
     setPrefs((current) => (current ? { ...current, language: next } : current));
     try {
-      await requireApi("setLanguage")(next);
+      await requireApi("setLanguage", t)(next);
     } catch {
       /* the choice still applies to this session */
     }
@@ -268,7 +274,7 @@ export function App() {
   if (!prefs) return <div className="boot-screen">…</div>;
 
   const lang = prefs.language;
-  const t: Translate = (key) => translate(lang, key);
+  const t: Translate = (key, vars) => translate(lang, key, vars);
 
   if (!prefs.setupComplete) {
     return (
@@ -391,7 +397,7 @@ export function App() {
             <button
               type="button"
               className="banner-dismiss"
-              aria-label="Cerrar"
+              aria-label={t("common.close")}
               onClick={() => setMessage("")}
             >
               ✕
@@ -399,7 +405,7 @@ export function App() {
           </div>
         )}
         {!inventory ? (
-          <div className="empty-state">Preparando el archivo Excel...</div>
+          <div className="empty-state">{t("app.loadingExcel")}</div>
         ) : page === "library" ? (
           <LibraryPage
             inventory={inventory}
@@ -419,7 +425,7 @@ export function App() {
             onNew={() => guarded(startAdd)}
             onSaved={(savedId) => {
               setSelectedArtworkId(savedId);
-              setToast("Guardado correctamente.");
+              setToast(t("common.toast.saved"));
             }}
             onBackToList={() => guarded(goBack)}
             onDirtyChange={setDirty}
@@ -553,7 +559,7 @@ export function App() {
             onOpenGenerator={() => guarded(() => goTo("textGenerator"))}
           />
         ) : (
-          <div className="empty-state">Selecciona una obra.</div>
+          <div className="empty-state">{t("app.selectArtwork")}</div>
         )}
       </main>
 
@@ -561,9 +567,9 @@ export function App() {
         <div className="modal-backdrop" onClick={() => setPendingNav(null)}>
           <div className="modal confirm-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3>Tienes cambios sin guardar</h3>
+              <h3>{t("unsaved.title")}</h3>
             </div>
-            <p className="confirm-message">¿Qué quieres hacer con los cambios?</p>
+            <p className="confirm-message">{t("unsaved.question")}</p>
             <div className="leave-choices">
               <button
                 className="leave-choice"
@@ -581,8 +587,8 @@ export function App() {
                   action?.();
                 }}
               >
-                <strong>{saving ? "Guardando…" : "Guardar y salir"}</strong>
-                <span>Guarda los cambios y continúa.</span>
+                <strong>{saving ? t("common.saving") : t("unsaved.saveExit")}</strong>
+                <span>{t("unsaved.saveExit.hint")}</span>
               </button>
               <button
                 className="leave-choice danger-choice"
@@ -594,16 +600,16 @@ export function App() {
                   action?.();
                 }}
               >
-                <strong>Salir sin guardar</strong>
-                <span>Los cambios recientes se perderán.</span>
+                <strong>{t("unsaved.discard")}</strong>
+                <span>{t("unsaved.discard.hint")}</span>
               </button>
               <button
                 className="leave-choice ghost-choice"
                 disabled={saving}
                 onClick={() => setPendingNav(null)}
               >
-                <strong>Seguir editando</strong>
-                <span>Vuelve al formulario sin salir.</span>
+                <strong>{t("unsaved.stay")}</strong>
+                <span>{t("unsaved.stay.hint")}</span>
               </button>
             </div>
           </div>
@@ -665,7 +671,7 @@ function SetupScreen({
 
   async function pickCustom() {
     try {
-      const picked = await requireApi("pickLibraryParent")();
+      const picked = await requireApi("pickLibraryParent", t)();
       if (!picked) return;
       setCustomPath(picked);
       setTarget(picked);
@@ -678,7 +684,7 @@ function SetupScreen({
     setWorking(true);
     setError("");
     try {
-      const saved = await requireApi("completeSetup")({
+      const saved = await requireApi("completeSetup", t)({
         language: preferences.language,
         libraryPath: target
       });
@@ -790,6 +796,7 @@ function LibraryPage({
   onAdd: () => void;
   onSelect: (artwork: Artwork) => void;
 }) {
+  const { lang, t } = useLanguage();
   const [showFilters, setShowFilters] = useState(true);
   const [sort, setSort] = useState<SortKey>("recent");
   const [search, setSearch] = useState("");
@@ -807,9 +814,13 @@ function LibraryPage({
   const widthBounds = bounds(inventory.artworks.map((a) => parseNum(a.width)));
   const priceBounds = bounds(inventory.artworks.map((a) => parseNum(a.soldPrice)));
 
-  const seriesOptions = uniqueValues(inventory.artworks.map((a) => a.series)).map(
-    (value) => ({ category: "series", value, label: value })
-  );
+  const seriesOptions = uniqueValues(inventory.artworks.map((a) => a.series))
+    .filter((value) => value.trim())
+    .map((value) => ({
+      category: "series",
+      value,
+      label: isNoSeries(value) ? t("series.field.none") : value
+    }));
 
   const activeFilterCount =
     types.length +
@@ -835,7 +846,13 @@ function LibraryPage({
 
   const artworks = useMemo(() => {
     const filtered = inventory.artworks.filter((artwork) => {
-      const haystack = [artwork.title, artwork.series, artwork.notes, artwork.id]
+      const haystack = [
+        artwork.title,
+        seriesLabel(artwork.series, t),
+        artwork.series,
+        artwork.notes,
+        artwork.id
+      ]
         .join(" ")
         .toLowerCase();
       return (
@@ -861,6 +878,7 @@ function LibraryPage({
     seriesSel,
     sort,
     statuses,
+    t,
     types,
     widthRange,
     yearRange
@@ -871,67 +889,67 @@ function LibraryPage({
       {showFilters && (
         <aside className="filter-rail">
           <div className="filter-rail-head">
-            <h3>Filtros</h3>
+            <h3>{t("library.filters")}</h3>
             <button className="link-button" onClick={clearAll}>
-              Limpiar todo
+              {t("common.clearAll")}
             </button>
           </div>
           <input
             className="search-input"
-            placeholder="Buscar..."
+            placeholder={t("library.search")}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
           <CheckboxFilter
-            title="Tipo"
-            options={lookupOptions(inventory, "artworkType")}
+            title={t("library.filter.type")}
+            options={translatedLookupOptions(inventory, "artworkType", lang)}
             selected={types}
             onChange={setTypes}
           />
           <CheckboxFilter
-            title="Estado"
-            options={lookupOptions(inventory, "status")}
+            title={t("library.filter.status")}
+            options={translatedLookupOptions(inventory, "status", lang)}
             selected={statuses}
             onChange={setStatuses}
           />
           <CheckboxFilter
-            title="Edición"
+            title={t("library.filter.edition")}
             options={[
-              { category: "editionMode", value: "unique", label: "Única" },
-              { category: "editionMode", value: "multiple", label: "Serie / ediciones" }
+              { category: "editionMode", value: "unique", label: t("library.edition.unique") },
+              { category: "editionMode", value: "multiple", label: t("library.edition.multiple") }
             ]}
             selected={editionModes}
             onChange={setEditionModes}
           />
           <CheckboxFilter
-            title="Serie"
+            title={t("library.filter.series")}
             options={seriesOptions}
             selected={seriesSel}
             onChange={setSeriesSel}
           />
           <RangeFilter
-            title="Año"
+            title={t("library.filter.year")}
             bounds={yearBounds}
             value={yearRange}
             onChange={setYearRange}
             format={(value) => String(Math.round(value))}
           />
           <RangeFilter
-            title="Alto (cm)"
+            title={t("library.filter.height")}
             bounds={heightBounds}
             value={heightRange}
             onChange={setHeightRange}
             format={(value) => String(Math.round(value))}
           />
           <RangeFilter
-            title="Ancho (cm)"
+            title={t("library.filter.width")}
             bounds={widthBounds}
             value={widthRange}
             onChange={setWidthRange}
             format={(value) => String(Math.round(value))}
           />
           <RangeFilter
-            title="Precio vendido"
+            title={t("library.filter.soldPrice")}
             bounds={priceBounds}
             value={priceRange}
             onChange={setPriceRange}
@@ -946,39 +964,39 @@ function LibraryPage({
             className="ghost"
             onClick={() => setShowFilters((value) => !value)}
           >
-            {showFilters ? "◀ Ocultar filtros" : "▶ Filtros"}
-            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            {showFilters ? t("library.filtersHide") : t("library.filtersShow")}
+            {activeFilterCount > 0 ? t("library.filtersCount", { count: activeFilterCount }) : ""}
           </button>
           <div className="toolbar-right">
             <label className="sort-control">
-              Ordenar
+              {t("common.sort")}
               <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
-                <option value="recent">Añadidas recientemente</option>
-                <option value="title">Título (A→Z)</option>
-                <option value="series">Serie (A→Z)</option>
-                <option value="year_desc">Año (nuevo→viejo)</option>
-                <option value="year_asc">Año (viejo→nuevo)</option>
-                <option value="type">Tipo</option>
-                <option value="price_desc">Precio (alto→bajo)</option>
-                <option value="price_asc">Precio (bajo→alto)</option>
+                <option value="recent">{t("library.sort.recent")}</option>
+                <option value="title">{t("library.sort.title")}</option>
+                <option value="series">{t("library.sort.series")}</option>
+                <option value="year_desc">{t("library.sort.yearDesc")}</option>
+                <option value="year_asc">{t("library.sort.yearAsc")}</option>
+                <option value="type">{t("library.sort.type")}</option>
+                <option value="price_desc">{t("library.sort.priceDesc")}</option>
+                <option value="price_asc">{t("library.sort.priceAsc")}</option>
               </select>
             </label>
-            <span className="count-pill">{artworks.length} obras</span>
-            <button onClick={onAdd}>+ Añadir obra</button>
+            <span className="count-pill">{t("library.count", { count: artworks.length })}</span>
+            <button onClick={onAdd}>{t("library.add")}</button>
           </div>
         </div>
         <div className="library-table-wrap">
           <div className="art-table">
             <div className="art-row art-row-header">
-              <span>Foto</span>
-              <span>Obra</span>
-              <span>Serie</span>
-              <span>Tipo</span>
-              <span>Año</span>
-              <span>Estado</span>
+              <span>{t("library.col.photo")}</span>
+              <span>{t("library.col.artwork")}</span>
+              <span>{t("library.col.series")}</span>
+              <span>{t("library.col.type")}</span>
+              <span>{t("library.col.year")}</span>
+              <span>{t("library.col.status")}</span>
             </div>
             {artworks.length === 0 ? (
-              <div className="table-empty">No hay obras que coincidan.</div>
+              <div className="table-empty">{t("library.empty")}</div>
             ) : (
               artworks.map((artwork) => (
                 <ArtworkRow
@@ -1008,10 +1026,11 @@ function ArtworkRow({
   setInventory: (data: InventoryData) => void;
   onSelect: () => void;
 }) {
+  const { lang, t } = useLanguage();
   const image = mainImageFor(artwork, inventory);
   const imageUrl = useImageDataUrl(image?.absolutePath);
   const overdue = overdueMovement(artwork, inventory);
-  const statusLabel = labelFor(inventory, "status", artwork.status);
+  const statusLabel = labelFor(inventory, "status", artwork.status, lang);
 
   return (
     <div className="art-row" onClick={onSelect} role="button" tabIndex={0}
@@ -1023,16 +1042,16 @@ function ArtworkRow({
       }}
     >
       <div className="thumb">
-        {imageUrl ? <img src={imageUrl} alt="" /> : <span>Sin foto</span>}
+        {imageUrl ? <img src={imageUrl} alt="" /> : <span>{t("common.noPhoto")}</span>}
       </div>
       <div className="title-cell">
         <strong>{artwork.title}</strong>
       </div>
-      <span className="art-cell-text" title={artwork.series || undefined}>
-        {artwork.series || "—"}
+      <span className="art-cell-text" title={seriesLabel(artwork.series, t)}>
+        {seriesLabel(artwork.series, t)}
       </span>
       <span className="art-cell-text">
-        {labelFor(inventory, "artworkType", artwork.type)}
+        {labelFor(inventory, "artworkType", artwork.type, lang)}
       </span>
       <span className="art-cell-year">{artwork.yearMade || "—"}</span>
       <div className={`status-cell status-${slugify(artwork.status)}`}>
@@ -1066,13 +1085,16 @@ function RetrievalMark({
   inventory: InventoryData;
   setInventory: (data: InventoryData) => void;
 }) {
+  const t = useT();
   const [confirming, setConfirming] = useState(false);
   const where =
     movementKind(movement.type) === "exhibition"
       ? movement.exhibitionTitle ||
         exhibitionTitle(inventory, movement.exhibitionId) ||
-        "la exposición"
-      : movement.contactName || contactName(inventory, movement.contactId) || "el préstamo";
+        t("library.overdue.whereExhibition")
+      : movement.contactName ||
+        contactName(inventory, movement.contactId) ||
+        t("library.overdue.whereLoan");
 
   async function markBack() {
     const data = await window.inventoryApi.markMovementReturned(movement.id);
@@ -1085,7 +1107,7 @@ function RetrievalMark({
       <button
         type="button"
         className="retrieve-mark"
-        title="Pendiente de recuperar — clic para confirmar"
+        title={t("library.overdue.tooltip")}
         onClick={(event) => {
           event.stopPropagation();
           setConfirming(true);
@@ -1103,17 +1125,16 @@ function RetrievalMark({
         >
           <div className="modal confirm-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3>¿Ha vuelto al estudio?</h3>
+              <h3>{t("library.overdue.title")}</h3>
             </div>
             <p className="confirm-message">
-              «{artwork.title}» figura todavía en {where} y la fecha ya pasó. ¿Confirmas
-              que la obra ya volvió al estudio?
+              {t("library.overdue.message", { title: artwork.title, where })}
             </p>
             <div className="modal-actions">
               <button className="ghost" onClick={() => setConfirming(false)}>
-                Todavía no
+                {t("library.overdue.notYet")}
               </button>
-              <button onClick={markBack}>Sí, está en el estudio</button>
+              <button onClick={markBack}>{t("library.overdue.confirm")}</button>
             </div>
           </div>
         </div>
@@ -1145,6 +1166,7 @@ function ArtworkForm({
   onDirtyChange?: (dirty: boolean) => void;
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
 }) {
+  const { lang, t } = useLanguage();
   const [form, setForm] = useState<ArtworkInput>(artwork);
   const [tab, setTab] = useState<FormTab>("info");
   const [locked, setLocked] = useState(false);
@@ -1178,9 +1200,19 @@ function ArtworkForm({
 
   const is3D = isThreeDimensional(form.type);
   const isSeries = form.editionMode === "multiple";
+  const isIpadDrawing = form.type === "ipad_drawing";
 
   function update<K extends keyof ArtworkInput>(key: K, value: ArtworkInput[K]) {
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => {
+      const next = { ...current, [key]: value };
+      // Ipad Drawings have no physical size — clear measures when switching to it.
+      if (key === "type" && value === "ipad_drawing") {
+        next.height = "";
+        next.width = "";
+        next.depth = "";
+      }
+      return next;
+    });
     onDirtyChange?.(true);
   }
 
@@ -1189,14 +1221,45 @@ function ArtworkForm({
     onDirtyChange?.(true);
   }
 
+  function validateArtworkForm(): string | null {
+    if (!form.title.trim()) return t("artwork.error.needTitle");
+    if (!form.type.trim()) return t("artwork.error.needType");
+    if (!(form.series ?? "").trim()) return t("artwork.error.needSeries");
+    if (!String(form.yearMade ?? "").trim()) return t("artwork.error.needYear");
+    if (!isIpadDrawing) {
+      const h = String(form.height ?? "").trim();
+      const w = String(form.width ?? "").trim();
+      if (!h || !(Number(h.replace(",", ".")) > 0)) {
+        return t("artwork.error.needHeight");
+      }
+      if (!w || !(Number(w.replace(",", ".")) > 0)) {
+        return t("artwork.error.needWidth");
+      }
+      if (!form.unit) return t("artwork.error.needUnit");
+    }
+    if (!form.editionMode) return t("artwork.error.needEdition");
+    if (form.editionMode === "multiple") {
+      const sale = Math.max(0, Number(form.editionSaleCopies || 0));
+      if (sale <= 0) return t("artwork.error.needSaleCopies");
+      const editions = form.editions ?? [];
+      const saleEditions = editions.filter((e) => e.kind !== "personal");
+      if (saleEditions.length === 0) return t("artwork.error.needGenerateCopies");
+    }
+    return null;
+  }
+
   async function persistCurrent(): Promise<InventoryData | null> {
-    if (!form.title.trim()) {
-      setError("Escribe un título antes de guardar la obra.");
+    const problem = validateArtworkForm();
+    if (problem) {
+      setError(problem);
       setTab("info");
       return null;
     }
+    const payload: ArtworkInput = isIpadDrawing
+      ? { ...form, height: "", width: "", depth: "" }
+      : form;
     setError("");
-    let data = await window.inventoryApi.saveArtwork(form);
+    let data = await window.inventoryApi.saveArtwork(payload);
     let saved =
       (form.id && data.artworks.find((item) => item.id === form.id)) ||
       [...data.artworks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
@@ -1229,7 +1292,7 @@ function ArtworkForm({
       onDirtyChange?.(false);
       if (target) onSaved(target.id, data);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo guardar.");
+      setError(caught instanceof Error ? caught.message : t("common.error.save"));
     }
   }
 
@@ -1239,7 +1302,7 @@ function ArtworkForm({
       if (!picked) return;
       setImageEditorSrc(picked.dataUrl);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo añadir la foto.");
+      setError(caught instanceof Error ? caught.message : t("artwork.error.addPhoto"));
     }
   }
 
@@ -1259,33 +1322,35 @@ function ArtworkForm({
     <div className="form-card artwork-form">
       <div className="form-head artwork-form-head">
         <div>
-          <p className="eyebrow">{form.id ? "Editar obra" : "Nueva obra"}</p>
-          <h2>{form.title.trim() || "Añadir obra"}</h2>
+          <p className="eyebrow">
+            {form.id ? t("artwork.form.titleEdit") : t("artwork.form.titleNew")}
+          </p>
+          <h2>{form.title.trim() || t("artwork.form.fallbackTitle")}</h2>
         </div>
         <div className="form-head-actions">
           {locked ? (
             <>
-              <span className="saved-badge">Guardado</span>
+              <span className="saved-badge">{t("common.saved")}</span>
               <button type="button" onClick={() => setLocked(false)}>
-                Editar
+                {t("common.edit")}
               </button>
               <button type="button" className="ghost" onClick={onNew}>
-                Nueva obra
+                {t("artwork.form.newButton")}
               </button>
               <button type="button" className="ghost" onClick={onBackToList}>
-                Volver
+                {t("common.back")}
               </button>
             </>
           ) : (
             <>
               <button type="button" onClick={() => void save()}>
-                Guardar
+                {t("common.save")}
               </button>
               <button type="button" className="ghost" onClick={onNew}>
-                Nueva obra
+                {t("artwork.form.newButton")}
               </button>
               <button type="button" className="ghost" onClick={onBackToList}>
-                Cancelar
+                {t("common.cancel")}
               </button>
             </>
           )}
@@ -1303,7 +1368,7 @@ function ArtworkForm({
               if (!locked) void addImage();
             }}
             disabled={locked}
-            title={pendingImage || imageUrl ? "Cambiar foto" : "Añadir foto"}
+            title={pendingImage || imageUrl ? t("artwork.photo.change") : t("artwork.photo.add")}
           >
             {pendingImage ? (
               <img src={pendingImage.dataUrl} alt="" />
@@ -1312,32 +1377,33 @@ function ArtworkForm({
             ) : (
               <span className="artwork-photo-empty">
                 <span className="artwork-photo-plus">+</span>
-                <span>Añadir foto</span>
+                <span>{t("artwork.photo.add")}</span>
               </span>
             )}
           </button>
           <p className="muted small-note artwork-photo-hint">
             {pendingImage
-              ? "Listo — se guarda con la obra."
+              ? t("artwork.photo.hint.ready")
               : locked
-                ? "Pulsa «Editar» para cambiar la foto."
-                : "Clic para elegir y recortar."}
+                ? t("artwork.photo.hint.locked")
+                : t("artwork.photo.hint.click")}
           </p>
         </aside>
 
         <div className="artwork-form-main">
           <div className="subtabs artwork-form-tabs">
             <SubTab active={tab === "info"} onClick={() => setTab("info")}>
-              Información
+              {t("artwork.tab.info")}
             </SubTab>
             <SubTab
               active={tab === "movimientos"}
               onClick={() => setTab("movimientos")}
             >
-              Movimientos
               {(form.movements?.length ?? 0) > 0
-                ? ` · ${form.movements!.length}`
-                : ""}
+                ? t("artwork.tab.movementsCount", {
+                    count: form.movements!.length
+                  })
+                : t("artwork.tab.movements")}
             </SubTab>
           </div>
 
@@ -1345,12 +1411,12 @@ function ArtworkForm({
             {tab === "info" && (
               <div className="form-section artwork-form-section">
                 <div className="form-group">
-                  <p className="form-group-label">Identidad</p>
+                  <p className="form-group-label">{t("artwork.section.identity")}</p>
                   <label className="field">
-                    Nombre / título
+                    {t("artwork.field.title")}
                     <input
                       value={form.title}
-                      placeholder="Título de la obra"
+                      placeholder={t("artwork.field.titlePlaceholder")}
                       onChange={(event) => update("title", event.target.value)}
                     />
                   </label>
@@ -1360,7 +1426,7 @@ function ArtworkForm({
                       inventory={inventory}
                       setInventory={setInventory}
                       category="artworkType"
-                      label="Tipo de arte"
+                      label={t("artwork.field.type")}
                       value={form.type}
                       onChange={(value) => update("type", value)}
                     />
@@ -1373,11 +1439,11 @@ function ArtworkForm({
 
                   <div className="form-row">
                     <label className="field">
-                      Año
+                      {t("artwork.field.year")}
                       <input
                         inputMode="numeric"
                         maxLength={4}
-                        placeholder="YYYY"
+                        placeholder={t("artwork.field.yearPlaceholder")}
                         value={form.yearMade ?? ""}
                         onChange={(event) =>
                           update(
@@ -1388,19 +1454,20 @@ function ArtworkForm({
                       />
                     </label>
                     <label className="field">
-                      Estado
+                      {t("artwork.field.status")}
                       <input
                         className="artwork-status-readonly"
                         value={
                           isSeries
-                            ? "Ver cada copia"
+                            ? t("artwork.status.perCopy")
                             : labelFor(
                                 inventory,
                                 "status",
                                 displayStatusFromMovements(
                                   form.movements ?? [],
                                   inventory
-                                )
+                                ),
+                                lang
                               )
                         }
                         disabled
@@ -1409,56 +1476,68 @@ function ArtworkForm({
                     </label>
                   </div>
                   <p className="muted small-note">
-                    El estado se calcula solo a partir de los movimientos.
+                    {t("artwork.status.hint")}
                   </p>
                 </div>
 
                 <div className="form-group">
-                  <p className="form-group-label">Medidas</p>
-                  <div className="dimensions-row">
-                    <label className="field">
-                      Alto
-                      <input
-                        inputMode="decimal"
-                        value={form.height ?? ""}
-                        onChange={(event) => update("height", event.target.value)}
-                      />
-                    </label>
-                    <label className="field">
-                      Ancho
-                      <input
-                        inputMode="decimal"
-                        value={form.width ?? ""}
-                        onChange={(event) => update("width", event.target.value)}
-                      />
-                    </label>
-                    <label className={is3D ? "field" : "field disabled-field"}>
-                      Profundidad
-                      <input
-                        inputMode="decimal"
-                        disabled={!is3D}
-                        value={is3D ? form.depth ?? "" : ""}
-                        placeholder={is3D ? "" : "Solo 3D"}
-                        onChange={(event) => update("depth", event.target.value)}
-                      />
-                    </label>
-                    <label className="field unit-field">
-                      Unidad
-                      <select
-                        value={form.unit}
-                        onChange={(event) =>
-                          update("unit", event.target.value as "cm" | "in")
-                        }
-                      >
-                        <option value="cm">cm</option>
-                        <option value="in">pulgadas</option>
-                      </select>
-                    </label>
-                  </div>
+                  <p className="form-group-label">{t("artwork.section.dimensions")}</p>
+                  {isIpadDrawing ? (
+                    <p className="muted small-note">{t("artwork.dimensions.ipadNote")}</p>
+                  ) : (
+                    <div className="dimensions-row">
+                      <label className="field">
+                        {t("artwork.field.height")}
+                        <input
+                          inputMode="decimal"
+                          value={form.height ?? ""}
+                          onChange={(event) =>
+                            update("height", event.target.value)
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        {t("artwork.field.width")}
+                        <input
+                          inputMode="decimal"
+                          value={form.width ?? ""}
+                          onChange={(event) =>
+                            update("width", event.target.value)
+                          }
+                        />
+                      </label>
+                      <label className={is3D ? "field" : "field disabled-field"}>
+                        {t("artwork.field.depth")}
+                        <input
+                          inputMode="decimal"
+                          disabled={!is3D}
+                          value={is3D ? form.depth ?? "" : ""}
+                          placeholder={
+                            is3D ? "" : t("artwork.field.depth3dOnly")
+                          }
+                          onChange={(event) =>
+                            update("depth", event.target.value)
+                          }
+                        />
+                      </label>
+                      <label className="field unit-field">
+                        {t("artwork.field.unit")}
+                        <select
+                          value={form.unit}
+                          onChange={(event) =>
+                            update("unit", event.target.value as "cm" | "in")
+                          }
+                        >
+                          <option value="cm">cm</option>
+                          <option value="in">{t("artwork.field.inches")}</option>
+                        </select>
+                      </label>
+                    </div>
+                  )}
                 </div>
 
                 <div className="form-group">
-                  <p className="form-group-label">Edición</p>
+                  <p className="form-group-label">{t("artwork.section.edition")}</p>
                   <EditionBlock
                     inventory={inventory}
                     setInventory={setInventory}
@@ -1469,12 +1548,12 @@ function ArtworkForm({
                 </div>
 
                 <div className="form-group">
-                  <p className="form-group-label">Notas</p>
+                  <p className="form-group-label">{t("artwork.section.notes")}</p>
                   <label className="field">
-                    <span className="sr-only">Notas</span>
+                    <span className="sr-only">{t("artwork.section.notes")}</span>
                     <textarea
                       className="notes-area"
-                      placeholder="Observaciones internas…"
+                      placeholder={t("artwork.field.notesPlaceholder")}
                       value={form.notes ?? ""}
                       onChange={(event) => update("notes", event.target.value)}
                     />
@@ -1512,10 +1591,10 @@ function ArtworkForm({
       {!locked && (
         <div className="form-actions artwork-form-actions">
           <button type="button" onClick={() => void save()}>
-            Guardar
+            {t("common.save")}
           </button>
           <button type="button" className="ghost" onClick={onBackToList}>
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       )}
@@ -1535,6 +1614,7 @@ function EditionBlock({
   update: <K extends keyof ArtworkInput>(key: K, value: ArtworkInput[K]) => void;
   setForm: Dispatch<SetStateAction<ArtworkInput>>;
 }) {
+  const { lang, t } = useLanguage();
   function generate() {
     const personal = Math.max(0, Number(form.editionPersonalCopies || 0));
     const sale = Math.max(0, Number(form.editionSaleCopies || 0));
@@ -1582,15 +1662,15 @@ function EditionBlock({
   return (
     <div className="edition-block">
       <label className="field">
-        ¿Obra única o varias copias?
+        {t("artwork.edition.question")}
         <select
           value={form.editionMode ?? "unique"}
           onChange={(event) =>
             update("editionMode", event.target.value as ArtworkInput["editionMode"])
           }
         >
-          <option value="unique">Única</option>
-          <option value="multiple">Varias copias</option>
+          <option value="unique">{t("artwork.edition.unique")}</option>
+          <option value="multiple">{t("artwork.edition.multiple")}</option>
         </select>
       </label>
 
@@ -1598,7 +1678,7 @@ function EditionBlock({
         <div className="edition-detail">
           <div className="form-row">
             <label className="field">
-              Copias personales / pruebas
+              {t("artwork.edition.personalCopies")}
               <input
                 type="number"
                 min="0"
@@ -1607,7 +1687,7 @@ function EditionBlock({
               />
             </label>
             <label className="field">
-              Copias de la edición (para vender)
+              {t("artwork.edition.editionCopies")}
               <input
                 type="number"
                 min="0"
@@ -1617,11 +1697,11 @@ function EditionBlock({
             </label>
           </div>
           <button type="button" className="ghost small" onClick={generate}>
-            Generar lista de copias
+            {t("artwork.edition.generate")}
           </button>
           {editions.length > 0 && (
             <div className="copy-list">
-              <div className="copy-list-head">Estado de cada copia</div>
+              <div className="copy-list-head">{t("artwork.edition.copyStatus")}</div>
               {editions.map((edition) => (
                 <div className="copy-row" key={edition.id ?? edition.label}>
                   <span className="copy-chip">{edition.label}</span>
@@ -1631,7 +1711,7 @@ function EditionBlock({
                       setEditionStatus(edition.id ?? edition.label, event.target.value)
                     }
                   >
-                    {lookupOptions(inventory, "status")
+                    {translatedLookupOptions(inventory, "status", lang)
                       .filter((option) => option.value !== "per_copy")
                       .map((option) => (
                         <option key={option.value} value={option.value}>
@@ -1643,10 +1723,7 @@ function EditionBlock({
               ))}
             </div>
           )}
-          <p className="muted small-note">
-            Cada copia tiene su propio estado. Registra ventas, regalos o
-            exposiciones de una copia en Movimientos eligiendo «¿Qué copia?».
-          </p>
+          <p className="muted small-note">{t("artwork.edition.copyHint")}</p>
         </div>
       )}
     </div>
@@ -1671,6 +1748,7 @@ function MovementEditor({
   artworkDraft: ArtworkInput;
   collapseSignal?: number;
 }) {
+  const { lang, t } = useLanguage();
   const [editing, setEditing] = useState<
     { mode: "new" } | { mode: "edit"; index: number } | null
   >(null);
@@ -1709,7 +1787,7 @@ function MovementEditor({
     const others = movements.filter((_item, index) => index !== editIndex);
     if (!isSeries) {
       if (others.some((item) => movementKind(item.type) === "sale")) {
-        return "Esta obra ya tiene una venta. Solo puede haber una.";
+        return t("movement.error.singleSale");
       }
       return "";
     }
@@ -1721,8 +1799,8 @@ function MovementEditor({
     );
     if (clash) {
       return key
-        ? "Esta copia ya tiene una venta registrada."
-        : "Ya hay una venta de «toda la obra». No se puede duplicar.";
+        ? t("movement.error.copySale")
+        : t("movement.error.wholeSaleDup");
     }
     return "";
   }
@@ -1733,7 +1811,7 @@ function MovementEditor({
   ): string {
     const date = (next.date ?? "").trim();
     if (!date) {
-      return "Cada movimiento necesita una fecha.";
+      return t("movement.error.needDate");
     }
     const saleError = validateSale(next, editIndex);
     if (saleError) return saleError;
@@ -1743,7 +1821,7 @@ function MovementEditor({
     const others = movements.filter((_item, index) => index !== editIndex);
     const otherTerminal = others.find((item) => isTerminalMovementType(item.type));
     if (isTerminalMovementType(next.type) && otherTerminal) {
-      return "Solo puede haber una salida definitiva (venta, pago a galerista o pérdida).";
+      return t("movement.error.singleTerminal");
     }
     const terminal = isTerminalMovementType(next.type) ? next : otherTerminal;
     if (!terminal) return "";
@@ -1753,12 +1831,12 @@ function MovementEditor({
         (item) => movementDateValue(item as Movement) > terminalMs
       );
       if (later) {
-        return "No puede haber movimientos después de una venta, pago a galerista o pérdida.";
+        return t("movement.error.afterTerminal");
       }
       return "";
     }
     if (movementDateValue(next as Movement) > terminalMs) {
-      return "No puede haber movimientos después de una venta, pago a galerista o pérdida.";
+      return t("movement.error.afterTerminal");
     }
     return "";
   }
@@ -1770,17 +1848,14 @@ function MovementEditor({
   return (
     <div className="form-section movements-editor">
       <div className="movements-intro">
-        <p>
-          Historial de la obra: ventas, exposiciones, préstamos y regalos. Lo más
-          reciente aparece arriba.
-        </p>
+        <p>{t("movement.intro")}</p>
       </div>
       <div className="movements-timeline">
         {order.length === 0 ? (
           <div className="movements-empty">
-            <strong>Sin movimientos todavía</strong>
+            <strong>{t("movement.empty.title")}</strong>
             <p className="muted">
-              Cuando vendas, prestes o expongas la obra, regístralo aquí.
+              {t("movement.empty.hint")}
             </p>
           </div>
         ) : (
@@ -1793,7 +1868,7 @@ function MovementEditor({
               >
                 <div className="mv-card-main">
                   <span className={`mv-pill mv-pill-${kind}`}>
-                    {labelFor(inventory, "movementType", movement.type) ||
+                    {labelFor(inventory, "movementType", movement.type, lang) ||
                       movement.type}
                   </span>
                   <button
@@ -1805,12 +1880,12 @@ function MovementEditor({
                     }}
                   >
                     <strong>
-                      {movementSummary(movement as Movement, inventory)}
+                      {movementSummary(movement as Movement, inventory, t, lang)}
                     </strong>
                     <span className="muted">
                       {[
-                        movement.date || "Sin fecha",
-                        movementSubtitle(movement as Movement, inventory)
+                        movement.date || t("common.noDate"),
+                        movementSubtitle(movement as Movement, inventory, t)
                       ]
                         .filter(Boolean)
                         .join(" · ")}
@@ -1822,7 +1897,7 @@ function MovementEditor({
                   className="ghost danger small"
                   onClick={() => remove(index)}
                 >
-                  Quitar
+                  {t("movement.remove")}
                 </button>
               </div>
             );
@@ -1837,7 +1912,7 @@ function MovementEditor({
           setEditing({ mode: "new" });
         }}
       >
-        + Añadir movimiento
+        {t("movement.add")}
       </button>
       {saveError && <p className="error-inline">{saveError}</p>}
 
@@ -1916,6 +1991,7 @@ function MovementModal({
   onClose: () => void;
   onRemove?: () => void;
 }) {
+  const t = useT();
   const [m, setM] = useState<MovementInput>(draft);
   const [localError, setLocalError] = useState("");
   const set = (patch: Partial<MovementInput>) => {
@@ -1934,7 +2010,7 @@ function MovementModal({
   function paymentHalfAt(date?: string) {
     const ms = dateToMs(date);
     const at = Number.isFinite(ms) ? (ms as number) : Date.now();
-    return galleryPaymentHalfInfo(artworkDraft, settings, at);
+    return galleryPaymentHalfInfo(artworkDraft, settings, at, t);
   }
 
   function applyType(value: string) {
@@ -1977,25 +2053,23 @@ function MovementModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h3>{isNew ? "Añadir movimiento" : "Editar movimiento"}</h3>
+          <h3>{isNew ? t("movement.modal.add") : t("movement.modal.edit")}</h3>
           <button className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
         </div>
         <div className="modal-body">
           {blockTerminalTypes && isTerminalMovementType(m.type) && (
-            <p className="error-inline">
-              Ya hay una salida definitiva. Elige otro tipo o quita esa salida.
-            </p>
+            <p className="error-inline">{t("movement.error.terminalExists")}</p>
           )}
           {isSeries && (
             <label className="field">
-              ¿Qué copia?
+              {t("movement.copy.which")}
               <select
                 value={m.editionId ?? ""}
                 onChange={(event) => set({ editionId: event.target.value })}
               >
-                <option value="">Toda la obra</option>
+                <option value="">{t("movement.copy.whole")}</option>
                 {editions.map((edition) => (
                   <option key={edition.id ?? edition.label} value={edition.id ?? ""}>
                     {edition.label}
@@ -2010,14 +2084,14 @@ function MovementModal({
               inventory={inventory}
               setInventory={setInventory}
               category="movementType"
-              label="Tipo de movimiento"
+              label={t("movement.field.type")}
               value={m.type}
               onChange={applyType}
               hideValues={hideTerminal}
             />
             {kind !== "exhibition" && kind !== "loan" && (
               <label className="field">
-                Fecha
+                {t("movement.field.date")}
                 <DateField
                   value={m.date ?? ""}
                   onChange={(value) => {
@@ -2040,11 +2114,11 @@ function MovementModal({
             <div className="context-box">
               <div className="form-row">
                 <label className="field">
-                  Desde (de cuándo)
+                  {t("movement.loan.from")}
                   <DateField value={m.date ?? ""} onChange={(value) => set({ date: value })} />
                 </label>
                 <label className="field">
-                  Hasta (a cuándo)
+                  {t("movement.loan.until")}
                   <DateField
                     value={m.endDate ?? ""}
                     onChange={(value) => set({ endDate: value })}
@@ -2062,11 +2136,11 @@ function MovementModal({
                     })
                   }
                 />
-                Sin fecha de devolución (indefinido)
+                {t("movement.loan.indefinite")}
               </label>
               <div className="form-row">
                 <label className="field">
-                  ¿A una persona o galería?
+                  {t("movement.loan.personOrGallery")}
                   <select
                     value={m.recipientType ?? "person"}
                     onChange={(event) =>
@@ -2076,14 +2150,16 @@ function MovementModal({
                       })
                     }
                   >
-                    <option value="person">Persona</option>
-                    <option value="gallery">Galería</option>
+                    <option value="person">{t("movement.loan.person")}</option>
+                    <option value="gallery">{t("movement.loan.gallery")}</option>
                   </select>
                 </label>
                 <ContactSelect
                   inventory={inventory}
                   setInventory={setInventory}
-                  label={isGallery ? "Galería" : "Persona"}
+                  label={
+                    isGallery ? t("movement.loan.gallery") : t("movement.loan.person")
+                  }
                   kind={isGallery ? "gallery" : "person"}
                   value={m.contactId ?? ""}
                   onChange={(value) => set({ contactId: value })}
@@ -2095,33 +2171,27 @@ function MovementModal({
                   checked={m.returned ?? false}
                   onChange={(event) => set({ returned: event.target.checked })}
                 />
-                Ya devuelta al estudio
+                {t("movement.loan.returned")}
               </label>
-              <p className="muted small-note">
-                El aviso rojo solo mira el último movimiento (préstamo o
-                exposición).
-              </p>
+              <p className="muted small-note">{t("movement.loan.warningHint")}</p>
             </div>
           ) : kind === "payment" ? (
             <div className="context-box">
-              <p className="muted small-note">
-                La obra se entrega a una galería como forma de pago. El valor
-                cuenta como gasto en Cuentas (mitad del valor de la obra).
-              </p>
+              <p className="muted small-note">{t("movement.payment.hint")}</p>
               <ContactSelect
                 inventory={inventory}
                 setInventory={setInventory}
-                label="Galería que recibe la obra"
+                label={t("movement.payment.gallery")}
                 kind="gallery"
                 value={m.contactId ?? ""}
                 onChange={(value) => set({ contactId: value, recipientType: "gallery" })}
               />
               <label className="field">
-                Valor / coste (50% del precio de la obra)
+                {t("movement.payment.value")}
                 <div className="payment-value-row">
                   <input
                     inputMode="decimal"
-                    placeholder="ej. 2000"
+                    placeholder={t("movement.payment.valuePlaceholder")}
                     value={m.price ?? ""}
                     onChange={(event) => set({ price: event.target.value })}
                   />
@@ -2141,22 +2211,20 @@ function MovementModal({
                   </span>
                 ) : paymentInfo?.half != null ? (
                   <span className="muted small-note">
-                    Calculado solo: mitad de {formatMoney(paymentInfo.half * 2)}{" "}
-                    (factores × alto+ancho). Puedes corregirlo a mano.
+                    {t("movement.payment.autoCalc", {
+                      amount: formatMoney(paymentInfo.half * 2)
+                    })}
                   </span>
                 ) : (
                   <span className="muted small-note">
-                    Se rellena solo con la mitad del valor según factores y fecha.
+                    {t("movement.payment.autoFill")}
                   </span>
                 )}
               </label>
             </div>
           ) : kind === "lost" ? (
             <div className="context-box">
-              <p className="muted small-note">
-                Marca la obra como perdida. Sale de tu dominio: no podrás añadir
-                movimientos posteriores.
-              </p>
+              <p className="muted small-note">{t("movement.lost.hint")}</p>
             </div>
           ) : kind === "exhibition" ? (
             <div className="context-box">
@@ -2174,7 +2242,7 @@ function MovementModal({
                 }
               />
               <p className="muted small-note">
-                La fecha se toma de la exposición seleccionada.
+                {t("movement.exhibition.dateFromShow")}
               </p>
               <label className="checkline strong">
                 <input
@@ -2187,7 +2255,7 @@ function MovementModal({
                     })
                   }
                 />
-                Ya devuelta al estudio
+                {t("movement.loan.returned")}
               </label>
               {!(m.returned ?? false) && (
                 <label className="checkline">
@@ -2196,19 +2264,17 @@ function MovementModal({
                     checked={m.keptAtGallery ?? false}
                     onChange={(event) => set({ keptAtGallery: event.target.checked })}
                   />
-                  Se quedó con la galería tras la exposición
+                  {t("movement.exhibition.stayedWithGallery")}
                 </label>
               )}
               <p className="muted small-note">
-                El aviso rojo solo mira el último movimiento. Si añades otra
-                exposición después, no hace falta marcar «devuelta» en la
-                anterior.
+                {t("movement.exhibition.warningHint")}
               </p>
               <label className="field">
-                Precio de lista en la exposición (opcional)
+                {t("movement.exhibition.listedPriceOptional")}
                 <input
                   inputMode="decimal"
-                  placeholder="ej. 1.200 €"
+                  placeholder={t("movement.exhibition.listedPricePlaceholder")}
                   value={m.listedPrice ?? ""}
                   onChange={(event) => set({ listedPrice: event.target.value })}
                 />
@@ -2218,7 +2284,7 @@ function MovementModal({
             <>
               <div className="form-row">
                 <label className="field">
-                  Precio
+                  {t("movement.field.price")}
                   <input
                     inputMode="decimal"
                     placeholder="0"
@@ -2227,7 +2293,7 @@ function MovementModal({
                   />
                 </label>
                 <label className="field">
-                  Contexto de la venta
+                  {t("movement.sale.context")}
                   <select
                     value={m.context ?? ""}
                     onChange={(event) =>
@@ -2238,26 +2304,25 @@ function MovementModal({
                       })
                     }
                   >
-                    <option value="">Directa (a una persona)</option>
-                    <option value="gallery">A través de una galería</option>
-                    <option value="exhibition">En una exposición</option>
+                    <option value="">{t("movement.sale.direct")}</option>
+                    <option value="gallery">{t("movement.sale.viaGallery")}</option>
+                    <option value="exhibition">{t("movement.sale.atExhibition")}</option>
                   </select>
                 </label>
               </div>
               <label className="field">
-                ¿Se cobró impuesto?
+                {t("movement.sale.taxAsked")}
                 <select
                   value={m.taxCharged === false ? "no" : "yes"}
                   onChange={(event) =>
                     set({ taxCharged: event.target.value !== "no" })
                   }
                 >
-                  <option value="yes">Sí</option>
-                  <option value="no">No</option>
+                  <option value="yes">{t("common.yes")}</option>
+                  <option value="no">{t("common.no")}</option>
                 </select>
                 <span className="muted small-note">
-                  Si eliges «No», esta venta solo entra en el resumen Excel si
-                  marcas «Incluir ventas sin impuesto».
+                  {t("movement.sale.taxNoNote")}
                 </span>
               </label>
               <div className="context-box">
@@ -2265,7 +2330,7 @@ function MovementModal({
                   <ContactSelect
                     inventory={inventory}
                     setInventory={setInventory}
-                    label="¿Qué galería? (el comprador queda asociado a la galería)"
+                    label={t("movement.sale.galleryQuestion")}
                     kind="gallery"
                     value={m.contactId ?? ""}
                     onChange={(value) => set({ contactId: value })}
@@ -2274,7 +2339,7 @@ function MovementModal({
                   <ContactSelect
                     inventory={inventory}
                     setInventory={setInventory}
-                    label="Comprador/a (opcional)"
+                    label={t("movement.sale.buyer")}
                     kind="person"
                     value={m.contactId ?? ""}
                     onChange={(value) => set({ contactId: value })}
@@ -2290,16 +2355,15 @@ function MovementModal({
                 )}
                 {(m.context === "gallery" || m.context === "exhibition") && (
                   <label className="field">
-                    Recibido (parte para la artista, tras la comisión)
+                    {t("movement.sale.received")}
                     <input
                       inputMode="decimal"
-                      placeholder="ej. 700 €"
+                      placeholder={t("movement.sale.receivedPlaceholder")}
                       value={m.received ?? ""}
                       onChange={(event) => set({ received: event.target.value })}
                     />
                     <span className="muted small-note">
-                      La galería suele quedarse una comisión; aquí va lo que
-                      realmente recibe la artista.
+                      {t("movement.sale.commissionNote")}
                     </span>
                   </label>
                 )}
@@ -2308,7 +2372,7 @@ function MovementModal({
           ) : (
             <div className="form-row">
               <label className="field">
-                ¿A una persona o galería?
+                {t("movement.loan.personOrGallery")}
                 <select
                   value={m.recipientType ?? "person"}
                   onChange={(event) =>
@@ -2318,14 +2382,16 @@ function MovementModal({
                     })
                   }
                 >
-                  <option value="person">Persona</option>
-                  <option value="gallery">Galería</option>
+                  <option value="person">{t("movement.loan.person")}</option>
+                  <option value="gallery">{t("movement.loan.gallery")}</option>
                 </select>
               </label>
               <ContactSelect
                 inventory={inventory}
                 setInventory={setInventory}
-                label={isGallery ? "Galería" : "Persona"}
+                label={
+                  isGallery ? t("movement.loan.gallery") : t("movement.loan.person")
+                }
                 kind={isGallery ? "gallery" : "person"}
                 value={m.contactId ?? ""}
                 onChange={(value) => set({ contactId: value })}
@@ -2334,7 +2400,7 @@ function MovementModal({
           )}
 
           <label className="field">
-            Notas
+            {t("movement.field.notes")}
             <input
               value={m.notes ?? ""}
               onChange={(event) => set({ notes: event.target.value })}
@@ -2345,7 +2411,7 @@ function MovementModal({
         <div className="modal-actions">
           {!isNew && onRemove && (
             <button type="button" className="ghost danger-text" onClick={onRemove}>
-              Quitar movimiento
+              {t("movement.removeFull")}
             </button>
           )}
           <button
@@ -2353,7 +2419,7 @@ function MovementModal({
             disabled={blockTerminalTypes && isTerminalMovementType(m.type)}
             onClick={() => {
               if (dateMissing) {
-                setLocalError("Cada movimiento necesita una fecha.");
+                setLocalError(t("movement.error.needDate"));
                 return;
               }
               let toSave = m;
@@ -2372,10 +2438,10 @@ function MovementModal({
               setLocalError("");
             }}
           >
-            Salvar
+            {t("movement.save")}
           </button>
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       </div>
@@ -2394,16 +2460,17 @@ function ExhibitionSelect({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const t = useT();
   const [showModal, setShowModal] = useState(false);
   const exhibitions = [...inventory.exhibitions].sort((a, b) =>
     a.title.localeCompare(b.title)
   );
   return (
     <div className="field lookup-field">
-      <span className="field-label">Exposición</span>
+      <span className="field-label">{t("movement.exhibition.select")}</span>
       <div className="lookup-row">
         <select value={value} onChange={(event) => onChange(event.target.value)}>
-          <option value="">— Seleccionar —</option>
+          <option value="">{t("common.selectPlaceholder")}</option>
           {exhibitions.map((exhibition) => (
             <option key={exhibition.id} value={exhibition.id}>
               {exhibition.title}
@@ -2414,7 +2481,7 @@ function ExhibitionSelect({
         <button
           type="button"
           className="icon-button add wide"
-          title="Crear una exposición nueva"
+          title={t("movement.exhibition.createNew")}
           onClick={() => setShowModal(true)}
         >
           +
@@ -2465,6 +2532,7 @@ function ExportThumb({
   active: boolean;
   onClick: () => void;
 }) {
+  const t = useT();
   const url = useImageDataUrl(image.absolutePath);
   return (
     <button
@@ -2480,9 +2548,13 @@ function ExportThumb({
 type ExportIntent = "metadata" | "print" | "simple";
 
 const EXPORT_QUALITY_PRESETS = [
-  { value: "150", label: "Básica", hint: "150" },
-  { value: "300", label: "Buena", hint: "300 · lo habitual" },
-  { value: "600", label: "Muy fina", hint: "600" }
+  { value: "150", labelKey: "artwork.export.quality.basic" as const, hint: "150" },
+  {
+    value: "300",
+    labelKey: "artwork.export.quality.good" as const,
+    hint: "300 · lo habitual"
+  },
+  { value: "600", labelKey: "artwork.export.quality.fine" as const, hint: "600" }
 ] as const;
 
 function ImageExportModal({
@@ -2494,6 +2566,7 @@ function ImageExportModal({
   artwork: Artwork;
   onClose: () => void;
 }) {
+  const t = useT();
   const main = mainImageFor(artwork, inventory);
   const all = inventory.images.filter(
     (image) => image.targetType === "artwork" && image.targetId === artwork.id
@@ -2573,13 +2646,30 @@ function ImageExportModal({
     intent === "print" && printHNum > 0 && dpiNum > 0
       ? pxFromCm(printHNum, dpiNum)
       : 0;
-  const printScale =
+  // Fit inside the paper box without ever upscaling (upscales only add blur).
+  const rawFit =
     sourceW > 0 && sourceH > 0 && needW > 0 && needH > 0
       ? Math.min(needW / sourceW, needH / sourceH)
       : 0;
+  const printScale = rawFit > 0 ? Math.min(1, rawFit) : 0;
   const outW = printScale > 0 ? Math.round(sourceW * printScale) : 0;
   const outH = printScale > 0 ? Math.round(sourceH * printScale) : 0;
-  const wouldUpscale = printScale > 1.01;
+  // DPI this photo actually delivers if printed at the chosen paper size.
+  const effectiveDpi =
+    sourceW > 0 && sourceH > 0 && printWNum > 0 && printHNum > 0
+      ? Math.min(
+          sourceW / (printWNum / 2.54),
+          sourceH / (printHNum / 2.54)
+        )
+      : 0;
+  const printQuality: "ok" | "soft" | "hard" | null =
+    intent === "print" && effectiveDpi > 0 && dpiNum > 0
+      ? effectiveDpi >= dpiNum * 0.95
+        ? "ok"
+        : effectiveDpi >= 150
+          ? "soft"
+          : "hard"
+      : null;
 
   const sizeNum = parseFloat(sizeValue.replace(",", "."));
   const limitActive = intent === "simple" || wantsLimit;
@@ -2596,15 +2686,15 @@ function ImageExportModal({
   }
 
   function validate(): string | null {
-    if (!selected?.absolutePath) return "Elige una foto primero.";
+    if (!selected?.absolutePath) return t("artwork.export.error.pickPhoto");
     if (intent === "metadata" || intent === "print") {
       if (!(dpiNum >= 36 && dpiNum <= 2400)) {
-        return "Indica la calidad (por ejemplo 300). Si eliges «Otra», escribe un número.";
+        return t("artwork.export.error.quality");
       }
     }
     if (intent === "print") {
       if (!(printWNum > 0) || !(printHNum > 0)) {
-        return "Pon el ancho y el alto en centímetros (el tamaño del papel o del cartel).";
+        return t("artwork.export.error.paperCm");
       }
     }
     return null;
@@ -2624,7 +2714,7 @@ function ImageExportModal({
       const exportFn = window.inventoryApi?.exportImage;
       if (typeof exportFn !== "function") {
         throw new Error(
-          "Reinicia la app (cierra la ventana y vuelve a abrirla) para guardar imágenes."
+          t("app.restart.images")
         );
       }
       const dpiMode =
@@ -2643,13 +2733,13 @@ function ImageExportModal({
         const parts = [
           formatBytes(res.bytes),
           res.width && res.height ? `${res.width}×${res.height} px` : null,
-          res.dpi ? `calidad ${res.dpi}` : null
+          res.dpi ? t("artwork.export.doneQuality", { dpi: res.dpi }) : null
         ].filter(Boolean);
-        setDone(`Guardada · ${parts.join(" · ")}`);
+        setDone(t("artwork.export.done", { details: parts.join(" · ") }));
       }
     } catch (caught) {
       setError(
-        caught instanceof Error ? caught.message : "No se pudo guardar la imagen."
+        caught instanceof Error ? caught.message : t("artwork.export.error.save")
       );
     } finally {
       setBusy(false);
@@ -2666,9 +2756,9 @@ function ImageExportModal({
       >
         <div className="modal-head">
           <div>
-            <h3>Salvar imagen</h3>
+            <h3>{t("artwork.export.title")}</h3>
             <p className="muted small-note export-modal-lead">
-              Copia para enviar o imprimir. La foto de la ficha no se toca.
+              {t("artwork.export.subLead")}
             </p>
           </div>
           <button className="icon-button ghost" onClick={onClose}>
@@ -2677,13 +2767,11 @@ function ImageExportModal({
         </div>
         <div className="modal-body export-modal-body">
           {ordered.length === 0 ? (
-            <p className="muted">
-              Esta obra todavía no tiene fotos. Añade una primero.
-            </p>
+            <p className="muted">{t("artwork.export.noPhotos")}</p>
           ) : (
             <>
               <div className="export-step">
-                <p className="export-step-title">1 · Elige la foto</p>
+                <p className="export-step-title">{t("artwork.export.step1")}</p>
                 <div className="export-thumb-grid">
                   {ordered.map((image) => (
                     <ExportThumb
@@ -2699,13 +2787,16 @@ function ImageExportModal({
                 </div>
                 {probe && (
                   <p className="muted small-note">
-                    Foto: {sourceW}×{sourceH} píxeles.
+                    {t("artwork.export.sourcePixels", {
+                      width: sourceW,
+                      height: sourceH
+                    })}
                   </p>
                 )}
               </div>
 
               <div className="export-step">
-                <p className="export-step-title">2 · ¿Para qué?</p>
+                <p className="export-step-title">{t("artwork.export.step2")}</p>
                 <div className="export-intent-list">
                   <button
                     type="button"
@@ -2715,8 +2806,8 @@ function ImageExportModal({
                       clearFeedback();
                     }}
                   >
-                    <strong>Imprimir</strong>
-                    <span>Sabes el tamaño del papel (A4, 30×40 cm…).</span>
+                    <strong>{t("artwork.export.intent.print")}</strong>
+                    <span>{t("artwork.export.intent.printHint")}</span>
                   </button>
                   <button
                     type="button"
@@ -2726,8 +2817,8 @@ function ImageExportModal({
                       clearFeedback();
                     }}
                   >
-                    <strong>Solo marcar DPI</strong>
-                    <span>Te pidieron «300 DPI» sin tamaño de papel.</span>
+                    <strong>{t("artwork.export.intent.dpi")}</strong>
+                    <span>{t("artwork.export.intent.dpiHint")}</span>
                   </button>
                   <button
                     type="button"
@@ -2737,18 +2828,16 @@ function ImageExportModal({
                       clearFeedback();
                     }}
                   >
-                    <strong>Email / web</strong>
-                    <span>Cambiar formato o hacer el archivo más ligero.</span>
+                    <strong>{t("artwork.export.intent.web")}</strong>
+                    <span>{t("artwork.export.intent.webHint")}</span>
                   </button>
                 </div>
               </div>
 
               {(intent === "print" || intent === "metadata") && (
                 <div className="export-step">
-                  <p className="export-step-title">3 · DPI (calidad)</p>
-                  <p className="muted small-note">
-                    Pon el número que te hayan dicho. Si no dijeron nada: 300.
-                  </p>
+                  <p className="export-step-title">{t("artwork.export.stepDpi")}</p>
+                  <p className="muted small-note">{t("artwork.export.dpiHint")}</p>
                   <div className="export-quality-row">
                     {EXPORT_QUALITY_PRESETS.map((preset) => (
                       <button
@@ -2763,7 +2852,7 @@ function ImageExportModal({
                         }}
                       >
                         <strong>{preset.value}</strong>
-                        <span>{preset.label}</span>
+                        <span>{t(preset.labelKey)}</span>
                       </button>
                     ))}
                     <button
@@ -2776,16 +2865,16 @@ function ImageExportModal({
                         clearFeedback();
                       }}
                     >
-                      <strong>Otro</strong>
-                      <span>número libre</span>
+                      <strong>{t("artwork.export.quality.other")}</strong>
+                      <span>{t("artwork.export.quality.otherHint")}</span>
                     </button>
                   </div>
                   {dpiPreset === "custom" && (
                     <label className="field export-custom-dpi">
-                      Escribe el número que te han pedido
+                      {t("artwork.export.customDpiLabel")}
                       <input
                         inputMode="numeric"
-                        placeholder="ej. 240 o 350"
+                        placeholder={t("artwork.export.customDpiPlaceholder")}
                         value={customDpi}
                         autoFocus
                         onChange={(event) => {
@@ -2800,10 +2889,10 @@ function ImageExportModal({
 
               {intent === "print" && (
                 <div className="export-step">
-                  <p className="export-step-title">4 · Tamaño del papel (cm)</p>
+                  <p className="export-step-title">{t("artwork.export.stepPaper")}</p>
                   <div className="export-size-row">
                     <label className="field">
-                      Ancho
+                      {t("artwork.field.width")}
                       <input
                         inputMode="decimal"
                         placeholder="21"
@@ -2818,7 +2907,7 @@ function ImageExportModal({
                       ×
                     </span>
                     <label className="field">
-                      Alto
+                      {t("artwork.field.height")}
                       <input
                         inputMode="decimal"
                         placeholder="29,7"
@@ -2863,28 +2952,40 @@ function ImageExportModal({
                           clearFeedback();
                         }}
                       >
-                        Medida de la obra
+                        {t("artwork.export.artworkMeasure")}
                       </button>
                     )}
                   </div>
-                  {outW > 0 && outH > 0 && (
+                  {outW > 0 && outH > 0 && printQuality && (
                     <div
-                      className={`export-summary${wouldUpscale ? " warn" : ""}`}
+                      className={`export-summary${
+                        printQuality === "ok" ? "" : " warn"
+                      }`}
                     >
-                      {wouldUpscale ? (
+                      {printQuality === "hard" ? (
                         <p>
-                          Esta foto se queda corta para {formatCm(printWNum)}×
-                          {formatCm(printHNum)} cm a {dpiNum} DPI. Se puede
-                          imprimir, pero puede salir borrosa. Prueba un tamaño
-                          menor o una foto con más píxeles.
+                          {t("artwork.export.warnLowDpi", {
+                            size: `${formatCm(printWNum)}×${formatCm(printHNum)}`,
+                            asked: dpiNum,
+                            effective: Math.round(effectiveDpi),
+                            pixels: `${sourceW}×${sourceH}`
+                          })}
+                        </p>
+                      ) : printQuality === "soft" ? (
+                        <p>
+                          {t("artwork.export.warnSoftDpi", {
+                            size: `${formatCm(printWNum)}×${formatCm(printHNum)}`,
+                            asked: dpiNum,
+                            effective: Math.round(effectiveDpi),
+                            pixels: `${sourceW}×${sourceH}`
+                          })}
                         </p>
                       ) : (
                         <p>
-                          La foto da de sobra para{" "}
-                          <strong>
-                            {formatCm(printWNum)}×{formatCm(printHNum)} cm
-                          </strong>{" "}
-                          a <strong>{dpiNum} DPI</strong>. Saldrá nítida.
+                          {t("artwork.export.okPrint", {
+                            size: `${formatCm(printWNum)}×${formatCm(printHNum)}`,
+                            dpi: dpiNum
+                          })}
                         </p>
                       )}
                     </div>
@@ -2897,36 +2998,32 @@ function ImageExportModal({
                 metadataPrintH != null && (
                   <div className="export-summary">
                     <p>
-                      A <strong>{dpiNum} DPI</strong>, esta foto se puede imprimir
-                      nítida hasta unos{" "}
-                      <strong>
-                        {formatCm(metadataPrintW)}×{formatCm(metadataPrintH)} cm
-                      </strong>
-                      .
+                      {t("artwork.export.metadataMax", {
+                        dpi: dpiNum,
+                        size: `${formatCm(metadataPrintW)}×${formatCm(metadataPrintH)}`
+                      })}
                     </p>
-                    <p className="muted">
-                      Este ajuste no mejora la foto: solo apunta el número que te
-                      pidieron. Para un tamaño concreto usa «Para imprimirla».
-                    </p>
+                    <p className="muted">{t("artwork.export.metadataNote")}</p>
                   </div>
                 )}
 
               <div className="export-step export-file-box">
                 <p className="export-step-title">
-                  {intent === "print" ? "5" : intent === "metadata" ? "4" : "3"} ·
-                  El archivo
+                  {t("artwork.export.stepFile", {
+                    n: intent === "print" ? 5 : intent === "metadata" ? 4 : 3
+                  })}
                 </p>
                 <label className="field">
-                  Tipo de archivo
+                  {t("artwork.export.fileType")}
                   <select
                     value={format}
                     onChange={(event) =>
                       setFormat(event.target.value as "jpg" | "png" | "pdf")
                     }
                   >
-                    <option value="jpg">JPG — lo normal para fotos</option>
-                    <option value="png">PNG — pesa más</option>
-                    <option value="pdf">PDF — una página</option>
+                    <option value="jpg">{t("artwork.export.format.jpg")}</option>
+                    <option value="png">{t("artwork.export.format.png")}</option>
+                    <option value="pdf">{t("artwork.export.format.pdf")}</option>
                   </select>
                 </label>
 
@@ -2940,18 +3037,20 @@ function ImageExportModal({
                         clearFeedback();
                       }}
                     />
-                    También me han puesto un límite de peso (MB)
+                    {t("artwork.export.limitToggle")}
                   </label>
                 )}
 
                 {limitActive && (
                   <>
                     <label className="field">
-                      Peso máximo del archivo
+                      {t("artwork.export.maxSize")}
                       <div className="export-max-size">
                         <input
                           inputMode="decimal"
-                          placeholder={intent === "simple" ? "ej. 5" : "ej. 8"}
+                          placeholder={t("artwork.export.sizePlaceholder", {
+                            n: intent === "simple" ? 5 : 8
+                          })}
                           value={sizeValue}
                           onChange={(event) => {
                             setSizeValue(
@@ -2979,8 +3078,8 @@ function ImageExportModal({
                       }
                     >
                       {targetKB
-                        ? "Comprimir el archivo baja la calidad de la foto. Solo úsalo si te exigen un máximo de MB."
-                        : "Vacío = sin límite de peso."}
+                        ? t("artwork.export.compressWarning")
+                        : t("artwork.export.noSizeLimit")}
                     </p>
                   </>
                 )}
@@ -2988,18 +3087,20 @@ function ImageExportModal({
 
               <div className="export-summary soft">
                 <p>
-                  <strong>Resumen:</strong>{" "}
+                  <strong>{t("artwork.export.summary")}</strong>{" "}
                   {intent === "print"
                     ? printWNum > 0 && printHNum > 0 && dpiNum > 0
                       ? `${formatCm(printWNum)}×${formatCm(printHNum)} cm · ${dpiNum} DPI · ${format.toUpperCase()}`
-                      : "Falta tamaño o DPI"
+                      : t("artwork.export.missingSizeDpi")
                     : intent === "metadata"
                       ? dpiNum > 0
-                        ? `Misma foto · ${dpiNum} DPI · ${format.toUpperCase()}`
-                        : "Falta el DPI"
-                      : `Misma foto · ${format.toUpperCase()}`}
+                        ? `${t("artwork.export.samePhoto")} · ${dpiNum} DPI · ${format.toUpperCase()}`
+                        : t("artwork.export.missingDpi")
+                      : `${t("artwork.export.samePhoto")} · ${format.toUpperCase()}`}
                   {targetKB
-                    ? ` · máx. ${sizeUnit === "mb" ? `${sizeNum} MB` : `${sizeNum} KB`}`
+                    ? ` · ${t("artwork.export.maxAbbrev")} ${
+                        sizeUnit === "mb" ? `${sizeNum} MB` : `${sizeNum} KB`
+                      }`
                     : ""}
                 </p>
               </div>
@@ -3011,10 +3112,10 @@ function ImageExportModal({
         </div>
         <div className="modal-actions">
           <button disabled={!canSave} onClick={() => void run()}>
-            {busy ? "Guardando…" : "Guardar copia…"}
+            {busy ? t("common.saving") : t("artwork.export.saveCopy")}
           </button>
           <button className="ghost" onClick={onClose}>
-            Cerrar
+            {t("common.close")}
           </button>
         </div>
       </div>
@@ -3043,6 +3144,7 @@ function ArtworkDetail({
   onToast: (message: string) => void;
   onError: (message: string) => void;
 }) {
+  const { lang, t } = useLanguage();
   const [tab, setTab] = useState<DetailTab>("info");
   const [openMovement, setOpenMovement] = useState<Movement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -3088,13 +3190,14 @@ function ArtworkDetail({
 
   async function generateCertificate() {
     const isMultiple = artwork.editionMode === "multiple";
-    const counted =
-      Number(artwork.editionPersonalCopies || 0) +
-      Number(artwork.editionSaleCopies || 0);
-    const total =
-      editions.length > 0 ? editions.length : Math.max(1, counted);
-    if (isMultiple && total > 1 && !certCopyId && editions.length > 0) {
-      onError("Elige qué ejemplar es este certificado.");
+    const saleEditions = editions.filter((e) => e.kind !== "personal");
+    const personalEditions = editions.filter((e) => e.kind === "personal");
+    const saleTotal =
+      saleEditions.length > 0
+        ? saleEditions.length
+        : Math.max(1, Number(artwork.editionSaleCopies || 0));
+    if (isMultiple && editions.length > 1 && !certCopyId && editions.length > 0) {
+      onError(t("cert.error.needCopy"));
       return;
     }
     setCertBusy(true);
@@ -3106,29 +3209,61 @@ function ArtworkDetail({
         /* ignore */
       }
       const selectedEdition = editions.find((e) => e.id === certCopyId);
-      const copyIndex = selectedEdition
-        ? editions.findIndex((e) => e.id === certCopyId) + 1
-        : Number(certCopyId) || 1;
-      const path = await requireApi("generateCertificateOfAuthenticity")({
+      const isArtistProof = selectedEdition?.kind === "personal";
+      // Sale copies: number within the for-sale edition only (ignore P/A).
+      // Artist proofs: keep their own P/A label — never "11 of 12".
+      let editionCount = saleTotal;
+      let copyNumber: number | undefined;
+      let copyLabel: string | undefined;
+      let editionOverride: string | undefined;
+      if (isMultiple) {
+        if (isArtistProof && selectedEdition) {
+          const paIndex =
+            personalEditions.findIndex((e) => e.id === certCopyId) + 1;
+          const paTotal = Math.max(1, personalEditions.length);
+          editionOverride =
+            selectedEdition.label?.trim() ||
+            `P/A ${Math.max(1, paIndex)}`;
+          // Still pass mode/count for context, but HTML will use editionOverride.
+          editionCount = paTotal;
+          copyNumber = Math.max(1, paIndex);
+          copyLabel = undefined;
+        } else {
+          const saleIndex = selectedEdition
+            ? saleEditions.findIndex((e) => e.id === certCopyId) + 1
+            : Number(certCopyId) || 1;
+          editionCount = saleTotal;
+          copyNumber = Math.max(1, saleIndex || 1);
+          // Don't also append "(9/10)" — that duplicates "Number 9 of 10".
+          copyLabel = undefined;
+        }
+      }
+      const path = await requireApi("generateCertificateOfAuthenticity", t)({
         title: artwork.title,
         year: String(artwork.yearMade ?? "").trim() || undefined,
         medium: artTypeLabel(inventory, artwork.type, certLang) || undefined,
-        size: formatSize(artwork) || undefined,
-        series: artwork.series?.trim() || undefined,
+        size:
+          artwork.type === "ipad_drawing"
+            ? undefined
+            : formatSize(artwork) || undefined,
+        series: isNoSeries(artwork.series)
+          ? undefined
+          : artwork.series?.trim() || undefined,
+        edition: editionOverride,
         editionMode: isMultiple ? "multiple" : "unique",
-        editionCount: total,
-        copyNumber: isMultiple ? Math.max(1, copyIndex) : undefined,
-        copyLabel: selectedEdition?.label || undefined,
+        editionCount: isMultiple ? editionCount : undefined,
+        copyNumber: isMultiple && !editionOverride ? copyNumber : undefined,
+        copyLabel,
         artistName: artistName || undefined,
         language: certLang
       });
       setCertLangOpen(false);
-      if (path) onToast("Certificado generado.");
+      if (path) onToast(t("cert.toast.done"));
     } catch (error) {
       onError(
         error instanceof Error
           ? error.message
-          : "No se pudo generar el certificado."
+          : t("cert.error.failed")
       );
     } finally {
       setCertBusy(false);
@@ -3144,13 +3279,13 @@ function ArtworkDetail({
   return (
     <section className="detail-layout">
       <div className="detail-image-panel">
-        {imageUrl ? <img src={imageUrl} alt={artwork.title} /> : <div>Sin foto</div>}
+        {imageUrl ? <img src={imageUrl} alt={artwork.title} /> : <div>{t("common.noPhoto")}</div>}
         <div className="image-panel-actions">
           <button className="ghost" onClick={() => void addImage()} disabled={imageBusy}>
-            {imageUrl ? "Cambiar foto" : "Añadir foto"}
+            {imageUrl ? t("artwork.photo.change") : t("artwork.photo.add")}
           </button>
           <button className="ghost" onClick={() => setExporting(true)}>
-            Salvar imagen…
+            {t("artwork.detail.saveImage")}
           </button>
         </div>
       </div>
@@ -3172,16 +3307,18 @@ function ArtworkDetail({
             aria-labelledby="cert-lang-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 id="cert-lang-title">Generar certificado</h3>
-            <p className="muted">
-              Elige el idioma. La técnica y las comillas se adaptan solas.
-            </p>
-            <div className="cert-lang-choices" role="radiogroup" aria-label="Idioma">
+            <h3 id="cert-lang-title">{t("cert.modal.title")}</h3>
+            <p className="muted">{t("cert.modal.langHint")}</p>
+            <div
+              className="cert-lang-choices"
+              role="radiogroup"
+              aria-label={t("cert.modal.language")}
+            >
               {(
                 [
-                  ["es", "Español"],
-                  ["en", "English"],
-                  ["de", "Deutsch"]
+                  ["es", t("cert.modal.spanish")],
+                  ["en", t("cert.modal.english")],
+                  ["de", t("cert.modal.german")]
                 ] as const
               ).map(([code, label]) => (
                 <button
@@ -3205,7 +3342,7 @@ function ArtworkDetail({
                 Number(artwork.editionSaleCopies || 0) >
                 1) ? (
               <label className="field cert-copy-field">
-                ¿Qué ejemplar es este certificado?
+                {t("cert.modal.whichCopy")}
                 {editions.length > 0 ? (
                   <select
                     value={certCopyId}
@@ -3251,14 +3388,16 @@ function ArtworkDetail({
                 disabled={certBusy}
                 onClick={() => setCertLangOpen(false)}
               >
-                Cancelar
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
                 disabled={certBusy}
                 onClick={() => void generateCertificate()}
               >
-                {certBusy ? "Generando…" : "Generar PDF"}
+                {certBusy
+                  ? t("cert.modal.generating")
+                  : t("cert.modal.generatePdf")}
               </button>
             </div>
           </div>
@@ -3277,27 +3416,27 @@ function ArtworkDetail({
               disabled={certBusy}
               onClick={openCertificateModal}
             >
-              {certBusy ? "…" : "Generar certificado"}
+              {certBusy ? t("artwork.detail.certBusy") : t("artwork.detail.cert")}
             </button>
-            <button onClick={onEdit}>Editar</button>
+            <button onClick={onEdit}>{t("common.edit")}</button>
             <button className="ghost" onClick={onBack}>
-              Volver
+              {t("common.back")}
             </button>
           </div>
         </div>
 
         <div className="subtabs">
           <SubTab active={tab === "info"} onClick={() => setTab("info")}>
-            Información
+            {t("artwork.detail.tab.info")}
           </SubTab>
           <SubTab
             active={tab === "movimientos"}
             onClick={() => setTab("movimientos")}
           >
-            Movimientos ({movements.length})
+            {t("artwork.detail.tab.movements", { count: movements.length })}
           </SubTab>
           <SubTab active={tab === "precio"} onClick={() => setTab("precio")}>
-            Precio histórico
+            {t("artwork.detail.tab.price")}
           </SubTab>
         </div>
 
@@ -3311,22 +3450,22 @@ function ArtworkDetail({
 
         {tab === "info" && (
           <dl className="metadata">
-            <dt>Serie</dt>
-            <dd>{artwork.series || "-"}</dd>
-            <dt>Tipo</dt>
-            <dd>{labelFor(inventory, "artworkType", artwork.type)}</dd>
-            <dt>Año</dt>
+            <dt>{t("artwork.detail.meta.series")}</dt>
+            <dd>{seriesLabel(artwork.series, t)}</dd>
+            <dt>{t("artwork.detail.meta.type")}</dt>
+            <dd>{labelFor(inventory, "artworkType", artwork.type, lang)}</dd>
+            <dt>{t("artwork.detail.meta.year")}</dt>
             <dd>{artwork.yearMade || "-"}</dd>
-            <dt>Medidas</dt>
+            <dt>{t("artwork.detail.meta.dimensions")}</dt>
             <dd>
               {[artwork.height, artwork.width, artwork.depth].filter(Boolean).join(" x ") ||
                 "-"}{" "}
               {artwork.unit}
             </dd>
-            <dt>Estado</dt>
+            <dt>{t("artwork.detail.meta.status")}</dt>
             <dd>
               <span className={`status-pill st-${slugify(artwork.status)}`}>
-                {labelFor(inventory, "status", artwork.status)}
+                {labelFor(inventory, "status", artwork.status, lang)}
               </span>{" "}
               {overdueMovement(artwork, inventory) && (
                 <RetrievalMark
@@ -3339,13 +3478,13 @@ function ArtworkDetail({
             </dd>
             {artwork.status === "consigned" && (
               <>
-                <dt>Galería</dt>
+                <dt>{t("artwork.detail.meta.gallery")}</dt>
                 <dd>{artwork.galleryName || contactName(inventory, artwork.galleryContactId)}</dd>
               </>
             )}
             {artwork.soldPrice && (
               <>
-                <dt>Vendida por</dt>
+                <dt>{t("artwork.detail.meta.soldBy")}</dt>
                 <dd>
                   {artwork.soldPrice}
                   {artwork.soldToName ? ` · ${artwork.soldToName}` : ""}
@@ -3353,25 +3492,25 @@ function ArtworkDetail({
                 </dd>
               </>
             )}
-            <dt>Edición</dt>
+            <dt>{t("artwork.detail.meta.edition")}</dt>
             <dd>
               {artwork.editionMode === "multiple"
-                ? `Varias copias (${editions.length})`
-                : "Única"}
+                ? t("artwork.detail.edition.multiple", { count: editions.length })
+                : t("artwork.detail.edition.unique")}
             </dd>
-            <dt>Notas</dt>
+            <dt>{t("artwork.detail.meta.notes")}</dt>
             <dd className="notes-display">{artwork.notes || "-"}</dd>
           </dl>
         )}
 
         {tab === "info" && artwork.editionMode === "multiple" && editions.length > 0 && (
           <div className="related-block">
-            <h3>Copias ({editions.length})</h3>
+            <h3>{t("artwork.detail.copies", { count: editions.length })}</h3>
             <div className="mini-table">
               {editions.map((edition) => (
                 <div className="mini-row" key={edition.id}>
                   <strong>{edition.label}</strong>
-                  <span>{labelFor(inventory, "status", edition.status || "not_made")}</span>
+                  <span>{labelFor(inventory, "status", edition.status || "not_made", lang)}</span>
                 </div>
               ))}
             </div>
@@ -3384,8 +3523,8 @@ function ArtworkDetail({
             setInventory={setInventory}
             targetType="artwork"
             targetId={artwork.id}
-            label="Imágenes adicionales"
-            hint="Capturas de prensa, montajes o fotos donde aparece la obra. Solo se muestran aquí."
+            label={t("artwork.detail.extraImages")}
+            hint={t("artwork.detail.extraImages.hint")}
           />
         )}
 
@@ -3393,8 +3532,8 @@ function ArtworkDetail({
           <div className="movements-view">
             {movements.length === 0 ? (
               <div className="movements-empty">
-                <strong>Sin movimientos</strong>
-                <p className="muted">Edita la obra para registrar ventas o préstamos.</p>
+                <strong>{t("artwork.detail.movementsEmpty")}</strong>
+                <p className="muted">{t("artwork.detail.movementsEmpty.hint")}</p>
               </div>
             ) : (
               <div className="movements-timeline">
@@ -3408,17 +3547,17 @@ function ArtworkDetail({
                       onClick={() => setOpenMovement(item)}
                     >
                       <span className={`mv-pill mv-pill-${kind}`}>
-                        {labelFor(inventory, "movementType", item.type) || item.type}
+                        {labelFor(inventory, "movementType", item.type, lang) || item.type}
                       </span>
                       <span className="mv-card-copy">
                         <strong>
-                          {movementSummary(item, inventory)}
+                          {movementSummary(item, inventory, t, lang)}
                           {item.editionLabel ? ` · ${item.editionLabel}` : ""}
                         </strong>
                         <span className="muted">
                           {[
-                            item.date || "Sin fecha",
-                            movementSubtitle(item, inventory)
+                            item.date || t("common.noDate"),
+                            movementSubtitle(item, inventory, t)
                           ]
                             .filter(Boolean)
                             .join(" · ")}
@@ -3434,14 +3573,13 @@ function ArtworkDetail({
 
         <div className="danger-zone">
           <div>
-            <strong>Eliminar esta obra</strong>
+            <strong>{t("artwork.detail.delete.title")}</strong>
             <p className="muted">
-              Se borrará «{artwork.title}» y todos sus movimientos. No se puede
-              deshacer.
+              {t("artwork.detail.delete.body", { title: artwork.title })}
             </p>
           </div>
           <button className="ghost danger" onClick={() => setConfirmDelete(true)}>
-            Eliminar obra…
+            {t("artwork.detail.delete.button")}
           </button>
         </div>
       </div>
@@ -3464,9 +3602,9 @@ function ArtworkDetail({
 
       {confirmDelete && (
         <ConfirmDialog
-          title="Eliminar obra"
-          message={`Estás a punto de eliminar la obra «${artwork.title}» y todos sus movimientos asociados.`}
-          confirmLabel="Eliminar definitivamente"
+          title={t("confirm.artwork.title")}
+          message={t("confirm.artwork.message", { title: artwork.title })}
+          confirmLabel={t("common.deleteForever")}
           onConfirm={() => {
             setConfirmDelete(false);
             void remove();
@@ -3530,10 +3668,11 @@ function LookupSelect({
   allowEmpty?: boolean;
   hideValues?: string[];
 }) {
+  const { lang, t } = useLanguage();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const [reassigning, setReassigning] = useState(false);
-  const options = lookupOptions(inventory, category).filter(
+  const options = translatedLookupOptions(inventory, category, lang).filter(
     (option) => !(hideValues ?? []).includes(option.value)
   );
   const canDelete = Boolean(value) && !isDefaultLookup(category, value);
@@ -3589,7 +3728,7 @@ function LookupSelect({
       <span className="field-label">{label}</span>
       <div className="lookup-row">
         <select value={value} onChange={(event) => onChange(event.target.value)}>
-          {allowEmpty && <option value="">—</option>}
+          {allowEmpty && <option value="">{t("common.dash")}</option>}
           {options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -3602,7 +3741,7 @@ function LookupSelect({
         <button
           type="button"
           className="icon-button add"
-          title="Añadir una opción nueva"
+          title={t("lookup.addOption")}
           onClick={() => setAdding(true)}
         >
           +
@@ -3612,8 +3751,8 @@ function LookupSelect({
           className="icon-button remove"
           title={
             canDelete
-              ? "Quitar esta opción de la lista"
-              : "Solo se pueden quitar opciones añadidas por ti"
+              ? t("lookup.removeOption")
+              : t("lookup.removeBuiltin")
           }
           disabled={!canDelete}
           onClick={removeOption}
@@ -3636,7 +3775,7 @@ function LookupSelect({
             }}
           />
           <button type="button" className="small" onClick={addOption}>
-            Añadir
+            {t("common.add")}
           </button>
           <button
             type="button"
@@ -3646,7 +3785,7 @@ function LookupSelect({
               setDraft("");
             }}
           >
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       )}
@@ -3685,11 +3824,12 @@ function LookupReassignModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { lang, t } = useLanguage();
   const usage = lookupUsage(inventory, category, fromValue);
-  const targets = lookupOptions(inventory, category).filter(
+  const targets = translatedLookupOptions(inventory, category, lang).filter(
     (option) => option.value !== fromValue
   );
-  const fromLabel = labelFor(inventory, category, fromValue);
+  const fromLabel = labelFor(inventory, category, fromValue, lang);
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 
@@ -3715,16 +3855,18 @@ function LookupReassignModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h3>Cambiar «{fromLabel}» antes de borrar</h3>
+          <h3>{t("confirm.lookup.title")}</h3>
           <button className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
         </div>
         <p className="muted">
-          Hay {usage.length}{" "}
-          {usage.length === 1 ? "registro que usa" : "registros que usan"} esta
-          opción de «{label.toLowerCase()}». Elige un valor nuevo para cada uno.
-          Cuando todos tengan un valor, se borrará «{fromLabel}».
+          {t(
+            usage.length === 1
+              ? "confirm.lookup.usageOne"
+              : "confirm.lookup.usageMany",
+            { count: usage.length, label: label.toLowerCase(), fromLabel }
+          )}
         </p>
         <div className="reassign-list">
           {usage.map((item) => (
@@ -3741,7 +3883,7 @@ function LookupReassignModal({
                   }))
                 }
               >
-                <option value="">Elegir nuevo valor…</option>
+                <option value="">{t("confirm.lookup.pick")}</option>
                 {targets.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
@@ -3752,21 +3894,18 @@ function LookupReassignModal({
           ))}
         </div>
         {targets.length === 0 && (
-          <p className="danger-text">
-            No hay otra opción disponible. Añade una opción nueva antes de borrar
-            esta.
-          </p>
+          <p className="danger-text">{t("confirm.lookup.noAlternative")}</p>
         )}
         <div className="modal-actions">
           <button className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
           <button
             className="danger-solid"
             disabled={!allChosen || busy || targets.length === 0}
             onClick={confirm}
           >
-            Actualizar y borrar
+            {t("confirm.lookup.updateDelete")}
           </button>
         </div>
       </div>
@@ -3774,15 +3913,18 @@ function LookupReassignModal({
   );
 }
 
-const CONTACT_KINDS: Array<[ContactKind, string]> = [
-  ["person", "Persona"],
-  ["gallery", "Galería"],
-  ["museum", "Museo"],
-  ["collection", "Colección"]
+/** Kind, singular label key, plural label key — translated at the call site. */
+const CONTACT_KINDS: Array<[ContactKind, StringKey, StringKey]> = [
+  ["person", "contact.kind.person", "contact.kind.persons"],
+  ["gallery", "contact.kind.gallery", "contact.kind.galleries"],
+  ["museum", "contact.kind.museum", "contact.kind.museums"],
+  ["collection", "contact.kind.collection", "contact.kind.collections"]
 ];
 
-function contactKindLabel(kind: ContactKind): string {
-  return CONTACT_KINDS.find(([k]) => k === kind)?.[1] ?? kind;
+function contactKindLabel(kind: ContactKind, t?: Translate): string {
+  const entry = CONTACT_KINDS.find(([value]) => value === kind);
+  if (!entry) return kind;
+  return t ? t(entry[1]) : translate("es", entry[1]);
 }
 
 function isInstitution(kind: ContactKind): boolean {
@@ -3790,6 +3932,7 @@ function isInstitution(kind: ContactKind): boolean {
 }
 
 // Same pattern as Tipo: pick an existing series, or + to type a new name.
+// Blank = not chosen yet. «Sin serie» is a real option (NO_SERIES_VALUE).
 function SeriesField({
   inventory,
   value,
@@ -3799,6 +3942,7 @@ function SeriesField({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const t = useT();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
 
@@ -3806,12 +3950,12 @@ function SeriesField({
     const counts = new Map<string, number>();
     for (const art of inventory.artworks) {
       const name = art.series?.trim();
-      if (!name) continue;
+      if (!name || isNoSeries(name)) continue;
       counts.set(name, (counts.get(name) || 0) + 1);
     }
     for (const info of inventory.seriesInfo ?? []) {
       const name = info.name?.trim();
-      if (!name) continue;
+      if (!name || isNoSeries(name)) continue;
       if (!counts.has(name)) counts.set(name, 0);
     }
     return [...counts.entries()]
@@ -3822,19 +3966,31 @@ function SeriesField({
   function commitNew() {
     const next = draft.trim();
     if (!next) return;
-    onChange(next);
+    const lowered = next.toLowerCase();
+    // Typing the "no series" phrase still maps to the built-in option.
+    if (
+      lowered === NO_SERIES_VALUE ||
+      lowered === "sin serie" ||
+      lowered === "no series" ||
+      lowered === "keine serie" ||
+      lowered === "ohne serie"
+    ) {
+      onChange(NO_SERIES_VALUE);
+    } else {
+      onChange(next);
+    }
     setDraft("");
     setAdding(false);
   }
 
   return (
     <div className="field lookup-field">
-      <span className="field-label">Serie</span>
+      <span className="field-label">{t("series.field.label")}</span>
       {adding ? (
         <div className="inline-add">
           <input
             autoFocus
-            placeholder="Nombre de la serie"
+            placeholder={t("series.field.namePlaceholder")}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -3849,7 +4005,7 @@ function SeriesField({
             }}
           />
           <button type="button" onClick={commitNew} disabled={!draft.trim()}>
-            Usar
+            {t("common.use")}
           </button>
           <button
             type="button"
@@ -3859,7 +4015,7 @@ function SeriesField({
               setDraft("");
             }}
           >
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       ) : (
@@ -3868,7 +4024,8 @@ function SeriesField({
             value={value}
             onChange={(event) => onChange(event.target.value)}
           >
-            <option value="">— Sin serie</option>
+            <option value="">{t("series.field.placeholder")}</option>
+            <option value={NO_SERIES_VALUE}>{t("series.field.none")}</option>
             {options.map((option) => (
               <option key={option.name} value={option.name}>
                 {option.count > 0
@@ -3877,6 +4034,7 @@ function SeriesField({
               </option>
             ))}
             {value.trim() &&
+              !isNoSeries(value) &&
               !options.some((option) => option.name === value.trim()) && (
                 <option value={value}>{value}</option>
               )}
@@ -3884,7 +4042,7 @@ function SeriesField({
           <button
             type="button"
             className="icon-button add wide"
-            title="Crear una serie nueva"
+            title={t("series.field.createNew")}
             onClick={() => setAdding(true)}
           >
             +
@@ -3910,6 +4068,7 @@ function ContactSelect({
   onChange: (value: string) => void;
   kind: ContactKind;
 }) {
+  const t = useT();
   const [showModal, setShowModal] = useState(false);
   const contacts = inventory.contacts.filter((contact) => contact.kind === kind);
 
@@ -3918,7 +4077,7 @@ function ContactSelect({
       <span className="field-label">{label}</span>
       <div className="lookup-row">
         <select value={value} onChange={(event) => onChange(event.target.value)}>
-          <option value="">— Seleccionar —</option>
+          <option value="">{t("common.selectPlaceholder")}</option>
           {contacts.map((contact) => (
             <option key={contact.id} value={contact.id}>
               {contact.name}
@@ -3928,7 +4087,7 @@ function ContactSelect({
         <button
           type="button"
           className="icon-button add wide"
-          title={kind === "gallery" ? "Añadir galería nueva" : "Añadir persona nueva"}
+          title={kind === "gallery" ? t("contact.form.addGallery") : t("contact.form.addPerson")}
           onClick={() => setShowModal(true)}
         >
           +
@@ -3965,6 +4124,7 @@ function ContactModal({
   onClose: () => void;
   onCreated?: (id: string) => void;
 }) {
+  const t = useT();
   const [form, setForm] = useState<ContactInput>({
     id: initial?.id,
     kind,
@@ -4007,13 +4167,14 @@ function ContactModal({
       if (created && onCreated) onCreated(created.id);
       else onClose();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo guardar.");
+      setError(caught instanceof Error ? caught.message : t("common.error.save"));
     }
   }
 
-  const heading = `${initial ? "Editar" : "Nueva"} ${contactKindLabel(
-    kind
-  ).toLowerCase()}`;
+  const heading = t(
+    initial ? "contact.form.titleEdit" : "contact.form.titleNew",
+    { kind: contactKindLabel(kind, t).toLowerCase() }
+  );
 
   const institutions = inventory.contacts.filter((contact) =>
     isInstitution(contact.kind)
@@ -4032,19 +4193,23 @@ function ContactModal({
         {isInstitution(kind) ? (
           <div className="modal-body">
             <label className="field">
-              Nombre {kind === "gallery" ? "de la galería" : kind === "museum" ? "del museo" : "de la colección"}
+              {kind === "gallery"
+                ? t("contact.form.nameGallery")
+                : kind === "museum"
+                  ? t("contact.form.nameMuseum")
+                  : t("contact.form.nameCollection")}
               <input value={form.name ?? ""} onChange={(event) => set("name", event.target.value)} />
             </label>
             <div className="form-row">
               <label className="field">
-                Ciudad
+                {t("contact.form.city")}
                 <input
                   value={form.city ?? ""}
                   onChange={(event) => set("city", event.target.value)}
                 />
               </label>
               <label className="field">
-                País
+                {t("contact.form.country")}
                 <input
                   value={form.country ?? ""}
                   onChange={(event) => set("country", event.target.value)}
@@ -4053,18 +4218,18 @@ function ContactModal({
             </div>
             <div className="form-row">
               <label className="field">
-                Sitio web
+                {t("contact.form.website")}
                 <input
                   value={form.website ?? ""}
                   onChange={(event) => set("website", event.target.value)}
                 />
               </label>
               <label className="field">
-                Año de primer contacto
+                {t("contact.form.firstContactYear")}
                 <input
                   inputMode="numeric"
                   maxLength={4}
-                  placeholder="YYYY"
+                  placeholder={t("artwork.field.yearPlaceholder")}
                   value={form.firstContactYear ?? ""}
                   onChange={(event) =>
                     set(
@@ -4077,14 +4242,14 @@ function ContactModal({
             </div>
             <div className="form-row">
               <label className="field">
-                Teléfono
+                {t("contact.form.phone")}
                 <input
                   value={form.phone ?? ""}
                   onChange={(event) => set("phone", event.target.value)}
                 />
               </label>
               <label className="field">
-                Email
+                {t("contact.form.email")}
                 <input
                   value={form.email ?? ""}
                   onChange={(event) => set("email", event.target.value)}
@@ -4092,7 +4257,7 @@ function ContactModal({
               </label>
             </div>
             <label className="field">
-              Relación / contacto
+              {t("contact.form.relation")}
               <input
                 value={form.relationship ?? ""}
                 onChange={(event) => set("relationship", event.target.value)}
@@ -4101,13 +4266,13 @@ function ContactModal({
             <ContactSelect
               inventory={inventory}
               setInventory={setInventory}
-              label="Galerista (persona de referencia)"
+              label={t("contact.form.gallerist")}
               kind="person"
               value={form.galleristContactId ?? ""}
               onChange={(value) => set("galleristContactId", value)}
             />
             <label className="field">
-              Comentarios
+              {t("contact.form.comments")}
               <textarea
                 value={form.comments ?? ""}
                 onChange={(event) => set("comments", event.target.value)}
@@ -4118,14 +4283,14 @@ function ContactModal({
           <div className="modal-body">
             <div className="form-row">
               <label className="field">
-                Nombre
+                {t("contact.form.firstName")}
                 <input
                   value={form.firstName ?? ""}
                   onChange={(event) => set("firstName", event.target.value)}
                 />
               </label>
               <label className="field">
-                Apellido
+                {t("contact.form.lastName")}
                 <input
                   value={form.lastName ?? ""}
                   onChange={(event) => set("lastName", event.target.value)}
@@ -4134,14 +4299,14 @@ function ContactModal({
             </div>
             <div className="form-row">
               <label className="field">
-                Cumpleaños
+                {t("contact.form.birthday")}
                 <DateField
                   value={form.birthday ?? ""}
                   onChange={(value) => set("birthday", value)}
                 />
               </label>
               <label className="field">
-                Profesión
+                {t("contact.form.profession")}
                 <input
                   value={form.job ?? ""}
                   onChange={(event) => set("job", event.target.value)}
@@ -4150,14 +4315,14 @@ function ContactModal({
             </div>
             <div className="form-row">
               <label className="field">
-                Ciudad
+                {t("contact.form.city")}
                 <input
                   value={form.city ?? ""}
                   onChange={(event) => set("city", event.target.value)}
                 />
               </label>
               <label className="field">
-                País
+                {t("contact.form.country")}
                 <input
                   value={form.country ?? ""}
                   onChange={(event) => set("country", event.target.value)}
@@ -4166,14 +4331,14 @@ function ContactModal({
             </div>
             <div className="form-row">
               <label className="field">
-                Relación
+                {t("contacts.col.relation")}
                 <input
                   value={form.relationship ?? ""}
                   onChange={(event) => set("relationship", event.target.value)}
                 />
               </label>
               <label className="field">
-                Teléfono
+                {t("contact.form.phone")}
                 <input
                   value={form.phone ?? ""}
                   onChange={(event) => set("phone", event.target.value)}
@@ -4182,18 +4347,18 @@ function ContactModal({
             </div>
             <div className="form-row">
               <label className="field">
-                Email
+                {t("contact.form.email")}
                 <input
                   value={form.email ?? ""}
                   onChange={(event) => set("email", event.target.value)}
                 />
               </label>
               <label className="field">
-                Año de primer contacto
+                {t("contact.form.firstContactYear")}
                 <input
                   inputMode="numeric"
                   maxLength={4}
-                  placeholder="YYYY"
+                  placeholder={t("artwork.field.yearPlaceholder")}
                   value={form.firstContactYear ?? ""}
                   onChange={(event) =>
                     set(
@@ -4205,28 +4370,28 @@ function ContactModal({
               </label>
             </div>
             <label className="field">
-              Sitio web
+              {t("contact.form.website")}
               <input
                 value={form.website ?? ""}
                 onChange={(event) => set("website", event.target.value)}
               />
             </label>
             <label className="field">
-              Vinculada a (galería / museo / colección)
+              {t("contact.form.linkedToFull")}
               <select
                 value={form.organizationId ?? ""}
                 onChange={(event) => set("organizationId", event.target.value)}
               >
-                <option value="">— Ninguna —</option>
+                <option value="">{t("contact.form.none")}</option>
                 {institutions.map((org) => (
                   <option key={org.id} value={org.id}>
-                    {org.name} · {contactKindLabel(org.kind)}
+                    {org.name} · {contactKindLabel(org.kind, t)}
                   </option>
                 ))}
               </select>
             </label>
             <label className="field">
-              Comentarios
+              {t("contact.form.comments")}
               <textarea
                 value={form.comments ?? ""}
                 onChange={(event) => set("comments", event.target.value)}
@@ -4237,9 +4402,9 @@ function ContactModal({
 
         {error && <div className="error-banner">{error}</div>}
         <div className="modal-actions">
-          <button onClick={save}>Guardar</button>
+          <button onClick={save}>{t("common.save")}</button>
           <button className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       </div>
@@ -4260,6 +4425,7 @@ function ContactsPage({
   setInventory: (data: InventoryData) => void;
   onOpen: (contactId: string) => void;
 }) {
+  const t = useT();
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<"all" | ContactKind>("all");
   const [countryFilter, setCountryFilter] = useState("");
@@ -4305,32 +4471,32 @@ function ContactsPage({
             className={kindFilter === "all" ? "seg active" : "seg"}
             onClick={() => setKindFilter("all")}
           >
-            Todos
+            {t("common.all")}
           </button>
-          {CONTACT_KINDS.map(([value, label]) => (
+          {CONTACT_KINDS.map(([value, , pluralKey]) => (
             <button
               key={value}
               className={kindFilter === value ? "seg active" : "seg"}
               onClick={() => setKindFilter(value)}
             >
-              {label === "Persona" ? "Personas" : label === "Galería" ? "Galerías" : `${label}s`}
+              {t(pluralKey)}
             </button>
           ))}
         </div>
         <input
           className="search-input grow"
-          placeholder="Buscar contacto..."
+          placeholder={t("contacts.search")}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
         {countries.length > 0 && (
           <label className="sort-control">
-            Lugar
+            {t("contacts.filter.place")}
             <select
               value={countryFilter}
               onChange={(event) => setCountryFilter(event.target.value)}
             >
-              <option value="">Todos</option>
+              <option value="">{t("common.all")}</option>
               {countries.map((country) => (
                 <option key={country} value={country}>
                   {country}
@@ -4340,10 +4506,10 @@ function ContactsPage({
           </label>
         )}
         <label className="sort-control">
-          Ordenar
+          {t("common.sort")}
           <select value={sort} onChange={(event) => setSort(event.target.value as "name" | "recent")}>
-            <option value="name">Nombre (A→Z)</option>
-            <option value="recent">Recientes</option>
+            <option value="name">{t("contacts.sort.name")}</option>
+            <option value="recent">{t("contacts.sort.recent")}</option>
           </select>
         </label>
         {(search || countryFilter || kindFilter !== "all") && (
@@ -4355,22 +4521,22 @@ function ContactsPage({
               setKindFilter("all");
             }}
           >
-            Limpiar
+            {t("common.clear")}
           </button>
         )}
         <span className="count-pill">{contacts.length}</span>
         <label className="sort-control">
-          Añadir
+          {t("common.add")}
           <select
             value=""
             onChange={(event) => {
               if (event.target.value) setModal({ kind: event.target.value as ContactKind });
             }}
           >
-            <option value="">+ Nuevo…</option>
-            {CONTACT_KINDS.map(([value, label]) => (
+            <option value="">{t("contacts.add")}</option>
+            {CONTACT_KINDS.map(([value, singularKey]) => (
               <option key={value} value={value}>
-                {label}
+                {t(singularKey)}
               </option>
             ))}
           </select>
@@ -4380,15 +4546,15 @@ function ContactsPage({
       <div className="list-table-wrap">
         <div className="list-table">
           <div className="list-row list-row-header">
-            <span>Tipo</span>
-            <span>Nombre</span>
-            <span>Lugar</span>
-            <span>Relación</span>
-            <span>Contacto</span>
-            <span>Desde</span>
+            <span>{t("contacts.col.type")}</span>
+            <span>{t("contacts.col.name")}</span>
+            <span>{t("contacts.col.place")}</span>
+            <span>{t("contacts.col.relation")}</span>
+            <span>{t("contacts.col.contact")}</span>
+            <span>{t("contacts.col.since")}</span>
           </div>
           {contacts.length === 0 ? (
-            <div className="table-empty">Aún no hay personas ni galerías.</div>
+            <div className="table-empty">{t("contacts.empty")}</div>
           ) : (
             contacts.map((contact) => (
               <button
@@ -4398,7 +4564,7 @@ function ContactsPage({
               >
                 <span>
                   <span className={`tag tag-${contact.kind}`}>
-                    {contactKindLabel(contact.kind)}
+                    {contactKindLabel(contact.kind, t)}
                   </span>
                 </span>
                 <span className="cell-strong">{contact.name}</span>
@@ -4510,7 +4676,7 @@ function flattenSeriesArtGroups(
 function sortArtworkIdsBySeries(
   ids: string[],
   inventory: InventoryData,
-  noSeriesLabel = "sin serie"
+  noSeriesLabel: string
 ): string[] {
   const groups = groupArtworksBySeriesOrder(ids, inventory, noSeriesLabel);
   groups.sort((a, b) => {
@@ -4571,6 +4737,7 @@ function ApplicationSeriesOrder({
   onChange: (ids: string[], options?: { quiet?: boolean }) => void;
   onRemove: (id: string) => void;
 }) {
+  const t = useT();
   const groups = groupArtworksBySeriesOrder(
     artworkIds,
     inventory,
@@ -4593,15 +4760,14 @@ function ApplicationSeriesOrder({
   }, [artworkIds.join("|")]);
 
   if (groups.length === 0) {
-    return <p className="muted small-note">Todavía no has elegido obras.</p>;
+    return (
+      <p className="muted small-note">{t("application.works.noneChosen")}</p>
+    );
   }
 
   return (
     <div className="app-series-order">
-      <p className="muted small-note">
-        Primero el orden de las <strong>series</strong> (bloques). Dentro de cada
-        bloque, el orden de las <strong>obras</strong>. Así salen en el PDF.
-      </p>
+      <p className="muted small-note">{t("application.series.orderHint")}</p>
       {groups.map((group, groupIndex) => (
         <div className="app-series-block" key={group.key}>
           <div className="app-series-block-head">
@@ -4620,7 +4786,9 @@ function ApplicationSeriesOrder({
               <strong>{group.label}</strong>
               <span className="muted">
                 {group.arts.length}{" "}
-                {group.arts.length === 1 ? "obra" : "obras"}
+                {group.arts.length === 1
+                  ? t("common.workOne")
+                  : t("common.workMany")}
               </span>
             </div>
           </div>
@@ -4649,7 +4817,7 @@ function ApplicationSeriesOrder({
                   className="ghost danger small"
                   onClick={() => onRemove(art.id)}
                 >
-                  Quitar
+                  {t("common.remove")}
                 </button>
               </div>
             ))}
@@ -4664,7 +4832,7 @@ function ArtworkPickerModal({
   inventory,
   excludeIds = [],
   initialIds = [],
-  title = "Añadir obras",
+  title,
   notice,
   onConfirm,
   onClose
@@ -4677,6 +4845,8 @@ function ArtworkPickerModal({
   onConfirm: (ids: string[]) => void;
   onClose: () => void;
 }) {
+  const t = useT();
+  const pickerTitle = title ?? t("picker.addWorks");
   const [picked, setPicked] = useState<string[]>(initialIds);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<ArtworkSort>("title");
@@ -4703,7 +4873,7 @@ function ArtworkPickerModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h3>{title}</h3>
+          <h3>{pickerTitle}</h3>
           <button className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
@@ -4711,27 +4881,27 @@ function ArtworkPickerModal({
         <div className="modal-toolbar">
           <input
             className="search-input grow"
-            placeholder="Buscar obra..."
+            placeholder={t("picker.searchWork")}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
           <label className="sort-control">
-            Ordenar
+            {t("common.sort")}
             <select
               value={sort}
               onChange={(event) => setSort(event.target.value as ArtworkSort)}
             >
-              <option value="title">Título (A→Z)</option>
-              <option value="series">Serie (A→Z)</option>
-              <option value="year">Año</option>
-              <option value="size">Tamaño</option>
+              <option value="title">{t("library.sort.title")}</option>
+              <option value="series">{t("library.sort.series")}</option>
+              <option value="year">{t("artwork.field.year")}</option>
+              <option value="size">{t("picker.sort.size")}</option>
             </select>
           </label>
         </div>
         {notice && <p className="muted small-note picker-notice">{notice}</p>}
         <div className="modal-body modal-pick-list">
           {list.length === 0 ? (
-            <p className="muted">No hay obras que coincidan.</p>
+            <p className="muted">{t("library.empty")}</p>
           ) : (
             list.map((artwork) => (
               <label
@@ -4749,7 +4919,9 @@ function ArtworkPickerModal({
                 <PickThumb artwork={artwork} inventory={inventory} />
                 <span className="pick-title">{artwork.title}</span>
                 <span className="muted picker-meta">
-                  {artwork.series ? `${artwork.series} · ` : ""}
+                  {artwork.series?.trim()
+                    ? `${seriesLabel(artwork.series, t)} · `
+                    : ""}
                   {artwork.yearMade || artwork.id}
                 </span>
               </label>
@@ -4762,11 +4934,10 @@ function ArtworkPickerModal({
             disabled={picked.length === 0}
             onClick={() => onConfirm(picked)}
           >
-            Añadir {picked.length} obra{picked.length === 1 ? "" : "s"} seleccionada
-            {picked.length === 1 ? "" : "s"}
+            {t("picker.addSelected", { n: picked.length })}
           </button>
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       </div>
@@ -4781,6 +4952,7 @@ function ExtraImageThumb({
   image: ArtworkImage;
   onDelete: () => void;
 }) {
+  const t = useT();
   const url = useImageDataUrl(image.absolutePath);
 
   async function saveCopy() {
@@ -4797,10 +4969,10 @@ function ExtraImageThumb({
       <button
         type="button"
         className="extra-image-save"
-        title="Guardar una copia en otra carpeta"
+        title={t("media.saveCopyElsewhere")}
         onClick={saveCopy}
       >
-        Salvar copia
+        {t("media.saveCopy")}
       </button>
     </div>
   );
@@ -4821,6 +4993,7 @@ function ExtraImages({
   label: string;
   hint: string;
 }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
   const images = inventory.images.filter(
     (image) =>
@@ -4849,12 +5022,12 @@ function ExtraImages({
       <div className="related-head">
         <h3>{label}</h3>
         <button type="button" className="ghost" disabled={busy} onClick={add}>
-          + Añadir imagen
+          {t("media.addImage")}
         </button>
       </div>
       <p className="muted small-note">{hint}</p>
       {images.length === 0 ? (
-        <p className="muted small-note">Aún no hay imágenes guardadas.</p>
+        <p className="muted small-note">{t("media.imagesEmpty")}</p>
       ) : (
         <div className="extra-image-grid">
           {images.map((image) => (
@@ -4896,7 +5069,11 @@ function DocumentRow({
   setInventory: (data: InventoryData) => void;
   onDelete: () => void;
 }) {
-  const name = image.originalName || image.relativePath.split("/").pop() || "documento";
+  const t = useT();
+  const name =
+    image.originalName ||
+    image.relativePath.split("/").pop() ||
+    t("common.documentOne");
   const isImage = isImageFile(name);
   const url = useImageDataUrl(isImage ? image.absolutePath : undefined);
   const [caption, setCaption] = useState(image.caption ?? "");
@@ -4913,7 +5090,7 @@ function DocumentRow({
 
   return (
     <div className="doc-row">
-      <button type="button" className="doc-preview" onClick={open} title="Abrir">
+      <button type="button" className="doc-preview" onClick={open} title={t("common.open")}>
         {isImage && url ? (
           <img src={url} alt={name} />
         ) : (
@@ -4921,19 +5098,19 @@ function DocumentRow({
         )}
       </button>
       <div className="doc-body">
-        <button type="button" className="doc-name" onClick={open} title="Abrir documento">
+        <button type="button" className="doc-name" onClick={open} title={t("media.openDocument")}>
           {name}
         </button>
         <input
           className="doc-caption"
-          placeholder="Descripción o comentario…"
+          placeholder={t("media.descPlaceholder")}
           value={caption}
           onChange={(event) => setCaption(event.target.value)}
           onBlur={saveCaption}
         />
       </div>
       <button type="button" className="ghost danger small" onClick={onDelete}>
-        Quitar
+        {t("common.remove")}
       </button>
     </div>
   );
@@ -4948,6 +5125,7 @@ function ExhibitionDocuments({
   setInventory: (data: InventoryData) => void;
   exhibitionId: string;
 }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
   const documents = inventory.images.filter(
     (image) =>
@@ -4974,17 +5152,14 @@ function ExhibitionDocuments({
   return (
     <div className="form-section extra-images-section">
       <div className="related-head">
-        <h3>Documentos de la exposición</h3>
+        <h3>{t("exhibition.docs.title")}</h3>
         <button type="button" className="ghost" disabled={busy} onClick={add}>
-          + Añadir documento
+          {t("exhibition.docs.add")}
         </button>
       </div>
-      <p className="muted small-note">
-        Fotos de la sala, catálogos, notas de prensa, PDF o Word. Cada archivo
-        puede llevar una descripción.
-      </p>
+      <p className="muted small-note">{t("exhibition.docs.hint")}</p>
       {documents.length === 0 ? (
-        <p className="muted small-note">Aún no hay documentos guardados.</p>
+        <p className="muted small-note">{t("media.docsEmpty")}</p>
       ) : (
         <div className="doc-list">
           {documents.map((image) => (
@@ -5010,6 +5185,7 @@ function ExhibitionSalesSection({
   setInventory: (data: InventoryData) => void;
   exhibition: Exhibition;
 }) {
+  const t = useT();
   const [adding, setAdding] = useState(false);
   const [artworkId, setArtworkId] = useState("");
   const [price, setPrice] = useState("");
@@ -5066,7 +5242,7 @@ function ExhibitionSalesSection({
       reset();
     } catch (error) {
       window.alert(
-        error instanceof Error ? error.message : "No se pudo registrar la venta."
+        error instanceof Error ? error.message : t("exhibition.sales.error")
       );
     }
   }
@@ -5074,13 +5250,15 @@ function ExhibitionSalesSection({
   return (
     <div className="form-section">
       <div className="related-head">
-        <h3>Ventas en esta exposición ({sales.length})</h3>
+        <h3>
+          {t("exhibition.sales.title")} ({sales.length})
+        </h3>
         <button type="button" className="ghost" onClick={() => setAdding(true)}>
-          + Añadir venta
+          {t("exhibition.sales.add")}
         </button>
       </div>
       {sales.length === 0 ? (
-        <p className="muted small-note">Todavía no hay ventas registradas aquí.</p>
+        <p className="muted small-note">{t("exhibition.sales.empty")}</p>
       ) : (
         <div className="record-list">
           {sales.map((movement) => {
@@ -5091,9 +5269,9 @@ function ExhibitionSalesSection({
               <div className="mini-row" key={movement.id}>
                 <span className="cell-strong">{artwork?.title ?? movement.artworkId}</span>
                 <span className="muted">
-                  {movement.contactName || "Comprador/a sin registrar"}
+                  {movement.contactName || t("contact.detail.buyerUnknown")}
                 </span>
-                <span className="muted">{movement.date || "Sin fecha"}</span>
+                <span className="muted">{movement.date || t("common.noDate")}</span>
                 <span className="cell-strong">
                   {movement.price ? `${movement.price} ${movement.currency ?? ""}` : "—"}
                 </span>
@@ -5107,33 +5285,37 @@ function ExhibitionSalesSection({
         <div className="modal-backdrop" onClick={reset}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3>Añadir venta en {exhibition.title}</h3>
+              <h3>
+                {t("exhibition.sales.addTitle", { title: exhibition.title })}
+              </h3>
               <button className="icon-button ghost" onClick={reset}>
                 ✕
               </button>
             </div>
             <div className="modal-body">
               <label className="field">
-                Obra
+                {t("library.col.artwork")}
                 <input
                   className="search-input"
-                  placeholder="Buscar obra..."
+                  placeholder={t("picker.searchWork")}
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                 />
                 <select value={artworkId} onChange={(event) => setArtworkId(event.target.value)}>
-                  <option value="">— Seleccionar obra —</option>
+                  <option value="">{t("exhibition.sales.pickWork")}</option>
                   {candidates.map((artwork) => (
                     <option key={artwork.id} value={artwork.id}>
                       {artwork.title}
-                      {artwork.series ? ` · ${artwork.series}` : ""}
+                      {artwork.series?.trim()
+                        ? ` · ${seriesLabel(artwork.series, t)}`
+                        : ""}
                     </option>
                   ))}
                 </select>
               </label>
               <div className="form-row">
                 <label className="field">
-                  Precio
+                  {t("movement.field.price")}
                   <input
                     inputMode="decimal"
                     placeholder="0"
@@ -5142,14 +5324,14 @@ function ExhibitionSalesSection({
                   />
                 </label>
                 <label className="field">
-                  Fecha
+                  {t("movement.field.date")}
                   <DateField value={date} onChange={setDate} />
                 </label>
               </div>
               <ContactSelect
                 inventory={inventory}
                 setInventory={setInventory}
-                label="Comprador/a (opcional)"
+                label={t("movement.sale.buyer")}
                 kind="person"
                 value={contactId}
                 onChange={setContactId}
@@ -5157,10 +5339,10 @@ function ExhibitionSalesSection({
             </div>
             <div className="modal-actions">
               <button type="button" disabled={!artworkId} onClick={save}>
-                Salvar venta
+                {t("exhibition.sales.save")}
               </button>
               <button type="button" className="ghost" onClick={reset}>
-                Cancelar
+                {t("common.cancel")}
               </button>
             </div>
           </div>
@@ -5184,13 +5366,14 @@ function GroupControl({
   value: GroupBy;
   onChange: (value: GroupBy) => void;
 }) {
+  const t = useT();
   return (
     <div className="segmented small">
       {(
         [
-          ["none", "Sin agrupar"],
-          ["exhibition", "Por exposición"],
-          ["year", "Por año"]
+          ["none", t("contact.detail.group.none")],
+          ["exhibition", t("contact.detail.group.exhibition")],
+          ["year", t("contact.detail.group.year")]
         ] as Array<[GroupBy, string]>
       ).map(([key, label]) => (
         <button
@@ -5208,11 +5391,13 @@ function GroupControl({
 function groupMovements(
   inventory: InventoryData,
   records: Movement[],
-  groupBy: GroupBy
+  groupBy: GroupBy,
+  labels: { noExhibition: string; noDate: string; exhibition: string }
 ): Array<{ key: string; label: string; items: Movement[] }> {
   if (groupBy === "none") {
     return [{ key: "all", label: "", items: records }];
   }
+  const { noExhibition, noDate, exhibition: exhibitionFallback } = labels;
 
   const groups = new Map<
     string,
@@ -5228,20 +5413,20 @@ function groupMovements(
         const title =
           movement.exhibitionTitle ||
           exhibitionTitle(inventory, movement.exhibitionId) ||
-          "Exposición";
+          exhibitionFallback;
         const exh = inventory.exhibitions.find((e) => e.id === movement.exhibitionId);
         const yr = yearOf(exh?.startDate) || yearOf(movement.date);
         label = yr ? `${title} · ${yr}` : title;
         sortVal = exh?.startDate ? yearOf(exh.startDate) : yearOf(movement.date);
       } else {
         key = "__none";
-        label = "Sin exposición";
+        label = noExhibition;
         sortVal = "0000";
       }
     } else {
       const yr = yearOf(movement.date);
       key = yr || "__noyear";
-      label = yr || "Sin fecha";
+      label = yr || noDate;
       sortVal = yr || "0000";
     }
     if (!groups.has(key)) groups.set(key, { label, sortVal, items: [] });
@@ -5266,6 +5451,7 @@ function GallerySalesList({
   artworkById: Map<string, Artwork>;
   onOpenArtwork: (artworkId: string) => void;
 }) {
+  const t = useT();
   function saleRow(movement: Movement) {
     const artwork = artworkById.get(movement.artworkId);
     const billed = parseMoney(movement.price);
@@ -5275,9 +5461,9 @@ function GallerySalesList({
     const contextLabel = showContext
       ? movement.exhibitionTitle ||
         exhibitionTitle(inventory, movement.exhibitionId) ||
-        "Exposición"
+        t("exhibitions.col.exhibition")
       : movement.context === "gallery"
-        ? "Venta en galería"
+        ? t("contact.detail.saleViaGallery")
         : "";
 
     return (
@@ -5288,18 +5474,18 @@ function GallerySalesList({
         onClick={() => onOpenArtwork(movement.artworkId)}
       >
         <div className="gallery-sale-main">
-          <strong>{artwork?.title || "Obra"}</strong>
+          <strong>{artwork?.title || t("library.col.artwork")}</strong>
           <span className="gallery-sale-meta">
             {[movement.date, contextLabel].filter(Boolean).join(" · ")}
           </span>
         </div>
         <div className="gallery-sale-money">
           <span>
-            <em>Facturado</em>
+            <em>{t("contact.detail.billed")}</em>
             {billed != null ? formatMoney(billed) : "—"}
           </span>
           <span>
-            <em>Recibido</em>
+            <em>{t("contact.detail.received")}</em>
             {received != null ? formatMoney(received) : "—"}
           </span>
         </div>
@@ -5307,7 +5493,11 @@ function GallerySalesList({
     );
   }
 
-  const ordered = groupMovements(inventory, sales, groupBy);
+  const ordered = groupMovements(inventory, sales, groupBy, {
+    noExhibition: t("contact.detail.noExhibition"),
+    noDate: t("common.noDate"),
+    exhibition: t("nav.exhibitions")
+  });
   if (groupBy === "none") {
     return <div className="gallery-sales-list">{sales.map(saleRow)}</div>;
   }
@@ -5371,6 +5561,7 @@ function ContactDetail({
   onOpenContact?: (contactId: string) => void;
   onDeleted: () => void;
 }) {
+  const t = useT();
   const institution = isInstitution(contact.kind);
   const isGallery = contact.kind === "gallery";
 
@@ -5465,51 +5656,51 @@ function ContactDetail({
       <div className="detail-panel">
         <div className="detail-header">
           <div>
-            <p className="eyebrow">{contactKindLabel(contact.kind)}</p>
+            <p className="eyebrow">{contactKindLabel(contact.kind, t)}</p>
             <h2>{contact.name}</h2>
           </div>
           <div className="form-head-actions">
-            <button onClick={() => setEditing(true)}>Editar</button>
+            <button onClick={() => setEditing(true)}>{t("common.edit")}</button>
             <button className="ghost" onClick={onBack}>
-              Volver
+              {t("common.back")}
             </button>
           </div>
         </div>
 
         <div className="related-block contact-details-block">
-          <h3>Datos de contacto</h3>
+          <h3>{t("contact.detail.data")}</h3>
           <dl className="metadata compact-metadata">
-            <dt>Lugar</dt>
+            <dt>{t("contacts.col.place")}</dt>
             <dd>{placeLabel || "—"}</dd>
             {contact.relationship && (
               <>
-                <dt>Relación</dt>
+                <dt>{t("contacts.col.relation")}</dt>
                 <dd>{contact.relationship}</dd>
               </>
             )}
             {contact.job && (
               <>
-                <dt>Profesión</dt>
+                <dt>{t("contact.form.profession")}</dt>
                 <dd>{contact.job}</dd>
               </>
             )}
-            <dt>Contacto</dt>
+            <dt>{t("contacts.col.contact")}</dt>
             <dd>{contactLine || "—"}</dd>
             {contact.website && (
               <>
-                <dt>Web</dt>
+                <dt>{t("contact.detail.web")}</dt>
                 <dd>{contact.website}</dd>
               </>
             )}
             {contact.firstContactYear && (
               <>
-                <dt>Primer contacto</dt>
+                <dt>{t("contact.detail.firstContact")}</dt>
                 <dd>{contact.firstContactYear}</dd>
               </>
             )}
             {institution && galerista && (
               <>
-                <dt>Galerista</dt>
+                <dt>{t("contact.detail.gallerist")}</dt>
                 <dd>
                   <button
                     type="button"
@@ -5523,7 +5714,7 @@ function ContactDetail({
             )}
             {!institution && contact.organizationId && (
               <>
-                <dt>Vinculada a</dt>
+                <dt>{t("contact.detail.linkedTo")}</dt>
                 <dd>
                   <button
                     type="button"
@@ -5537,7 +5728,7 @@ function ContactDetail({
             )}
             {contact.comments && (
               <>
-                <dt>Comentarios</dt>
+                <dt>{t("contact.form.comments")}</dt>
                 <dd className="notes-display">{contact.comments}</dd>
               </>
             )}
@@ -5548,28 +5739,28 @@ function ContactDetail({
           <>
             <div className={`contact-stats${isGallery ? " contact-stats-gallery" : ""}`}>
               <div className="contact-stat">
-                <span>Exposiciones</span>
+                <span>{t("contact.detail.stat.exhibitions")}</span>
                 <strong>{filteredExhibitions.length}</strong>
               </div>
               <div className="contact-stat">
-                <span>Cuadros expuestos</span>
+                <span>{t("contact.detail.stat.shown")}</span>
                 <strong>{exhibitedAppearances.length}</strong>
               </div>
               {isGallery && (
                 <>
                   <div className="contact-stat">
-                    <span>Vendidos vía galería</span>
+                    <span>{t("contact.detail.stat.soldVia")}</span>
                     <strong>{soldArtworkIds.size}</strong>
                   </div>
                   <div className="contact-stat money">
-                    <span>Dinero facturado</span>
+                    <span>{t("contact.detail.stat.billed")}</span>
                     <strong>{formatMoney(billedTotal)}</strong>
-                    <small>Total de ventas</small>
+                    <small>{t("contact.detail.totalSales")}</small>
                   </div>
                   <div className="contact-stat money received">
-                    <span>Dinero recibido</span>
+                    <span>{t("contact.detail.stat.received")}</span>
                     <strong>{formatMoney(receivedTotal)}</strong>
-                    <small>Tras comisión</small>
+                    <small>{t("contact.detail.afterCommission")}</small>
                   </div>
                 </>
               )}
@@ -5577,12 +5768,12 @@ function ContactDetail({
 
             {exhibitions.length > 0 && (
               <label className="contact-exh-filter">
-                Ver por exposición
+                {t("contact.detail.viewByExhibition")}
                 <select
                   value={exhibitionFilter}
                   onChange={(event) => setExhibitionFilter(event.target.value)}
                 >
-                  <option value="">Todas las exposiciones</option>
+                  <option value="">{t("contact.detail.allExhibitions")}</option>
                   {exhibitions.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.title}
@@ -5604,20 +5795,20 @@ function ContactDetail({
                 onClick={() => setShowPeople((value) => !value)}
               >
                 <span className="collapse-caret">{showPeople ? "▾" : "▸"}</span>
-                <h3>Personas ({linkedPeople.length})</h3>
+                <h3>{t("contact.detail.people", { count: linkedPeople.length })}</h3>
               </button>
               <button
                 type="button"
                 className="ghost small"
                 onClick={() => setLinkingPerson(true)}
               >
-                + Añadir persona
+                {t("contact.detail.addPerson")}
               </button>
             </div>
             {showPeople &&
               (linkedPeople.length === 0 ? (
                 <p className="muted small-note">
-                  Aún no hay personas vinculadas a {contact.name}.
+                  {t("contact.detail.noLinkedPeople", { name: contact.name })}
                 </p>
               ) : (
                 <div className="mini-table">
@@ -5630,7 +5821,7 @@ function ContactDetail({
                       <strong>{person.name}</strong>
                       <span>
                         {[person.job, person.relationship].filter(Boolean).join(" · ") ||
-                          "Persona"}
+                          t("contact.kind.person")}
                       </span>
                     </button>
                   ))}
@@ -5647,11 +5838,15 @@ function ContactDetail({
               onClick={() => setShowExhibitions((value) => !value)}
             >
               <span className="collapse-caret">{showExhibitions ? "▾" : "▸"}</span>
-              <h3>Exposiciones ({filteredExhibitions.length})</h3>
+              <h3>
+                {t("contact.detail.exhibitionsCount", {
+                  count: filteredExhibitions.length
+                })}
+              </h3>
             </button>
             {showExhibitions &&
               (filteredExhibitions.length === 0 ? (
-                <p className="muted">Sin exposiciones asociadas.</p>
+                <p className="muted">{t("contact.detail.emptyExhibitions")}</p>
               ) : (
                 <div className="mini-table exhibition-cards">
                   {filteredExhibitions.map((item) => {
@@ -5678,8 +5873,12 @@ function ContactDetail({
                           {[
                             [item.city, item.country].filter(Boolean).join(", "),
                             item.startDate,
-                            artCount ? `${artCount} obras` : "",
-                            saleCount ? `${saleCount} ventas` : ""
+                            artCount
+                              ? t("contact.detail.worksCount", { count: artCount })
+                              : "",
+                            saleCount
+                              ? t("contact.detail.salesCount", { count: saleCount })
+                              : ""
                           ]
                             .filter(Boolean)
                             .join(" · ")}
@@ -5700,14 +5899,18 @@ function ContactDetail({
               onClick={() => setShowExhibited((value) => !value)}
             >
               <span className="collapse-caret">{showExhibited ? "▾" : "▸"}</span>
-              <h3>Cuadros expuestos ({exhibitedAppearances.length})</h3>
+              <h3>
+                {t("contact.detail.shownWorksCount", {
+                  count: exhibitedAppearances.length
+                })}
+              </h3>
             </button>
             {showExhibited &&
               (exhibitedAppearances.length === 0 ? (
                 <p className="muted">
                   {exhibitionFilter
-                    ? "Sin cuadros en esta exposición."
-                    : "Sin cuadros expuestos asociados."}
+                    ? t("contact.detail.emptyShownInExhibition")
+                    : t("contact.detail.emptyShown")}
                 </p>
               ) : (
                 <div className="mini-table">
@@ -5716,19 +5919,19 @@ function ContactDetail({
                     const exhTitle =
                       movement.exhibitionTitle ||
                       exhibitionTitle(inventory, movement.exhibitionId) ||
-                      "Exposición";
+                      t("exhibitions.col.exhibition");
                     const status = movement.returned
-                      ? "Devuelta"
+                      ? t("contact.detail.status.returned")
                       : movement.keptAtGallery
-                        ? "Se quedó con la galería"
-                        : "En exposición";
+                        ? t("contact.detail.status.stayed")
+                        : t("contact.detail.status.inShow");
                     return (
                       <button
                         className="mini-row clickable"
                         key={movement.id}
                         onClick={() => onOpenArtwork(movement.artworkId)}
                       >
-                        <strong>{artwork?.title || "Obra"}</strong>
+                        <strong>{artwork?.title || t("library.col.artwork")}</strong>
                         <span>
                           {[
                             exhTitle,
@@ -5756,7 +5959,11 @@ function ContactDetail({
                 onClick={() => setShowSales((value) => !value)}
               >
                 <span className="collapse-caret">{showSales ? "▾" : "▸"}</span>
-                <h3>Ventas por la galería ({sales.length})</h3>
+                <h3>
+                  {t("contact.detail.salesViaGalleryCount", {
+                    count: sales.length
+                  })}
+                </h3>
               </button>
               {showSales && sales.length > 0 && !exhibitionFilter && (
                 <GroupControl value={salesGroup} onChange={setSalesGroup} />
@@ -5766,8 +5973,8 @@ function ContactDetail({
               (sales.length === 0 ? (
                 <p className="muted">
                   {exhibitionFilter
-                    ? "Sin ventas en esta exposición."
-                    : "Sin ventas registradas."}
+                    ? t("contact.detail.emptySalesInExhibition")
+                    : t("contact.detail.emptySales")}
                 </p>
               ) : (
                 <GallerySalesList
@@ -5789,12 +5996,16 @@ function ContactDetail({
               onClick={() => setShowPayments((value) => !value)}
             >
               <span className="collapse-caret">{showPayments ? "▾" : "▸"}</span>
-              <h3>Pago a galerista ({galleryPayments.length})</h3>
+              <h3>
+                {t("contact.detail.galleryPaymentCount", {
+                  count: galleryPayments.length
+                })}
+              </h3>
             </button>
             {showPayments &&
               (galleryPayments.length === 0 ? (
                 <p className="muted small-note">
-                  Aún no hay obras entregadas como pago a esta galería.
+                  {t("contact.detail.emptyPayments")}
                 </p>
               ) : (
                 <div className="mini-table">
@@ -5807,12 +6018,12 @@ function ContactDetail({
                         key={payment.id}
                         onClick={() => onOpenArtwork(payment.artworkId)}
                       >
-                        <strong>{artwork?.title || "Obra"}</strong>
+                        <strong>{artwork?.title || t("library.col.artwork")}</strong>
                         <span>
                           {[
                             payment.date,
                             cost > 0 ? formatMoney(cost) : "",
-                            "Entregada como pago"
+                            t("contact.detail.givenAsPayment")
                           ]
                             .filter(Boolean)
                             .join(" · ")}
@@ -5827,14 +6038,17 @@ function ContactDetail({
 
         <div className="danger-zone">
           <div>
-            <strong>Eliminar {contactKindLabel(contact.kind).toLowerCase()}</strong>
+            <strong>
+              {t("confirm.contact.title", {
+                kind: contactKindLabel(contact.kind, t).toLowerCase()
+              })}
+            </strong>
             <p className="muted">
-              Se borrará «{contact.name}» de la lista de contactos. No se puede
-              deshacer.
+              {t("contact.detail.delete.body", { name: contact.name })}
             </p>
           </div>
           <button className="ghost danger" onClick={() => setConfirmDelete(true)}>
-            Eliminar…
+            {t("common.deleteEllipsis")}
           </button>
         </div>
       </div>
@@ -5863,9 +6077,11 @@ function ContactDetail({
 
       {confirmDelete && (
         <ConfirmDialog
-          title={`Eliminar ${contactKindLabel(contact.kind).toLowerCase()}`}
-          message={`Estás a punto de eliminar «${contact.name}» de tus contactos.`}
-          confirmLabel="Eliminar definitivamente"
+          title={t("confirm.contact.title", {
+            kind: contactKindLabel(contact.kind, t).toLowerCase()
+          })}
+          message={t("confirm.contact.message", { name: contact.name })}
+          confirmLabel={t("common.deleteForever")}
           onConfirm={() => {
             setConfirmDelete(false);
             void remove();
@@ -5920,6 +6136,7 @@ function ExhibitionsPage({
   onOpenArtwork?: (artworkId: string) => void;
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
 }) {
+  const t = useT();
   const [search, setSearch] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
   const [yearFilter, setYearFilter] = useState("");
@@ -5990,18 +6207,18 @@ function ExhibitionsPage({
       <div className="list-toolbar">
         <input
           className="search-input grow"
-          placeholder="Buscar exposición..."
+          placeholder={t("exhibitions.search")}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
         {countries.length > 0 && (
           <label className="sort-control">
-            País
+            {t("exhibitions.filter.country")}
             <select
               value={countryFilter}
               onChange={(event) => setCountryFilter(event.target.value)}
             >
-              <option value="">Todos</option>
+              <option value="">{t("common.all")}</option>
               {countries.map((country) => (
                 <option key={country} value={country}>
                   {country}
@@ -6012,9 +6229,9 @@ function ExhibitionsPage({
         )}
         {years.length > 0 && (
           <label className="sort-control">
-            Año
+            {t("exhibitions.filter.year")}
             <select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}>
-              <option value="">Todos</option>
+              <option value="">{t("common.all")}</option>
               {years.map((value) => (
                 <option key={value} value={value}>
                   {value}
@@ -6024,14 +6241,14 @@ function ExhibitionsPage({
           </label>
         )}
         <label className="sort-control">
-          Ordenar
+          {t("common.sort")}
           <select
             value={sort}
             onChange={(event) => setSort(event.target.value as "recent" | "title" | "year")}
           >
-            <option value="recent">Recientes</option>
-            <option value="title">Título (A→Z)</option>
-            <option value="year">Año</option>
+            <option value="recent">{t("exhibitions.sort.recent")}</option>
+            <option value="title">{t("exhibitions.sort.title")}</option>
+            <option value="year">{t("exhibitions.sort.year")}</option>
           </select>
         </label>
         {(search || countryFilter || yearFilter) && (
@@ -6043,24 +6260,24 @@ function ExhibitionsPage({
               setYearFilter("");
             }}
           >
-            Limpiar
+            {t("common.clear")}
           </button>
         )}
         <span className="count-pill">{exhibitions.length}</span>
-        <button onClick={() => setEditing("new")}>+ Añadir exposición</button>
+        <button onClick={() => setEditing("new")}>{t("exhibitions.add")}</button>
       </div>
 
       <div className="list-table-wrap">
         <div className="list-table exhibitions">
           <div className="list-row list-row-header">
-            <span>Exposición</span>
-            <span>Lugar</span>
-            <span>Galería</span>
-            <span>Fechas</span>
-            <span>Obras</span>
+            <span>{t("exhibitions.col.exhibition")}</span>
+            <span>{t("exhibitions.col.place")}</span>
+            <span>{t("exhibitions.col.gallery")}</span>
+            <span>{t("exhibitions.col.dates")}</span>
+            <span>{t("exhibitions.col.works")}</span>
           </div>
           {exhibitions.length === 0 ? (
-            <div className="table-empty">Aún no hay exposiciones.</div>
+            <div className="table-empty">{t("exhibitions.empty")}</div>
           ) : (
             exhibitions.map((exhibition) => {
               const linked = inventory.movements.filter(
@@ -6104,6 +6321,7 @@ function ExhibitionPriceCell({
   value: string;
   onCommit: (next: string) => void;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
 
@@ -6126,14 +6344,14 @@ function ExhibitionPriceCell({
     return (
       <div className="pick-price-cell">
         <span className={shown ? "pick-price-value" : "pick-price-empty"}>
-          {shown || "Sin precio"}
+          {shown || t("common.noPrice")}
         </span>
         <button
           type="button"
           className="pick-price-edit"
           onClick={() => setEditing(true)}
         >
-          {shown ? "Editar" : "Poner precio"}
+          {shown ? t("common.edit") : t("exhibition.works.setPrice")}
         </button>
       </div>
     );
@@ -6156,10 +6374,10 @@ function ExhibitionPriceCell({
         <span className="pick-price-eur">€</span>
       </div>
       <button type="button" className="pick-price-ok" onClick={commit}>
-        Guardar
+        {t("common.save")}
       </button>
       <button type="button" className="pick-price-cancel" onClick={cancel}>
-        Cancelar
+        {t("common.cancel")}
       </button>
     </div>
   );
@@ -6188,6 +6406,7 @@ function ExhibitionForm({
   onOpenArtwork?: (artworkId: string) => void;
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
 }) {
+  const t = useT();
   const exhibitionMovements = exhibition
     ? inventory.movements.filter(
         (movement) =>
@@ -6274,7 +6493,7 @@ function ExhibitionForm({
       onDirtyChange?.(false);
       return true;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo guardar.");
+      setError(caught instanceof Error ? caught.message : t("common.error.save"));
       return false;
     }
   }
@@ -6337,30 +6556,40 @@ function ExhibitionForm({
     : [];
 
   return (
-    <div className="form-card">
-      <div className="form-head">
+    <div className="form-card exhibition-form">
+      <div className="form-head exhibition-form-head">
         <div>
-          <p className="eyebrow">{exhibition ? "Editar exposición" : "Nueva exposición"}</p>
-          <h2>{form.title || "Exposición"}</h2>
+          <p className="eyebrow">
+            {exhibition
+              ? t("exhibition.form.titleEdit")
+              : t("exhibition.form.titleNew")}
+          </p>
+          <h2>{form.title.trim() || t("exhibition.form.fallbackTitle")}</h2>
         </div>
         <div className="form-head-actions">
-          <button onClick={save}>Guardar</button>
+          <button type="button" onClick={save}>
+            {t("common.save")}
+          </button>
           {exhibition && (
-            <button className="ghost" onClick={() => onGeneratePriceList(exhibition.id)}>
-              Generar folleto de obras
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => onGeneratePriceList(exhibition.id)}
+            >
+              {t("exhibition.form.generateBooklet")}
             </button>
           )}
-          <button className="ghost" onClick={onCancel ?? onDone}>
-            Cancelar
+          <button type="button" className="ghost" onClick={onCancel ?? onDone}>
+            {t("common.cancel")}
           </button>
         </div>
       </div>
 
       {confirmDelete && exhibition && (
         <ConfirmDialog
-          title="Eliminar exposición"
-          message={`Estás a punto de eliminar la exposición «${exhibition.title}» y los movimientos de exposición vinculados.`}
-          confirmLabel="Eliminar definitivamente"
+          title={t("confirm.exhibition.title")}
+          message={t("confirm.exhibition.message", { title: exhibition.title })}
+          confirmLabel={t("common.deleteForever")}
           onConfirm={() => {
             setConfirmDelete(false);
             void remove();
@@ -6369,171 +6598,232 @@ function ExhibitionForm({
         />
       )}
 
-      <div className="form-section">
-        <label className="field">
-          Título de la exposición
-          <input value={form.title} onChange={(event) => set("title", event.target.value)} />
-        </label>
-        <div className="form-row">
+      <div className="form-section exhibition-form-section">
+        <div className="form-group">
+          <p className="form-group-label">{t("exhibition.section.identity")}</p>
           <label className="field">
-            Lugar / sala
-            <input value={form.venue ?? ""} onChange={(event) => set("venue", event.target.value)} />
-          </label>
-          <LookupSelect
-            inventory={inventory}
-            setInventory={setInventory}
-            category="exhibitionType"
-            label="Tipo"
-            value={form.exhibitionType ?? "group"}
-            onChange={(value) => set("exhibitionType", value)}
-          />
-        </div>
-        <div className="form-row">
-          <label className="field">
-            Ciudad
-            <input value={form.city ?? ""} onChange={(event) => set("city", event.target.value)} />
-          </label>
-          <label className="field">
-            País
+            {t("exhibition.field.titleFull")}
             <input
-              value={form.country ?? ""}
-              onChange={(event) => set("country", event.target.value)}
+              value={form.title}
+              placeholder={t("exhibition.field.titlePlaceholder")}
+              onChange={(event) => set("title", event.target.value)}
+            />
+          </label>
+          <div className="form-row">
+            <label className="field">
+              {t("exhibition.field.venue")}
+              <input
+                value={form.venue ?? ""}
+                placeholder={t("exhibition.field.venuePlaceholder")}
+                onChange={(event) => set("venue", event.target.value)}
+              />
+            </label>
+            <LookupSelect
+              inventory={inventory}
+              setInventory={setInventory}
+              category="exhibitionType"
+              label={t("exhibition.field.type")}
+              value={form.exhibitionType ?? "group"}
+              onChange={(value) => set("exhibitionType", value)}
+            />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <p className="form-group-label">{t("exhibition.section.location")}</p>
+          <div className="form-row">
+            <label className="field">
+              {t("exhibition.field.city")}
+              <input
+                value={form.city ?? ""}
+                onChange={(event) => set("city", event.target.value)}
+              />
+            </label>
+            <label className="field">
+              {t("exhibition.field.country")}
+              <input
+                value={form.country ?? ""}
+                onChange={(event) => set("country", event.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <p className="form-group-label">{t("exhibition.section.dates")}</p>
+          <div className="form-row">
+            <label className="field">
+              {t("exhibition.field.from")}
+              <DateField
+                value={form.startDate ?? ""}
+                onChange={(value) => set("startDate", value)}
+              />
+            </label>
+            <label className="field">
+              {t("exhibition.field.until")}
+              <DateField
+                value={form.endDate ?? ""}
+                onChange={(value) => set("endDate", value)}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <p className="form-group-label">{t("exhibition.section.contacts")}</p>
+          <div className="form-row">
+            <ContactSelect
+              inventory={inventory}
+              setInventory={setInventory}
+              label={t("exhibition.field.curator")}
+              kind="person"
+              value={form.curatorContactId ?? ""}
+              onChange={(value) => set("curatorContactId", value)}
+            />
+            <ContactSelect
+              inventory={inventory}
+              setInventory={setInventory}
+              label={t("exhibition.field.organizingGallery")}
+              kind="gallery"
+              value={form.galleryContactId ?? ""}
+              onChange={(value) => set("galleryContactId", value)}
+            />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <p className="form-group-label">{t("exhibition.section.comments")}</p>
+          <label className="field">
+            <span className="sr-only">{t("exhibition.section.comments")}</span>
+            <textarea
+              className="notes-area"
+              placeholder={t("exhibition.field.notesPlaceholder")}
+              value={form.comments ?? ""}
+              onChange={(event) => set("comments", event.target.value)}
             />
           </label>
         </div>
-        <div className="form-row">
-          <label className="field">
-            Desde
-            <DateField value={form.startDate ?? ""} onChange={(value) => set("startDate", value)} />
-          </label>
-          <label className="field">
-            Hasta
-            <DateField value={form.endDate ?? ""} onChange={(value) => set("endDate", value)} />
-          </label>
-        </div>
-        <div className="form-row">
-          <ContactSelect
-            inventory={inventory}
-            setInventory={setInventory}
-            label="Curador/a"
-            kind="person"
-            value={form.curatorContactId ?? ""}
-            onChange={(value) => set("curatorContactId", value)}
-          />
-          <ContactSelect
-            inventory={inventory}
-            setInventory={setInventory}
-            label="Galería organizadora (opcional)"
-            kind="gallery"
-            value={form.galleryContactId ?? ""}
-            onChange={(value) => set("galleryContactId", value)}
-          />
-        </div>
-        <label className="field">
-          Comentarios
-          <textarea
-            className="notes-area"
-            value={form.comments ?? ""}
-            onChange={(event) => set("comments", event.target.value)}
-          />
-        </label>
 
-        <div className="artwork-picker">
-          <div className="artwork-picker-head">
-            <h3>Obras en esta exposición ({selected.length})</h3>
-            <label className="sort-control">
-              Ordenar
-              <select
-                value={artworkSort}
-                onChange={(event) => setArtworkSort(event.target.value as ArtworkSort)}
-              >
-                <option value="title">Título (A→Z)</option>
-                <option value="year">Año</option>
-                <option value="size">Tamaño</option>
-              </select>
-            </label>
-            <button type="button" onClick={() => setShowPicker(true)}>
-              + Añadir obra a la exposición
-            </button>
-          </div>
-          <p className="muted small-note">
-            Cada obra tendrá un movimiento de «Exposición» (vuelve al estudio por
-            defecto). Puedes anotar el precio de lista de cada obra, aunque no se venda.
-          </p>
-          <div className="artwork-pick-list">
-            {selectedArtworks.length === 0 ? (
-              <p className="muted small-note">
-                Aún no hay obras. Usa «Añadir obra a la exposición».
-              </p>
-            ) : (
-              selectedArtworks.map((artwork) => (
-                <div className="pick-row" key={artwork.id}>
-                  <button
-                    type="button"
-                    className="pick-row-main pick-row-open"
-                    title="Ver la obra"
-                    onClick={() => onOpenArtwork?.(artwork.id)}
-                  >
-                    <PickThumb artwork={artwork} inventory={inventory} />
-                    <span className="pick-title">{artwork.title}</span>
-                    <span className="muted">
-                      {artwork.series ? `${artwork.series} · ` : ""}
-                      {formatSize(artwork) || artwork.id}
-                    </span>
-                  </button>
-                  <ExhibitionPriceCell
-                    value={listed[artwork.id] ?? ""}
-                    onCommit={(next) => {
-                      void syncListedPrice(artwork.id, next);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="link-button remove-link"
-                    onClick={() => {
-                      markDirty();
-                      setSelected((current) =>
-                        current.filter((item) => item !== artwork.id)
-                      );
-                    }}
-                  >
-                    Quitar
-                  </button>
-                </div>
-              ))
-            )}
+        <div className="form-group exhibition-artworks-group">
+          <p className="form-group-label">{t("exhibition.section.works")}</p>
+          <div className="artwork-picker">
+            <div className="artwork-picker-head">
+              <h3>{t("exhibition.works.inShow", { count: selected.length })}</h3>
+              <label className="sort-control">
+                {t("common.sort")}
+                <select
+                  value={artworkSort}
+                  onChange={(event) =>
+                    setArtworkSort(event.target.value as ArtworkSort)
+                  }
+                >
+                  <option value="title">{t("exhibitions.sort.title")}</option>
+                  <option value="year">{t("exhibitions.sort.year")}</option>
+                  <option value="size">{t("pricing.size.modalEdit")}</option>
+                </select>
+              </label>
+              <button type="button" onClick={() => setShowPicker(true)}>
+                {t("library.add")}
+              </button>
+            </div>
+            <p className="muted small-note">{t("exhibition.works.hint")}</p>
+            <div className="artwork-pick-list">
+              {selectedArtworks.length === 0 ? (
+                <p className="muted small-note exhibition-empty-artworks">
+                  {t("exhibition.works.empty")}
+                </p>
+              ) : (
+                selectedArtworks.map((artwork) => (
+                  <div className="pick-row" key={artwork.id}>
+                    <button
+                      type="button"
+                      className="pick-row-main pick-row-open"
+                      title={t("exhibition.works.viewArtwork")}
+                      onClick={() => onOpenArtwork?.(artwork.id)}
+                    >
+                      <PickThumb artwork={artwork} inventory={inventory} />
+                      <span className="pick-title">{artwork.title}</span>
+                      <span className="muted">
+                        {artwork.series?.trim()
+                          ? `${seriesLabel(artwork.series, t)} · `
+                          : ""}
+                        {formatSize(artwork) || artwork.id}
+                      </span>
+                    </button>
+                    <ExhibitionPriceCell
+                      value={listed[artwork.id] ?? ""}
+                      onCommit={(next) => {
+                        void syncListedPrice(artwork.id, next);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="link-button remove-link"
+                      onClick={() => {
+                        markDirty();
+                        setSelected((current) =>
+                          current.filter((item) => item !== artwork.id)
+                        );
+                      }}
+                    >
+                      {t("common.remove")}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
 
         {exhibition && (
-          <ExhibitionSalesSection
-            inventory={inventory}
-            setInventory={setInventory}
-            exhibition={exhibition}
-          />
+          <div className="form-group">
+            <p className="form-group-label">{t("exhibition.section.sales")}</p>
+            <ExhibitionSalesSection
+              inventory={inventory}
+              setInventory={setInventory}
+              exhibition={exhibition}
+            />
+          </div>
         )}
 
-        {exhibition ? (
-          <ExhibitionDocuments
-            inventory={inventory}
-            setInventory={setInventory}
-            exhibitionId={exhibition.id}
-          />
-        ) : (
-          <p className="muted small-note">
-            Guarda la exposición para poder añadir documentos y ventas.
-          </p>
-        )}
+        <div className="form-group">
+          <p className="form-group-label">{t("exhibition.section.documents")}</p>
+          {exhibition ? (
+            <ExhibitionDocuments
+              inventory={inventory}
+              setInventory={setInventory}
+              exhibitionId={exhibition.id}
+            />
+          ) : (
+            <p className="muted small-note">{t("exhibition.docs.saveFirst")}</p>
+          )}
+        </div>
 
         {showPicker && (
           <ArtworkPickerModal
             inventory={inventory}
             excludeIds={[...selected, ...soldBlockedIds]}
-            notice="No aparecen las obras vendidas antes de la fecha de inicio de esta exposición."
-            title="Añadir obras a la exposición"
+            notice={t("exhibition.works.soldNotice")}
+            title={t("exhibition.works.add")}
             onConfirm={(ids) => {
               markDirty();
               setSelected((current) => [...current, ...ids]);
+              setListed((current) => {
+                const next = { ...current };
+                const settings: AppSettings = {
+                  sizeTypes: inventory.settings.sizeTypes ?? [],
+                  taxRates: inventory.settings.taxRates ?? [],
+                  fixedTypePrices: inventory.settings.fixedTypePrices ?? []
+                };
+                for (const id of ids) {
+                  if (next[id]) continue;
+                  const art = inventory.artworks.find((a) => a.id === id);
+                  if (!art) continue;
+                  const price = basePriceAt(art, settings, Date.now());
+                  if (price != null) next[id] = String(Math.round(price));
+                }
+                return next;
+              });
               setShowPicker(false);
             }}
             onClose={() => setShowPicker(false)}
@@ -6541,24 +6831,30 @@ function ExhibitionForm({
         )}
 
         {error && <div className="error-banner">{error}</div>}
-        <div className="form-actions">
-          <button onClick={save}>Guardar</button>
-          <button className="ghost" onClick={onDone}>
-            Cancelar
+
+        <div className="form-actions exhibition-form-actions">
+          <button type="button" onClick={save}>
+            {t("common.save")}
+          </button>
+          <button type="button" className="ghost" onClick={onDone}>
+            {t("common.cancel")}
           </button>
         </div>
 
         {exhibition && (
           <div className="danger-zone">
             <div>
-              <strong>Eliminar esta exposición</strong>
+              <strong>{t("exhibition.delete.title")}</strong>
               <p className="muted">
-                Se borrará «{exhibition.title}» y los movimientos de exposición
-                vinculados. No se puede deshacer.
+                {t("exhibition.delete.body", { title: exhibition.title })}
               </p>
             </div>
-            <button className="ghost danger" onClick={() => setConfirmDelete(true)}>
-              Eliminar exposición…
+            <button
+              type="button"
+              className="ghost danger"
+              onClick={() => setConfirmDelete(true)}
+            >
+              {t("exhibition.delete.button")}
             </button>
           </div>
         )}
@@ -6576,6 +6872,7 @@ function ExhibitionModal({
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const t = useT();
   const [form, setForm] = useState<ExhibitionInput>({ ...emptyExhibition });
   const [error, setError] = useState("");
 
@@ -6593,7 +6890,7 @@ function ExhibitionModal({
       if (created) onCreated(created.id);
       else onClose();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo guardar.");
+      setError(caught instanceof Error ? caught.message : t("common.error.save"));
     }
   }
 
@@ -6601,53 +6898,51 @@ function ExhibitionModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h3>Nueva exposición</h3>
+          <h3>{t("exhibition.modal.title")}</h3>
           <button className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
         </div>
         <div className="modal-body">
           <label className="field">
-            Título
+            {t("exhibition.field.title")}
             <input value={form.title} onChange={(event) => set("title", event.target.value)} />
           </label>
           <div className="form-row">
             <label className="field">
-              Lugar / sala
+              {t("exhibition.field.venue")}
               <input
                 value={form.venue ?? ""}
                 onChange={(event) => set("venue", event.target.value)}
               />
             </label>
             <label className="field">
-              Ciudad
+              {t("exhibition.field.city")}
               <input value={form.city ?? ""} onChange={(event) => set("city", event.target.value)} />
             </label>
           </div>
           <div className="form-row">
             <label className="field">
-              Desde
+              {t("exhibition.field.from")}
               <DateField value={form.startDate ?? ""} onChange={(value) => set("startDate", value)} />
             </label>
             <label className="field">
-              Hasta
+              {t("exhibition.field.until")}
               <DateField value={form.endDate ?? ""} onChange={(value) => set("endDate", value)} />
             </label>
           </div>
         </div>
         {error && <div className="error-banner">{error}</div>}
         <div className="modal-actions">
-          <button onClick={save}>Guardar</button>
+          <button onClick={save}>{t("common.save")}</button>
           <button className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       </div>
     </div>
   );
 }
-
-const DELETE_PHRASE = "Quiero borrar esto";
 
 function ConfirmDialog({
   title,
@@ -6662,9 +6957,11 @@ function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const t = useT();
+  const phrase = t("confirm.phrase");
   const [checked, setChecked] = useState(false);
   const [typed, setTyped] = useState("");
-  const ready = checked && typed.trim() === DELETE_PHRASE;
+  const ready = checked && typed.trim() === phrase;
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
@@ -6682,19 +6979,19 @@ function ConfirmDialog({
             checked={checked}
             onChange={(event) => setChecked(event.target.checked)}
           />
-          Sí, estoy segura de que quiero borrar esto.
+          {t("confirm.checkbox")}
         </label>
         <label className="field">
-          Para confirmar, escribe: <strong>{DELETE_PHRASE}</strong>
+          {t("confirm.typePrompt")} <strong>{phrase}</strong>
           <input
             value={typed}
-            placeholder={DELETE_PHRASE}
+            placeholder={phrase}
             onChange={(event) => setTyped(event.target.value)}
           />
         </label>
         <div className="modal-actions">
           <button className="ghost" onClick={onCancel}>
-            Cancelar
+            {t("common.cancel")}
           </button>
           <button className="danger-solid" disabled={!ready} onClick={onConfirm}>
             {confirmLabel}
@@ -6714,48 +7011,61 @@ function MovementDetailModal({
   inventory: InventoryData;
   onClose: () => void;
 }) {
+  const { lang, t } = useLanguage();
   const kind = movementKind(movement.type);
   const rows: Array<[string, string]> = [
-    ["Tipo", labelFor(inventory, "movementType", movement.type)],
-    ["Fecha", movement.date || "Sin fecha"]
+    [
+      t("movement.detail.type"),
+      labelFor(inventory, "movementType", movement.type, lang)
+    ],
+    [t("movement.detail.date"), movement.date || t("common.noDate")]
   ];
-  if (movement.editionLabel) rows.push(["Copia", movement.editionLabel]);
+  if (movement.editionLabel)
+    rows.push([t("movement.detail.copy"), movement.editionLabel]);
   if (kind === "exhibition") {
     rows.push([
-      "Exposición",
+      t("movement.detail.exhibition"),
       movement.exhibitionTitle || exhibitionTitle(inventory, movement.exhibitionId) || "-"
     ]);
     rows.push([
-      "Resultado",
+      t("movement.detail.result"),
       movement.returned
-        ? "Devuelta al estudio"
+        ? t("movement.detail.returned")
         : movement.keptAtGallery
-          ? "Con galería tras la exposición"
-          : "En exposición"
+          ? t("movement.detail.withGalleryAfter")
+          : t("movement.detail.inExhibition")
     ]);
   } else {
-    if (movement.price) rows.push(["Precio", formatEuro(movement.price)]);
-    if (movement.received) rows.push(["Recibido (neto)", formatEuro(movement.received)]);
-    if (movement.context === "gallery") rows.push(["Contexto", "A través de galería"]);
+    if (movement.price)
+      rows.push([t("movement.detail.price"), formatEuro(movement.price)]);
+    if (movement.received)
+      rows.push([t("movement.detail.receivedNet"), formatEuro(movement.received)]);
+    if (movement.context === "gallery")
+      rows.push([t("movement.detail.context"), t("movement.detail.viaGallery")]);
     if (movement.context === "exhibition")
       rows.push([
-        "Contexto",
-        `En exposición: ${
-          movement.exhibitionTitle ||
-          exhibitionTitle(inventory, movement.exhibitionId) ||
-          "-"
-        }`
+        t("movement.detail.context"),
+        t("movement.detail.atExhibition", {
+          title:
+            movement.exhibitionTitle ||
+            exhibitionTitle(inventory, movement.exhibitionId) ||
+            "-"
+        })
       ]);
     const who = movement.contactName || contactName(inventory, movement.contactId);
-    if (who) rows.push([kind === "sale" ? "Comprador/a" : "Contacto", who]);
+    if (who)
+      rows.push([
+        kind === "sale" ? t("movement.detail.buyer") : t("movement.detail.contact"),
+        who
+      ]);
   }
-  if (movement.notes) rows.push(["Notas", movement.notes]);
+  if (movement.notes) rows.push([t("movement.detail.notes"), movement.notes]);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h3>{movementSummary(movement, inventory)}</h3>
+          <h3>{movementSummary(movement, inventory, t, lang)}</h3>
           <button className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
@@ -6770,7 +7080,7 @@ function MovementDetailModal({
         </dl>
         <div className="modal-actions">
           <button className="ghost" onClick={onClose}>
-            Cerrar
+            {t("common.close")}
           </button>
         </div>
       </div>
@@ -6849,6 +7159,7 @@ function RangeFilter({
   onChange: (value: Range) => void;
   format: (value: number) => string;
 }) {
+  const t = useT();
   if (!bounds || bounds[0] >= bounds[1]) return null;
   const [min, max] = bounds;
   const lo = value ? value[0] : min;
@@ -6895,7 +7206,7 @@ function RangeFilter({
         </div>
         {value && (
           <button type="button" className="link-button" onClick={() => onChange(null)}>
-            Restablecer
+            {t("common.reset")}
           </button>
         )}
       </div>
@@ -6990,55 +7301,130 @@ function factorForDate(
   return factorAt(type, dateMs);
 }
 
+function fixedPriceEntry(
+  settings: AppSettings,
+  typeValue?: string
+): FixedTypePrice | null {
+  const key = (typeValue ?? "").trim();
+  if (!key) return null;
+  const fromSettings = (settings.fixedTypePrices ?? []).find(
+    (item) => item.typeValue === key
+  );
+  if (fromSettings && fromSettings.prices.some((p) => p.price > 0)) {
+    return fromSettings;
+  }
+  const builtin = DEFAULT_FIXED_TYPE_PRICES.find((item) => item.typeValue === key);
+  return builtin ?? null;
+}
+
+/** Flat technique price effective on a given date (latest period on or before). */
+function fixedPriceAt(entry: FixedTypePrice, dateMs: number): number | null {
+  const periods = entry.prices.filter((p) => p.price > 0);
+  if (periods.length === 0) return null;
+  const sorted = [...periods].sort((a, b) => periodMs(a.from) - periodMs(b.from));
+  let chosen = sorted[0];
+  for (const p of sorted) {
+    if (periodMs(p.from) <= dateMs) chosen = p;
+  }
+  return chosen.price;
+}
+
+function fixedPriceForType(
+  settings: AppSettings,
+  typeValue?: string,
+  dateMs: number = Date.now()
+): number | null {
+  const entry = fixedPriceEntry(settings, typeValue);
+  if (!entry) return null;
+  return fixedPriceAt(entry, dateMs);
+}
+
+function fixedPriceChangeYears(entry: FixedTypePrice | null): number[] {
+  if (!entry) return [];
+  const ys = entry.prices
+    .map((p) => fractionalYear(p.from))
+    .filter((y): y is number => y != null)
+    .map((y) => Math.floor(y));
+  return [...new Set(ys)].sort((a, b) => a - b);
+}
+
+function currentFixedPrice(entry: FixedTypePrice): number | null {
+  return fixedPriceAt(entry, Date.now());
+}
+
 function basePriceAt(
   artwork: Artwork,
   settings: AppSettings,
   dateMs: number
 ): number | null {
+  const fixed = fixedPriceForType(settings, artwork.type, dateMs);
+  if (fixed != null) return fixed;
   const factor = factorForDate(settings, sizeSumCm(artwork), dateMs);
   if (factor == null) return null;
   return sizeSumCm(artwork) * factor;
 }
 
-/** Half of factor × (alto+ancho) for «pago a galerista», with a clear gap reason. */
-function galleryPaymentHalfInfo(
+/** Why the «pago a galerista» value could not be calculated. */
+type GalleryPaymentGap =
+  | { reason: "missingSize" }
+  | { reason: "noFactors" }
+  | { reason: "noBand"; sizeSum: number }
+  | { reason: "noFactor"; label: string };
+
+/** Half of factor × (alto+ancho) for «pago a galerista», with a gap reason. */
+function galleryPaymentHalf(
   artwork: Artwork | ArtworkInput,
   settings: AppSettings,
   dateMs: number
-): { half: number | null; problem: string | null } {
+): { half: number | null; gap: GalleryPaymentGap | null } {
+  const fixed = fixedPriceForType(settings, artwork.type, dateMs);
+  if (fixed != null) {
+    return { half: Math.round(fixed * 0.5), gap: null };
+  }
   const h = toCm(artwork.height, artwork.unit ?? "cm");
   const w = toCm(artwork.width, artwork.unit ?? "cm");
   if (h == null || h <= 0 || w == null || w <= 0) {
-    return {
-      half: null,
-      problem:
-        "Faltan alto y ancho de la obra. Complétalos en la ficha para calcular el valor."
-    };
+    return { half: null, gap: { reason: "missingSize" } };
   }
   const sizeSum = h + w;
   const types = settings.sizeTypes ?? [];
   if (types.length === 0) {
-    return {
-      half: null,
-      problem:
-        "No hay factores definidos. Ve a «Factores y precios» y configura los tamaños."
-    };
+    return { half: null, gap: { reason: "noFactors" } };
   }
   const type = sizeTypeForSum(types, sizeSum);
   if (!type) {
-    return {
-      half: null,
-      problem: `Ningún tamaño cubre ${Math.round(sizeSum)} cm (alto+ancho). Ajusta los rangos en «Factores y precios».`
-    };
+    return { half: null, gap: { reason: "noBand", sizeSum } };
   }
   const factor = factorAt(type, dateMs);
   if (factor == null || factor <= 0) {
-    return {
-      half: null,
-      problem: `«${type.label || "Ese tamaño"}» no tiene factor. Añádelo en «Factores y precios».`
-    };
+    return { half: null, gap: { reason: "noFactor", label: type.label ?? "" } };
   }
-  return { half: Math.round(sizeSum * factor * 0.5), problem: null };
+  return { half: Math.round(sizeSum * factor * 0.5), gap: null };
+}
+
+function galleryPaymentGapMessage(gap: GalleryPaymentGap, t: Translate): string {
+  switch (gap.reason) {
+    case "missingSize":
+      return t("pricing.payment.missingSize");
+    case "noFactors":
+      return t("pricing.payment.noFactors");
+    case "noBand":
+      return t("pricing.payment.noBand", { size: Math.round(gap.sizeSum) });
+    default:
+      return t("pricing.payment.noFactor", {
+        name: gap.label || t("pricing.payment.thatSize")
+      });
+  }
+}
+
+function galleryPaymentHalfInfo(
+  artwork: Artwork | ArtworkInput,
+  settings: AppSettings,
+  dateMs: number,
+  t: Translate
+): { half: number | null; problem: string | null } {
+  const { half, gap } = galleryPaymentHalf(artwork, settings, dateMs);
+  return { half, problem: gap ? galleryPaymentGapMessage(gap, t) : null };
 }
 
 function galleryPaymentHalfValue(
@@ -7046,7 +7432,7 @@ function galleryPaymentHalfValue(
   settings: AppSettings,
   dateMs: number
 ): number | null {
-  return galleryPaymentHalfInfo(artwork, settings, dateMs).half;
+  return galleryPaymentHalf(artwork, settings, dateMs).half;
 }
 
 /** Cost used in Cuentas: stored price, or half of calculated value if missing. */
@@ -7178,6 +7564,7 @@ function PriceLineChart({
   xMax?: number;
   onDotClick?: (exhibitionId: string) => void;
 }) {
+  const t = useT();
   const chartRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{
     left: number;
@@ -7198,7 +7585,7 @@ function PriceLineChart({
     ...dots.map((d) => d.y)
   ];
   if (allX.length === 0) {
-    return <p className="muted">No hay datos suficientes para dibujar la gráfica.</p>;
+    return <p className="muted">{t("chart.noData")}</p>;
   }
   let minX = xMin ?? Math.min(...allX);
   let maxX = xMax ?? Math.max(...allX);
@@ -7299,7 +7686,10 @@ function PriceLineChart({
                 onMouseEnter={(event) =>
                   showTip(
                     event,
-                    `${marker.label} (${marker.x}) · sin precio de lista`
+                    t("chart.tip.noListedPrice", {
+                      label: marker.label,
+                      year: marker.x
+                    })
                   )
                 }
                 onMouseLeave={() => setHover(null)}
@@ -7368,7 +7758,10 @@ function PriceLineChart({
               onMouseEnter={(event) =>
                 showTip(
                   event,
-                  `Venta: ${formatMoney(d.y)} (${d.x})${d.label ? ` · ${d.label}` : ""}`
+                  `${t("chart.tip.sale", {
+                    amount: formatMoney(d.y),
+                    year: d.x
+                  })}${d.label ? ` · ${d.label}` : ""}`
                 )
               }
               onMouseLeave={() => setHover(null)}
@@ -7389,13 +7782,14 @@ function PriceLineChart({
         ))}
         {exhibitionDots.length > 0 && (
           <span className="legend-item">
-            <span className="legend-swatch" style={{ background: "#c0392b" }} /> Precio en
-            exposición
+            <span className="legend-swatch" style={{ background: "#c0392b" }} />{" "}
+            {t("chart.legend.exhibitionPrice")}
           </span>
         )}
         {markers.length > 0 && (
           <span className="legend-item">
-            <span className="legend-dash" aria-hidden /> Exposición sin precio
+            <span className="legend-dash" aria-hidden />{" "}
+            {t("chart.legend.exhibitionNoPrice")}
           </span>
         )}
         {saleDots.length > 0 && (
@@ -7403,7 +7797,7 @@ function PriceLineChart({
             <span className="legend-star" aria-hidden>
               ★
             </span>{" "}
-            Precio de venta
+            {t("chart.legend.salePrice")}
           </span>
         )}
       </div>
@@ -7430,9 +7824,11 @@ function PriceHistoryTab({
   inventory: InventoryData;
   onOpenExhibition: (exhibitionId: string) => void;
 }) {
+  const t = useT();
   const settings: AppSettings = {
     sizeTypes: inventory.settings.sizeTypes ?? [],
-    taxRates: inventory.settings.taxRates ?? []
+    taxRates: inventory.settings.taxRates ?? [],
+    fixedTypePrices: inventory.settings.fixedTypePrices ?? []
   };
   const taxRates = settings.taxRates;
   const [country, setCountry] = useState(taxCountries(settings)[0] ?? "");
@@ -7443,12 +7839,17 @@ function PriceHistoryTab({
 
   const sizeSum = sizeSumCm(artwork);
   const sizeType = sizeTypeForSum(settings.sizeTypes, sizeSum);
+  const fixedEntry = fixedPriceEntry(settings, artwork.type);
+  const fixedPrice = fixedEntry ? fixedPriceAt(fixedEntry, Date.now()) : null;
   const nowMs = Date.now();
 
   const axisFrom = Math.max(1970, Math.min(yearFrom, yearTo));
   const axisTo = Math.min(nowYear, Math.max(yearFrom, yearTo, axisFrom));
 
-  const changeYears = factorChangeYears(sizeType);
+  const changeYears =
+    fixedEntry != null
+      ? fixedPriceChangeYears(fixedEntry)
+      : factorChangeYears(sizeType);
   const pointYears = uniqueNumbers([
     axisFrom,
     ...changeYears.filter((y) => y >= axisFrom && y <= axisTo),
@@ -7458,7 +7859,7 @@ function PriceHistoryTab({
   const yearToMs = (y: number) => new Date(Math.floor(y), 0, 1).getTime();
 
   const baseSeries: ChartSeries = {
-    label: "Precio por factor",
+    label: t("pricing.history.seriesBase"),
     color: "#2f6fed",
     points: pointYears
       .map((y) => {
@@ -7468,7 +7869,7 @@ function PriceHistoryTab({
       .filter((p): p is { x: number; y: number } => p !== null)
   };
   const taxSeries: ChartSeries = {
-    label: `Con impuesto (${country || "—"})`,
+    label: t("pricing.history.seriesTax", { country: country || "—" }),
     color: "#b06a14",
     points: baseSeries.points.map((p) => ({
       x: p.x,
@@ -7487,7 +7888,7 @@ function PriceHistoryTab({
       return {
         x: yr,
         y: value,
-        label: exhibition?.title || "Exposición",
+        label: exhibition?.title || t("movement.detail.exhibition"),
         exhibitionId: m.exhibitionId,
         kind: "exhibition"
       };
@@ -7508,7 +7909,7 @@ function PriceHistoryTab({
       if (!yr || yr < axisFrom || yr > axisTo) return null;
       return {
         x: yr,
-        label: exhibition?.title || "Exposición",
+        label: exhibition?.title || t("movement.detail.exhibition"),
         exhibitionId: m.exhibitionId
       };
     })
@@ -7527,7 +7928,7 @@ function PriceHistoryTab({
       return {
         x: yr,
         y: value,
-        label: m.contactName || contactName(inventory, m.contactId) || "Venta",
+        label: m.contactName || contactName(inventory, m.contactId) || t("common.sale"),
         kind: "sale"
       };
     })
@@ -7552,16 +7953,33 @@ function PriceHistoryTab({
     <div className="price-history">
       <div className="ph-summary">
         <div>
-          <span className="eyebrow">Tamaño (alto + ancho)</span>
-          <strong>{sizeSum > 0 ? `${Math.round(sizeSum)} cm` : "Sin medidas"}</strong>
+          <span className="eyebrow">
+            {fixedPrice != null
+              ? t("pricing.history.fixedPrice")
+              : t("pricing.history.size")}
+          </span>
+          <strong>
+            {fixedPrice != null
+              ? formatMoney(fixedPrice)
+              : sizeSum > 0
+                ? `${Math.round(sizeSum)} cm`
+                : t("pricing.history.noSize")}
+          </strong>
         </div>
         <div>
-          <span className="eyebrow">Precio base {currentYear}</span>
+          <span className="eyebrow">
+            {fixedPrice != null
+              ? t("pricing.history.fixedTechnique")
+              : t("pricing.history.basePrice", { year: currentYear })}
+          </span>
           <strong>{currentBase != null ? formatMoney(currentBase) : "—"}</strong>
         </div>
         <div>
           <span className="eyebrow">
-            Con impuesto ({country || "—"} {currentTax}%)
+            {t("pricing.history.withTax", {
+              country: country || "—",
+              rate: currentTax
+            })}
           </span>
           <strong>
             {currentBase != null
@@ -7573,7 +7991,7 @@ function PriceHistoryTab({
 
       <div className="ph-controls">
         <label className="sort-control">
-          Desde
+          {t("exhibition.field.from")}
           <select
             value={axisFrom}
             onChange={(event) => setYearFrom(Number(event.target.value))}
@@ -7586,7 +8004,7 @@ function PriceHistoryTab({
           </select>
         </label>
         <label className="sort-control">
-          Hasta
+          {t("exhibition.field.until")}
           <select
             value={axisTo}
             onChange={(event) => setYearTo(Number(event.target.value))}
@@ -7604,10 +8022,10 @@ function PriceHistoryTab({
             checked={showTax}
             onChange={(event) => setShowTax(event.target.checked)}
           />
-          Mostrar línea con impuesto
+          {t("pricing.history.showTax")}
         </label>
         <label className="sort-control">
-          País (impuesto)
+          {t("pricing.history.taxCountry")}
           <select value={country} onChange={(event) => setCountry(event.target.value)}>
             {taxCountries(settings).map((c) => (
               <option key={c} value={c}>
@@ -7618,22 +8036,19 @@ function PriceHistoryTab({
         </label>
       </div>
 
-      {settings.sizeTypes.length === 0 && (
+      {fixedEntry == null && settings.sizeTypes.length === 0 && (
+        <p className="muted small-note">{t("pricing.history.noFactors")}</p>
+      )}
+      {fixedEntry == null &&
+        sizeSum > 0 &&
+        !sizeType &&
+        settings.sizeTypes.length > 0 && (
         <p className="muted small-note">
-          Todavía no hay factores definidos. Ve a «Factores y precios» para añadir los
-          tipos de tamaño y sus factores.
+          {t("pricing.history.noBand", { size: Math.round(sizeSum) })}
         </p>
       )}
-      {sizeSum > 0 && !sizeType && settings.sizeTypes.length > 0 && (
-        <p className="muted small-note">
-          El tamaño de esta obra ({Math.round(sizeSum)} cm) no encaja en ningún tipo.
-          Revisa los rangos en «Factores y precios».
-        </p>
-      )}
-      {sizeSum === 0 && (
-        <p className="muted small-note">
-          Añade el alto y el ancho de la obra para calcular el precio.
-        </p>
+      {fixedEntry == null && sizeSum === 0 && (
+        <p className="muted small-note">{t("pricing.history.needSize")}</p>
       )}
 
       {hasData ? (
@@ -7646,14 +8061,17 @@ function PriceHistoryTab({
           onDotClick={onOpenExhibition}
         />
       ) : (
-        <p className="muted">Aún no hay datos para mostrar una gráfica.</p>
+        <p className="muted">{t("pricing.history.noChartData")}</p>
       )}
     </div>
   );
 }
 
-function sizeTypeTitle(type: SizeType): string {
-  const range = `de ${type.fromSum || 0} a ${type.toSum ? `${type.toSum} cm` : "sin límite"}`;
+function sizeTypeTitle(type: SizeType, t: Translate): string {
+  const from = type.fromSum || 0;
+  const range = type.toSum
+    ? t("pricing.size.range", { from, to: `${type.toSum} cm` })
+    : t("pricing.size.rangeOpen", { from });
   return type.label?.trim() ? `${type.label.trim()} (${range})` : range;
 }
 
@@ -7707,6 +8125,7 @@ function SizeTypeEditModal({
   onDelete?: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [draft, setDraft] = useState<SizeType>(() => ({
     ...type,
     factors:
@@ -7742,11 +8161,11 @@ function SizeTypeEditModal({
     const factor =
       Number(newFactor.replace(/[^0-9.,]/g, "").replace(",", ".")) || 0;
     if (!newFrom.trim()) {
-      setError("Elige la fecha desde la que vale el nuevo factor.");
+      setError(t("pricing.size.error.needDate"));
       return;
     }
     if (factor <= 0) {
-      setError("Escribe el nuevo factor (un número mayor que 0).");
+      setError(t("pricing.size.error.needFactor"));
       return;
     }
     setDraft((current) => ({
@@ -7764,13 +8183,13 @@ function SizeTypeEditModal({
 
   function save() {
     if (!draft.label?.trim()) {
-      setError("Pon un nombre al tamaño (por ejemplo Pequeño).");
+      setError(t("pricing.size.error.needName"));
       return;
     }
     const fromSum = Number(draft.fromSum) || 0;
     const toSum = Number(draft.toSum) || 0;
     if (toSum > 0 && toSum < fromSum) {
-      setError("El «hasta» no puede ser menor que el «desde».");
+      setError(t("pricing.size.error.badRange"));
       return;
     }
     const overlap = findOverlappingSize(
@@ -7778,26 +8197,24 @@ function SizeTypeEditModal({
       existingTypes
     );
     if (overlap) {
-      const name = overlap.label?.trim() || "Sin nombre";
+      const name = overlap.label?.trim() || t("common.noName");
       const range = `${overlap.fromSum || 0} → ${
         overlap.toSum ? `${overlap.toSum} cm` : "∞"
       }`;
-      setError(
-        `No permitido: se solapa con «${name}» (${range}). Los rangos no pueden coincidir ni cruzarse.`
-      );
+      setError(t("pricing.size.error.overlap", { name, range }));
       return;
     }
     if (draft.factors.length === 0) {
-      setError("Añade al menos un factor.");
+      setError(t("pricing.size.error.needFactorRow"));
       return;
     }
     for (const period of draft.factors) {
       if (!period.from?.trim()) {
-        setError("Cada factor necesita una fecha de inicio. No dejes fechas vacías.");
+        setError(t("pricing.size.error.factorDates"));
         return;
       }
       if (!(period.factor > 0)) {
-        setError("Cada factor debe ser un número mayor que 0.");
+        setError(t("pricing.size.error.factorPositive"));
         return;
       }
     }
@@ -7811,31 +8228,44 @@ function SizeTypeEditModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-head">
-          <h3>{type.id.startsWith("st-new") ? "Nuevo tamaño" : "Tamaño"}</h3>
+          <h3>
+            {type.id.startsWith("st-new")
+              ? t("pricing.size.modalNew")
+              : t("pricing.size.modalEdit")}
+          </h3>
           <button className="icon-button ghost" type="button" onClick={onClose}>
             ✕
           </button>
         </div>
         <div className="modal-body">
           <div className="cuentas-step">
-            <p className="cuentas-q">Nombre</p>
+            <p className="cuentas-q">{t("pricing.size.col.name")}</p>
             <div className="choice-row">
-              {["Pequeño", "Mediano", "Grande"].map((name) => (
-                <button
-                  key={name}
-                  type="button"
-                  className={`choice-chip${draft.label === name ? " active" : ""}`}
-                  onClick={() => setDraft((c) => ({ ...c, label: name }))}
-                >
-                  {name}
-                </button>
-              ))}
+              {(
+                [
+                  "pricing.size.chip.small",
+                  "pricing.size.chip.medium",
+                  "pricing.size.chip.large"
+                ] as const
+              ).map((key) => {
+                const name = t(key);
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`choice-chip${draft.label === name ? " active" : ""}`}
+                    onClick={() => setDraft((c) => ({ ...c, label: name }))}
+                  >
+                    {name}
+                  </button>
+                );
+              })}
             </div>
             <label className="mt-soft">
-              Otro nombre
+              {t("pricing.size.otherName")}
               <input
                 value={draft.label ?? ""}
-                placeholder="Ej. Extra grande"
+                placeholder={t("pricing.size.namePlaceholder")}
                 onChange={(event) =>
                   setDraft((c) => ({ ...c, label: event.target.value }))
                 }
@@ -7844,10 +8274,10 @@ function SizeTypeEditModal({
           </div>
 
           <div className="cuentas-step">
-            <p className="cuentas-q">Rango en cm (alto + ancho)</p>
+            <p className="cuentas-q">{t("pricing.size.rangeTitle")}</p>
             <div className="size-range-big">
               <label>
-                Desde
+                {t("exhibition.field.from")}
                 <input
                   inputMode="numeric"
                   value={draft.fromSum || ""}
@@ -7862,7 +8292,7 @@ function SizeTypeEditModal({
               </label>
               <span className="size-range-sep">→</span>
               <label>
-                Hasta
+                {t("exhibition.field.until")}
                 <input
                   inputMode="numeric"
                   value={draft.toSum || ""}
@@ -7879,11 +8309,8 @@ function SizeTypeEditModal({
           </div>
 
           <div className="cuentas-step">
-            <p className="cuentas-q">Factores en el tiempo</p>
-            <p className="muted small-note">
-              Cada tarjeta dice: «a partir de esta fecha, el factor es este». La más
-              reciente es la que se usa hoy.
-            </p>
+            <p className="cuentas-q">{t("pricing.size.factorsTitle")}</p>
+            <p className="muted small-note">{t("pricing.size.factorsHint")}</p>
             <div className="factor-card-list">
               {sorted.map((period) => {
                 const isLatest = period.id === latestId;
@@ -7893,16 +8320,16 @@ function SizeTypeEditModal({
                     key={period.id}
                   >
                     <div className="factor-card-main">
-                      {isLatest && <span className="factor-card-badge">Se usa ahora</span>}
+                      {isLatest && <span className="factor-card-badge">{t("pricing.tax.usedNow")}</span>}
                       <label>
-                        A partir de
+                        {t("pricing.period.fromDate")}
                         <DateField
                           value={period.from ?? ""}
                           onChange={(value) => updateFactor(period.id, { from: value })}
                         />
                       </label>
                       <label>
-                        Factor
+                        {t("pricing.size.col.factor")}
                         <input
                           inputMode="decimal"
                           value={period.factor || ""}
@@ -7924,7 +8351,7 @@ function SizeTypeEditModal({
                         type="button"
                         className="factor-card-remove"
                         onClick={() => removeFactor(period.id)}
-                        title="Quitar"
+                        title={t("common.remove")}
                       >
                         ✕
                       </button>
@@ -7943,29 +8370,29 @@ function SizeTypeEditModal({
                   setError("");
                 }}
               >
-                + Cambiar el factor (nueva fecha)
+                {t("pricing.size.addChange")}
               </button>
             ) : (
               <div className="factor-add-box">
-                <p className="cuentas-q">Nuevo factor</p>
+                <p className="cuentas-q">{t("pricing.size.newFactor")}</p>
                 <div className="form-grid two">
                   <label>
-                    ¿Desde qué fecha vale?
+                    {t("pricing.period.fromWhen")}
                     <DateField value={newFrom} onChange={setNewFrom} />
                   </label>
                   <label>
-                    ¿Cuál es el factor?
+                    {t("pricing.size.whichFactor")}
                     <input
                       inputMode="decimal"
                       value={newFactor}
-                      placeholder="Ej. 22"
+                      placeholder={t("pricing.size.factorPlaceholder")}
                       onChange={(event) => setNewFactor(event.target.value)}
                     />
                   </label>
                 </div>
                 <div className="choice-row">
                   <button type="button" onClick={addChange}>
-                    Añadir
+                    {t("common.add")}
                   </button>
                   <button
                     type="button"
@@ -7975,7 +8402,7 @@ function SizeTypeEditModal({
                       setError("");
                     }}
                   >
-                    Cancelar
+                    {t("common.cancel")}
                   </button>
                 </div>
               </div>
@@ -7987,14 +8414,14 @@ function SizeTypeEditModal({
         <div className="modal-actions">
           {onDelete && (
             <button type="button" className="ghost danger" onClick={onDelete}>
-              Eliminar tamaño
+              {t("pricing.size.delete")}
             </button>
           )}
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
           <button type="button" onClick={save}>
-            Guardar
+            {t("common.save")}
           </button>
         </div>
       </div>
@@ -8044,6 +8471,7 @@ function TaxCountryEditModal({
   onDelete?: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [country, setCountry] = useState(draft.country);
   const [rates, setRates] = useState<TaxRate[]>(() =>
     draft.rates.length > 0
@@ -8070,11 +8498,11 @@ function TaxCountryEditModal({
     const rate =
       Number(newRate.replace(/[^0-9.,]/g, "").replace(",", ".")) || 0;
     if (!newFrom.trim()) {
-      setError("Elige la fecha desde la que vale el nuevo impuesto.");
+      setError(t("pricing.tax.error.needDate"));
       return;
     }
     if (rate < 0) {
-      setError("El porcentaje no puede ser negativo.");
+      setError(t("pricing.tax.error.negative"));
       return;
     }
     setRates((list) => [
@@ -8095,7 +8523,7 @@ function TaxCountryEditModal({
   function save() {
     const name = country.trim();
     if (!name) {
-      setError("Escribe el nombre del país.");
+      setError(t("pricing.tax.error.needCountry"));
       return;
     }
     const clash = existingCountries.some(
@@ -8104,30 +8532,28 @@ function TaxCountryEditModal({
         c.trim().toLowerCase() !== draft.originalCountry.trim().toLowerCase()
     );
     if (clash) {
-      setError("Ese país ya existe. Ábrelo para cambiar sus impuestos.");
+      setError(t("pricing.tax.error.duplicate"));
       return;
     }
     if (rates.length === 0) {
-      setError("Añade al menos un porcentaje.");
+      setError(t("pricing.tax.error.needRate"));
       return;
     }
     for (const period of rates) {
       if (period.rate < 0 || !Number.isFinite(period.rate)) {
-        setError("Cada porcentaje debe ser un número válido (0 o más).");
+        setError(t("pricing.tax.error.rateNumber"));
         return;
       }
     }
     const withDates = rates.filter((p) => p.from?.trim());
     const withoutDates = rates.filter((p) => !p.from?.trim());
     if (withoutDates.length > 1) {
-      setError(
-        "Solo puede haber un impuesto «desde el principio». Los cambios necesitan fecha."
-      );
+      setError(t("pricing.tax.error.oneWithoutDate"));
       return;
     }
     const fromKeys = new Set(withDates.map((p) => p.from!.trim()));
     if (fromKeys.size !== withDates.length) {
-      setError("No repitas la misma fecha de inicio en dos cambios.");
+      setError(t("pricing.tax.error.duplicateDate"));
       return;
     }
     onSave({
@@ -8144,29 +8570,29 @@ function TaxCountryEditModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-head">
-          <h3>{draft.originalCountry ? "Impuesto del país" : "Nuevo país"}</h3>
+          <h3>
+            {draft.originalCountry
+              ? t("pricing.tax.modalEdit")
+              : t("pricing.tax.modalNew")}
+          </h3>
           <button className="icon-button ghost" type="button" onClick={onClose}>
             ✕
           </button>
         </div>
         <div className="modal-body">
           <div className="cuentas-step">
-            <p className="cuentas-q">País</p>
+            <p className="cuentas-q">{t("exhibition.field.country")}</p>
             <input
               autoFocus={!draft.originalCountry}
               value={country}
-              placeholder="Ej. España"
+              placeholder={t("pricing.tax.countryPlaceholder")}
               onChange={(event) => setCountry(event.target.value)}
             />
           </div>
 
           <div className="cuentas-step">
-            <p className="cuentas-q">Impuestos en el tiempo</p>
-            <p className="muted small-note">
-              Cada tarjeta es un periodo: «a partir de esta fecha, el IVA es este
-              %». Si el impuesto cambia, añade otro periodo; no hace falta otra
-              fila de país. El más reciente es el que se usa hoy.
-            </p>
+            <p className="cuentas-q">{t("pricing.tax.periodsTitle")}</p>
+            <p className="muted small-note">{t("pricing.tax.periodsHint")}</p>
             <div className="factor-card-list">
               {sorted.map((period, index) => {
                 const isLatest = period.id === latestId;
@@ -8180,10 +8606,10 @@ function TaxCountryEditModal({
                   >
                     <div className="factor-card-main">
                       {isLatest && (
-                        <span className="factor-card-badge">Se usa ahora</span>
+                        <span className="factor-card-badge">{t("pricing.tax.usedNow")}</span>
                       )}
                       <label>
-                        A partir de
+                        {t("pricing.period.fromDate")}
                         <DateField
                           value={period.from ?? ""}
                           onChange={(value) => updateRate(period.id, { from: value })}
@@ -8191,13 +8617,13 @@ function TaxCountryEditModal({
                         <span className="muted small-note">
                           {period.from?.trim()
                             ? until
-                              ? `Hasta ${until}`
-                              : "Sigue vigente"
-                            : "Vacío = desde el principio"}
+                              ? t("pricing.tax.until", { date: until })
+                              : t("pricing.tax.stillValid")
+                            : t("pricing.tax.emptyFromStart")}
                         </span>
                       </label>
                       <label>
-                        Impuesto %
+                        {t("pricing.tax.percent")}
                         <input
                           inputMode="decimal"
                           value={
@@ -8223,7 +8649,7 @@ function TaxCountryEditModal({
                         type="button"
                         className="factor-card-remove"
                         onClick={() => removeRate(period.id)}
-                        title="Quitar"
+                        title={t("common.remove")}
                       >
                         ✕
                       </button>
@@ -8242,29 +8668,29 @@ function TaxCountryEditModal({
                   setError("");
                 }}
               >
-                + Cambió el impuesto (nueva fecha)
+                {t("pricing.tax.addPeriodDate")}
               </button>
             ) : (
               <div className="factor-add-box">
-                <p className="cuentas-q">Nuevo porcentaje</p>
+                <p className="cuentas-q">{t("pricing.tax.newPercent")}</p>
                 <div className="form-grid two">
                   <label>
-                    ¿Desde qué fecha vale?
+                    {t("pricing.period.fromWhen")}
                     <DateField value={newFrom} onChange={setNewFrom} />
                   </label>
                   <label>
-                    ¿Cuál es el %?
+                    {t("pricing.tax.whichPercent")}
                     <input
                       inputMode="decimal"
                       value={newRate}
-                      placeholder="Ej. 21"
+                      placeholder={t("pricing.tax.percentPlaceholder")}
                       onChange={(event) => setNewRate(event.target.value)}
                     />
                   </label>
                 </div>
                 <div className="choice-row">
                   <button type="button" onClick={addChange}>
-                    Añadir
+                    {t("common.add")}
                   </button>
                   <button
                     type="button"
@@ -8274,7 +8700,7 @@ function TaxCountryEditModal({
                       setError("");
                     }}
                   >
-                    Cancelar
+                    {t("common.cancel")}
                   </button>
                 </div>
               </div>
@@ -8286,14 +8712,14 @@ function TaxCountryEditModal({
         <div className="modal-actions">
           {onDelete && (
             <button type="button" className="ghost danger" onClick={onDelete}>
-              Eliminar país
+              {t("pricing.tax.delete")}
             </button>
           )}
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
           <button type="button" onClick={save}>
-            Guardar
+            {t("common.save")}
           </button>
         </div>
       </div>
@@ -8316,6 +8742,7 @@ function PricingExportModal({
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const settingsNow: AppSettings = { sizeTypes, taxRates };
   const countries = taxCountries(settingsNow);
   const [includeTax, setIncludeTax] = useState(true);
@@ -8334,7 +8761,7 @@ function PricingExportModal({
 
   async function generate() {
     if (selected.length === 0) {
-      onError("Elige al menos una obra.");
+      onError(t("pricing.export.needWorks"));
       return;
     }
     setBusy(true);
@@ -8342,16 +8769,18 @@ function PricingExportModal({
       const atMs = dateToMs(asOfDate);
       const dateMs = Number.isFinite(atMs) ? (atMs as number) : Date.now();
       const headers = [
-        "Nombre",
-        "Serie",
-        "Año",
-        "Ancho (cm)",
-        "Alto (cm)",
-        "Suma (cm)",
-        "Factor",
-        "Base (€)"
+        t("pricing.size.col.name"),
+        t("library.col.series"),
+        t("library.col.year"),
+        t("library.filter.width"),
+        t("library.filter.height"),
+        t("pricing.export.col.sum"),
+        t("pricing.size.col.factor"),
+        t("pricing.export.col.base")
       ];
-      if (includeTax && country) headers.push(`Con impuesto ${country} (€)`);
+      if (includeTax && country) {
+        headers.push(t("pricing.export.col.withTax", { country }));
+      }
 
       const arts = orderArtworks(
         inventory.artworks.filter((a) => selected.includes(a.id)),
@@ -8385,16 +8814,16 @@ function PricingExportModal({
 
       const path = await window.inventoryApi.exportPricingSheet({
         filename: "precios.xlsx",
-        sheetName: "Precios",
+        sheetName: t("pricing.eyebrow"),
         headers,
         rows
       });
       if (path) {
-        onToast("Hoja de cálculo guardada.");
+        onToast(t("pricing.toast.sheetSaved"));
         onClose();
       }
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo exportar.");
+      onError(error instanceof Error ? error.message : t("common.error.export"));
     } finally {
       setBusy(false);
     }
@@ -8404,39 +8833,37 @@ function PricingExportModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h3>Generar hoja de precios</h3>
+          <h3>{t("pricing.export.title")}</h3>
           <button className="icon-button ghost" type="button" onClick={onClose}>
             ✕
           </button>
         </div>
         <div className="modal-body export-wizard">
           <div className="export-step">
-            <h4>1. ¿Incluir impuesto?</h4>
+            <h4>{t("pricing.export.step1")}</h4>
             <div className="choice-row">
               <button
                 type="button"
                 className={`choice-chip${includeTax ? " active" : ""}`}
                 onClick={() => setIncludeTax(true)}
               >
-                Sí, con impuesto
+                {t("pricing.export.withTax")}
               </button>
               <button
                 type="button"
                 className={`choice-chip${!includeTax ? " active" : ""}`}
                 onClick={() => setIncludeTax(false)}
               >
-                No, solo precio base
+                {t("pricing.export.baseOnly")}
               </button>
             </div>
           </div>
 
           {includeTax && (
             <div className="export-step">
-              <h4>2. País del impuesto</h4>
+              <h4>{t("pricing.export.step2")}</h4>
               {countries.length === 0 ? (
-                <p className="muted small-note">
-                  Aún no hay países. Añádelos abajo en Impuestos.
-                </p>
+                <p className="muted small-note">{t("pricing.export.noCountries")}</p>
               ) : (
                 <select
                   value={country}
@@ -8453,35 +8880,33 @@ function PricingExportModal({
           )}
 
           <div className="export-step">
-            <h4>{includeTax ? "3" : "2"}. ¿Qué obras?</h4>
+            <h4>{t("pricing.export.stepWorks", { n: includeTax ? 3 : 2 })}</h4>
             <div className="choice-row">
               <button
                 type="button"
                 className="choice-chip"
                 onClick={() => setSelected(inventory.artworks.map((a) => a.id))}
               >
-                Todas ({inventory.artworks.length})
+                {t("pricing.export.allWorks", { count: inventory.artworks.length })}
               </button>
               <button type="button" className="ghost" onClick={() => setShowPicker(true)}>
-                Elegir… ({selected.length} seleccionadas)
+                {t("pricing.export.chooseWorks", { count: selected.length })}
               </button>
             </div>
           </div>
 
           <div className="export-step">
-            <h4>{includeTax ? "4" : "3"}. ¿Con el factor de qué fecha?</h4>
+            <h4>{t("pricing.export.stepDate", { n: includeTax ? 4 : 3 })}</h4>
             <DateField value={asOfDate} onChange={setAsOfDate} />
-            <p className="muted small-note">
-              Se usa el factor vigente en esa fecha (sirve si cambió a mitad de año).
-            </p>
+            <p className="muted small-note">{t("pricing.export.dateHint")}</p>
           </div>
         </div>
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
           <button type="button" disabled={busy} onClick={generate}>
-            {busy ? "Generando…" : "Generar Excel"}
+            {busy ? t("cert.modal.generating") : t("pricing.export.generateExcel")}
           </button>
         </div>
         {showPicker && (
@@ -8489,7 +8914,7 @@ function PricingExportModal({
             inventory={inventory}
             excludeIds={[]}
             initialIds={selected}
-            title="Elegir obras para la hoja"
+            title={t("pricing.export.pickWorks")}
             onConfirm={(ids) => {
               setSelected(ids);
               setShowPicker(false);
@@ -8513,22 +8938,42 @@ function PricingSettingsPage({
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }) {
+  const { lang, t } = useLanguage();
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>(
     inventory.settings.sizeTypes ?? []
   );
   const [taxRates, setTaxRates] = useState<TaxRate[]>(
     inventory.settings.taxRates ?? []
   );
+  const [fixedTypePrices, setFixedTypePrices] = useState<FixedTypePrice[]>(
+    () => {
+      const stored = inventory.settings.fixedTypePrices ?? [];
+      const byType = new Map(stored.map((p) => [p.typeValue, p]));
+      for (const def of DEFAULT_FIXED_TYPE_PRICES) {
+        if (!byType.has(def.typeValue)) {
+          byType.set(def.typeValue, {
+            typeValue: def.typeValue,
+            prices: def.prices.map((period) => ({ ...period }))
+          });
+        }
+      }
+      return [...byType.values()];
+    }
+  );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [editing, setEditing] = useState<SizeType | null>(null);
   const [editingTax, setEditingTax] = useState<TaxCountryDraft | null>(null);
+  const [editingFixed, setEditingFixed] = useState<FixedTypePrice | null>(null);
+  const [addingFixed, setAddingFixed] = useState(false);
   const [showExport, setShowExport] = useState(false);
 
   const dirty =
     JSON.stringify(sizeTypes) !==
       JSON.stringify(inventory.settings.sizeTypes ?? []) ||
-    JSON.stringify(taxRates) !== JSON.stringify(inventory.settings.taxRates ?? []);
+    JSON.stringify(taxRates) !== JSON.stringify(inventory.settings.taxRates ?? []) ||
+    JSON.stringify(fixedTypePrices) !==
+      JSON.stringify(inventory.settings.fixedTypePrices ?? []);
 
   function addType() {
     const now = new Date();
@@ -8539,9 +8984,9 @@ function PricingSettingsPage({
       .map((t) => Number(t.toSum) || 0)
       .filter((n) => n > 0);
     const nextFrom = finiteEnds.length > 0 ? Math.max(...finiteEnds) + 1 : 0;
-    setEditing({
+                    setEditing({
       id: `st-new-${Date.now()}`,
-      label: "Pequeño",
+      label: "",
       fromSum: nextFrom,
       toSum: nextFrom + 100,
       factors: [{ id: `f-${Date.now()}`, from: today, factor: 0 }]
@@ -8601,11 +9046,9 @@ function PricingSettingsPage({
     for (const type of sizeTypes) {
       const overlap = findOverlappingSize(type, sizeTypes);
       if (overlap) {
-        const a = type.label?.trim() || "Sin nombre";
-        const b = overlap.label?.trim() || "Sin nombre";
-        onError(
-          `No se puede guardar: «${a}» se solapa con «${b}». Corrige los rangos antes.`
-        );
+        const a = type.label?.trim() || t("common.noName");
+        const b = overlap.label?.trim() || t("common.noName");
+        onError(t("pricing.error.overlapSave", { a, b }));
         return;
       }
     }
@@ -8618,15 +9061,28 @@ function PricingSettingsPage({
           toSum: Number(t.toSum) || 0,
           factors: t.factors.map((p) => ({ ...p, factor: Number(p.factor) || 0 }))
         })),
-        taxRates: taxRates.filter((t) => t.country.trim())
+        taxRates: taxRates.filter((t) => t.country.trim()),
+        fixedTypePrices: fixedTypePrices
+          .map((p) => ({
+            typeValue: p.typeValue.trim(),
+            prices: (p.prices ?? [])
+              .map((period) => ({
+                id: period.id || `fp-${Date.now()}`,
+                from: String(period.from ?? "").trim(),
+                price: Number(period.price) || 0
+              }))
+              .filter((period) => period.price > 0)
+          }))
+          .filter((p) => p.typeValue && p.prices.length > 0)
       });
       setInventory(data);
       setSizeTypes(data.settings.sizeTypes);
       setTaxRates(data.settings.taxRates);
+      setFixedTypePrices(data.settings.fixedTypePrices ?? []);
       setSaved(true);
-      onToast("Factores y precios guardados.");
+      onToast(t("pricing.toast.saved"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+      onError(error instanceof Error ? error.message : t("common.error.save"));
     } finally {
       setSaving(false);
     }
@@ -8638,48 +9094,45 @@ function PricingSettingsPage({
     <section className="list-page pricing-page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">Precios</p>
-          <h2>Factores y precios</h2>
-          <p className="page-lead">
-            Precio = (alto + ancho) × factor. Los tamaños van de pequeño a grande y
-            no pueden solaparse.
-          </p>
+          <p className="eyebrow">{t("pricing.eyebrow")}</p>
+          <h2>{t("pricing.title")}</h2>
+          <p className="page-lead">{t("pricing.leadFactors")}</p>
         </div>
         <div className="form-head-actions">
           <button type="button" className="ghost" onClick={() => setShowExport(true)}>
-            Generar hoja
+            {t("pricing.generateSheet")}
           </button>
           <button disabled={saving || !dirty} onClick={save}>
-            {saved && !dirty ? "Guardado" : "Guardar"}
+            {saved && !dirty ? t("common.saved") : t("common.save")}
           </button>
         </div>
       </div>
 
       <div className="pricing-block">
         <div className="related-head">
-          <h3>Tamaños</h3>
+          <h3>{t("pricing.size.title")}</h3>
           <button type="button" onClick={addType}>
-            + Nuevo tamaño
+            {t("pricing.size.add")}
           </button>
         </div>
         {orderedTypes.length === 0 ? (
           <div className="empty-friendly">
-            <p>Todavía no hay tamaños. Empieza con uno, por ejemplo «Pequeño».</p>
+            <p>{t("pricing.size.emptyFriendly")}</p>
             <button type="button" onClick={addType}>
-              Crear el primero
+              {t("common.createFirst")}
             </button>
           </div>
         ) : (
           <div className="pricing-line-list">
             <div className="pricing-line-head">
-              <span>Nombre</span>
-              <span>Rango (alto + ancho)</span>
-              <span>Factor</span>
+              <span>{t("pricing.size.col.name")}</span>
+              <span>{t("pricing.size.col.rangeSum")}</span>
+              <span>{t("pricing.size.col.factor")}</span>
               <span />
             </div>
             {orderedTypes.map((type) => {
               const factor = currentFactorForType(type);
-              const name = type.label?.trim() || "Sin nombre";
+              const name = type.label?.trim() || t("common.noName");
               const range = `${type.fromSum || 0} → ${
                 type.toSum ? `${type.toSum} cm` : "∞"
               }`;
@@ -8707,24 +9160,76 @@ function PricingSettingsPage({
 
       <div className="pricing-block">
         <div className="related-head">
-          <h3>Impuestos</h3>
-          <button type="button" className="ghost" onClick={addTaxCountry}>
-            + País
+          <h3>{t("pricing.fixed.title")}</h3>
+          <button type="button" className="ghost" onClick={() => setAddingFixed(true)}>
+            {t("pricing.fixed.add")}
           </button>
         </div>
-        {taxCountriesList.length === 0 ? (
+        <p className="muted small-note">{t("pricing.fixed.lead")}</p>
+        {fixedTypePrices.length === 0 ? (
           <div className="empty-friendly">
-            <p>Aún no hay países. Añade uno para poner su IVA.</p>
-            <button type="button" onClick={addTaxCountry}>
-              Añadir el primero
+            <p>{t("pricing.fixed.empty")}</p>
+            <button type="button" onClick={() => setAddingFixed(true)}>
+              {t("common.addFirst")}
             </button>
           </div>
         ) : (
           <div className="pricing-line-list">
             <div className="pricing-line-head">
-              <span>País</span>
-              <span>Periodos</span>
-              <span>Ahora</span>
+              <span>{t("artwork.field.type")}</span>
+              <span>{t("pricing.fixed.col.periods")}</span>
+              <span>{t("pricing.fixed.col.now")}</span>
+              <span />
+            </div>
+            {fixedTypePrices.map((row) => {
+              const now = currentFixedPrice(row);
+              const periods = row.prices.filter((p) => p.price > 0).length;
+              return (
+                <button
+                  type="button"
+                  className="pricing-line-row"
+                  key={row.typeValue}
+                  onClick={() => setEditingFixed(row)}
+                >
+                  <strong>
+                    {lookupLabel(lang, "artworkType", row.typeValue, row.typeValue)}
+                  </strong>
+                  <span>
+                    {t("pricing.fixed.periodsCount", { count: periods })}
+                  </span>
+                  <span className="pricing-line-value">
+                    {now != null ? formatMoney(now) : "—"}
+                  </span>
+                  <span className="pricing-line-chevron" aria-hidden>
+                    ›
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="pricing-block">
+        <div className="related-head">
+          <h3>{t("pricing.tax.title")}</h3>
+          <button type="button" className="ghost" onClick={addTaxCountry}>
+            {t("pricing.tax.addCountry")}
+          </button>
+        </div>
+        {taxCountriesList.length === 0 ? (
+          <div className="empty-friendly">
+            <p>{t("pricing.tax.emptyFriendly")}</p>
+            <button type="button" onClick={addTaxCountry}>
+              {t("common.addFirst")}
+            </button>
+          </div>
+        ) : (
+          <div className="pricing-line-list">
+            <div className="pricing-line-head">
+              <span>{t("exhibition.field.country")}</span>
+              <span>{t("pricing.tax.col.periods")}</span>
+              <span>{t("pricing.tax.col.now")}</span>
               <span />
             </div>
             {taxCountriesList.map(({ country, rates }) => {
@@ -8739,7 +9244,9 @@ function PricingSettingsPage({
                 >
                   <strong>{country}</strong>
                   <span>
-                    {changes === 1 ? "1 porcentaje" : `${changes} periodos`}
+                    {changes === 1
+                      ? t("pricing.tax.onePercent")
+                      : t("pricing.tax.periodCount", { count: changes })}
                   </span>
                   <span className="pricing-line-value">
                     {current != null ? `${current} %` : "—"}
@@ -8752,10 +9259,7 @@ function PricingSettingsPage({
             })}
           </div>
         )}
-        <p className="muted small-note">
-          Entra en un país para ver o cambiar el impuesto. Si el IVA sube o baja,
-          añade un periodo con la fecha del cambio — no hace falta otro país.
-        </p>
+        <p className="muted small-note">{t("pricing.tax.note")}</p>
       </div>
 
       {editing && (
@@ -8805,6 +9309,60 @@ function PricingSettingsPage({
         />
       )}
 
+      {editingFixed && (
+        <FixedTypePriceEditModal
+          entry={editingFixed}
+          onClose={() => setEditingFixed(null)}
+          onDelete={() => {
+            setFixedTypePrices((list) =>
+              list.filter((item) => item.typeValue !== editingFixed.typeValue)
+            );
+            setSaved(false);
+            setEditingFixed(null);
+          }}
+          onSave={(next) => {
+            setFixedTypePrices((list) => {
+              const exists = list.some((item) => item.typeValue === next.typeValue);
+              return exists
+                ? list.map((item) =>
+                    item.typeValue === next.typeValue ? next : item
+                  )
+                : [...list, next];
+            });
+            setSaved(false);
+            setEditingFixed(null);
+          }}
+        />
+      )}
+
+      {addingFixed && (
+        <FixedTypePriceAddModal
+          inventory={inventory}
+          existing={fixedTypePrices.map((p) => p.typeValue)}
+          onClose={() => setAddingFixed(false)}
+          onPick={(typeValue) => {
+            const today = (() => {
+              const now = new Date();
+              const d = String(now.getDate()).padStart(2, "0");
+              const m = String(now.getMonth() + 1).padStart(2, "0");
+              return `${d}-${m}-${now.getFullYear()}`;
+            })();
+            const starter: FixedTypePrice = {
+              typeValue,
+              prices: [
+                {
+                  id: `fp-${Date.now()}`,
+                  from: today,
+                  price: typeValue === "ipad_drawing" ? 250 : 0
+                }
+              ]
+            };
+            setAddingFixed(false);
+            setEditingFixed(starter);
+          }}
+        />
+      )}
+
       {showExport && (
         <PricingExportModal
           inventory={inventory}
@@ -8819,19 +9377,316 @@ function PricingSettingsPage({
   );
 }
 
+function FixedTypePriceAddModal({
+  inventory,
+  existing,
+  onClose,
+  onPick
+}: {
+  inventory: InventoryData;
+  existing: string[];
+  onClose: () => void;
+  onPick: (typeValue: string) => void;
+}) {
+  const { lang, t } = useLanguage();
+  const taken = new Set(existing);
+  const options = translatedLookupOptions(inventory, "artworkType", lang).filter(
+    (option) => !taken.has(option.value)
+  );
+  const [picked, setPicked] = useState(options[0]?.value ?? "");
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{t("pricing.fixed.addTitle")}</h3>
+          <button type="button" className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          <p className="muted small-note">{t("pricing.fixed.addHint")}</p>
+          {options.length === 0 ? (
+            <p className="muted">{t("pricing.fixed.noneLeft")}</p>
+          ) : (
+            <label className="field">
+              {t("artwork.field.type")}
+              <select
+                value={picked}
+                onChange={(event) => setPicked(event.target.value)}
+              >
+                {options.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            disabled={!picked || options.length === 0}
+            onClick={() => onPick(picked)}
+          >
+            {t("common.add")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FixedTypePriceEditModal({
+  entry,
+  onSave,
+  onDelete,
+  onClose
+}: {
+  entry: FixedTypePrice;
+  onSave: (next: FixedTypePrice) => void;
+  onDelete?: () => void;
+  onClose: () => void;
+}) {
+  const { lang, t } = useLanguage();
+  const [draft, setDraft] = useState<FixedTypePrice>(() => ({
+    typeValue: entry.typeValue,
+    prices:
+      entry.prices.length > 0
+        ? entry.prices.map((p) => ({ ...p }))
+        : [{ id: `fp-${Date.now()}`, from: "", price: 0 }]
+  }));
+  const [adding, setAdding] = useState(false);
+  const [newPrice, setNewPrice] = useState("");
+  const [newFrom, setNewFrom] = useState("");
+  const [error, setError] = useState("");
+
+  const label = lookupLabel(lang, "artworkType", draft.typeValue, draft.typeValue);
+  const sorted = [...draft.prices].sort(
+    (a, b) => periodMs(a.from) - periodMs(b.from)
+  );
+  const latestId = sorted.length > 0 ? sorted[sorted.length - 1].id : null;
+
+  function updatePeriod(id: string, patch: Partial<FixedPricePeriod>) {
+    setDraft((current) => ({
+      ...current,
+      prices: current.prices.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    }));
+  }
+
+  function removePeriod(id: string) {
+    setDraft((current) => ({
+      ...current,
+      prices: current.prices.filter((p) => p.id !== id)
+    }));
+  }
+
+  function addChange() {
+    const price =
+      Number(newPrice.replace(/[^0-9.,]/g, "").replace(",", ".")) || 0;
+    if (!newFrom.trim()) {
+      setError(t("pricing.fixed.error.needDate"));
+      return;
+    }
+    if (price <= 0) {
+      setError(t("pricing.fixed.error.needPrice"));
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      prices: [
+        ...current.prices,
+        {
+          id: `fp-${Date.now()}-${current.prices.length}`,
+          from: newFrom,
+          price
+        }
+      ]
+    }));
+    setNewPrice("");
+    setNewFrom("");
+    setAdding(false);
+    setError("");
+  }
+
+  function save() {
+    if (draft.prices.length === 0) {
+      setError(t("pricing.fixed.error.needRow"));
+      return;
+    }
+    for (const period of draft.prices) {
+      if (!(period.price > 0)) {
+        setError(t("pricing.fixed.error.pricePositive"));
+        return;
+      }
+    }
+    onSave({
+      typeValue: draft.typeValue,
+      prices: draft.prices.map((p) => ({
+        ...p,
+        price: Number(p.price) || 0,
+        from: String(p.from ?? "").trim()
+      }))
+    });
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal modal-wide cuentas-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h3>{t("pricing.fixed.editTitle", { name: label })}</h3>
+          <button type="button" className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          <p className="muted small-note">{t("pricing.fixed.editHint")}</p>
+          <div className="factor-card-list">
+            {sorted.map((period) => {
+              const isLatest = period.id === latestId;
+              return (
+                <div
+                  className={`factor-card${isLatest ? " is-latest" : ""}`}
+                  key={period.id}
+                >
+                  <div className="factor-card-main">
+                    {isLatest && (
+                      <span className="factor-card-badge">
+                        {t("pricing.tax.usedNow")}
+                      </span>
+                    )}
+                    <label>
+                      {t("pricing.period.fromDate")}
+                      <DateField
+                        value={period.from ?? ""}
+                        onChange={(value) =>
+                          updatePeriod(period.id, { from: value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t("pricing.fixed.col.price")}
+                      <input
+                        inputMode="decimal"
+                        value={period.price ? String(period.price) : ""}
+                        onChange={(event) =>
+                          updatePeriod(period.id, {
+                            price:
+                              Number(
+                                event.target.value
+                                  .replace(/[^0-9.,]/g, "")
+                                  .replace(",", ".")
+                              ) || 0
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                  {draft.prices.length > 1 && (
+                    <button
+                      type="button"
+                      className="link-button remove-link"
+                      onClick={() => removePeriod(period.id)}
+                    >
+                      {t("common.remove")}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {adding ? (
+            <div className="factor-card is-new">
+              <div className="factor-card-main">
+                <label>
+                  {t("pricing.period.fromDate")}
+                  <DateField value={newFrom} onChange={setNewFrom} />
+                </label>
+                <label>
+                  {t("pricing.fixed.col.price")}
+                  <input
+                    inputMode="decimal"
+                    value={newPrice}
+                    placeholder="250"
+                    onChange={(event) =>
+                      setNewPrice(
+                        event.target.value.replace(/[^0-9.,]/g, "")
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <div className="form-actions">
+                <button type="button" onClick={addChange}>
+                  {t("common.add")}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setAdding(false);
+                    setError("");
+                  }}
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setAdding(true);
+                setError("");
+              }}
+            >
+              {t("pricing.fixed.addPeriod")}
+            </button>
+          )}
+
+          {error && <div className="error-banner">{error}</div>}
+        </div>
+        <div className="modal-actions">
+          {onDelete && (
+            <button type="button" className="ghost danger" onClick={onDelete}>
+              {t("pricing.fixed.removeTechnique")}
+            </button>
+          )}
+          <button type="button" className="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </button>
+          <button type="button" onClick={save}>
+            {t("common.save")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function requireApi<K extends keyof typeof window.inventoryApi>(
-  name: K
+  name: K,
+  t?: Translate
 ): (typeof window.inventoryApi)[K] {
   const fn = window.inventoryApi?.[name];
   if (typeof fn !== "function") {
     throw new Error(
-      "La app necesita reiniciarse para usar esta función. Cierra la ventana y vuelve a abrir «npm run dev»."
+      t ? t("app.restart.api") : translate("es", "app.restart.api")
     );
   }
   return fn;
 }
 
-async function copyTextToClipboard(text: string): Promise<void> {
+async function copyTextToClipboard(text: string, t?: Translate): Promise<void> {
   const api = window.inventoryApi?.writeClipboardText;
   if (typeof api === "function") {
     await api(text);
@@ -8850,7 +9705,10 @@ async function copyTextToClipboard(text: string): Promise<void> {
   area.select();
   const ok = document.execCommand("copy");
   document.body.removeChild(area);
-  if (!ok) throw new Error("No se pudo copiar al portapapeles.");
+  if (!ok)
+    throw new Error(
+      t ? t("common.error.clipboard") : translate("es", "common.error.clipboard")
+    );
 }
 
 /** Accent- and case-insensitive haystack for the example searches. */
@@ -8892,14 +9750,17 @@ function seriesTextKey(seriesId: string, textId: string): string {
   return `${seriesId}::${textId}`;
 }
 
-function expenseCategoryLabel(category: ExpenseCategory): string {
+function expenseCategoryLabel(
+  category: ExpenseCategory,
+  t: Translate
+): string {
   switch (category) {
     case "material":
-      return "Materiales";
+      return t("financials.expense.type.materials");
     case "exhibition":
-      return "Exposición";
+      return t("financials.expense.type.exhibition");
     default:
-      return "Varios";
+      return t("financials.expense.type.other");
   }
 }
 
@@ -8918,6 +9779,7 @@ function ExpenseModal({
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [form, setForm] = useState<ExpenseInput>(() =>
     expense
       ? {
@@ -8970,17 +9832,17 @@ function ExpenseModal({
 
   async function save() {
     if (!form.amount.trim()) {
-      onError("Escribe cuánto se gastó (el importe).");
+      onError(t("financials.expense.error.needAmount"));
       return;
     }
     setSaving(true);
     try {
-      const data = await requireApi("saveExpense")(form);
+      const data = await requireApi("saveExpense", t)(form);
       setInventory(data);
-      onToast("Gasto guardado.");
+      onToast(t("financials.toast.expenseSaved"));
       onClose();
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+      onError(error instanceof Error ? error.message : t("common.error.save"));
     } finally {
       setSaving(false);
     }
@@ -8991,29 +9853,33 @@ function ExpenseModal({
       let expenseId = form.id;
       if (!expenseId) {
         if (!form.amount.trim()) {
-          onError("Antes de adjuntar el ticket, escribe el importe.");
+          onError(t("financials.expense.error.amountBeforeReceipt"));
           return;
         }
-        const data = await requireApi("saveExpense")(form);
+        const data = await requireApi("saveExpense", t)(form);
         setInventory(data);
         const created = [...data.expenses].sort((a, b) =>
           b.updatedAt.localeCompare(a.updatedAt)
         )[0];
         expenseId = created?.id;
         if (!expenseId) {
-          onError("No se pudo crear el gasto.");
+          onError(t("financials.expense.error.create"));
           return;
         }
         setForm((current) => ({ ...current, id: expenseId }));
       }
-      const result = await requireApi("importImage")("expense", expenseId, "receipt");
+      const result = await requireApi("importImage", t)("expense", expenseId, "receipt");
       if (!result) return;
       setInventory(result.inventory);
       const image = result.image as { id?: string };
       if (image?.id) set("receiptImageId", image.id);
-      onToast("Ticket guardado.");
+      onToast(t("financials.toast.ticketSaved"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo adjuntar.");
+      onError(
+        error instanceof Error
+          ? error.message
+          : t("financials.expense.error.attach")
+      );
     }
   }
 
@@ -9024,20 +9890,36 @@ function ExpenseModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-head">
-          <h3>{expense ? "Editar gasto" : "Añadir un gasto"}</h3>
+          <h3>
+            {expense
+              ? t("financials.expense.modalEdit")
+              : t("financials.expense.modalNew")}
+          </h3>
           <button type="button" className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
         </div>
         <div className="modal-body">
           <div className="cuentas-step">
-            <p className="cuentas-q">¿De qué tipo es?</p>
+            <p className="cuentas-q">{t("financials.expense.qType")}</p>
             <div className="cuentas-type-grid">
               {(
                 [
-                  ["material", "Materiales", "Lienzos, pintura, marcos…"],
-                  ["exhibition", "Exposición", "Transporte, montaje, catálogo…"],
-                  ["misc", "Otros", "Cualquier otro gasto"]
+                  [
+                    "material",
+                    t("financials.expense.type.materials"),
+                    t("financials.expense.hint.materials")
+                  ],
+                  [
+                    "exhibition",
+                    t("financials.expense.type.exhibition"),
+                    t("financials.expense.hint.exhibition")
+                  ],
+                  [
+                    "misc",
+                    t("financials.expense.type.other"),
+                    t("financials.expense.hint.other")
+                  ]
                 ] as Array<[ExpenseCategory, string, string]>
               ).map(([value, label, hint]) => (
                 <button
@@ -9054,10 +9936,10 @@ function ExpenseModal({
           </div>
 
           <div className="cuentas-step">
-            <p className="cuentas-q">¿Cuánto y cuándo?</p>
+            <p className="cuentas-q">{t("financials.expense.qWhen")}</p>
             <div className="form-grid two">
               <label>
-                Importe en euros
+                {t("financials.expense.amountEuros")}
                 <div className="money-input">
                   <input
                     autoFocus={!expense}
@@ -9070,7 +9952,7 @@ function ExpenseModal({
                 </div>
               </label>
               <label>
-                Fecha
+                {t("financials.expense.date")}
                 <DateField
                   value={form.date ?? ""}
                   onChange={(value) => set("date", value)}
@@ -9080,12 +9962,12 @@ function ExpenseModal({
           </div>
 
           <div className="cuentas-step">
-            <p className="cuentas-q">¿En qué se gastó?</p>
+            <p className="cuentas-q">{t("financials.expense.qWhat")}</p>
             <label>
-              Nota breve
+              {t("financials.expense.shortNote")}
               <input
                 value={form.note}
-                placeholder="Ej. tubos de óleo, transporte a Madrid…"
+                placeholder={t("financials.expense.notePlaceholder")}
                 onChange={(event) => set("note", event.target.value)}
               />
             </label>
@@ -9093,15 +9975,15 @@ function ExpenseModal({
 
           {form.category === "exhibition" && (
             <div className="cuentas-step">
-              <p className="cuentas-q">¿Con qué exposición? (opcional)</p>
+              <p className="cuentas-q">{t("financials.expense.qExhibition")}</p>
               <div className="form-grid two">
                 <label>
-                  Exposición
+                  {t("movement.detail.exhibition")}
                   <select
                     value={form.exhibitionId ?? ""}
                     onChange={(event) => set("exhibitionId", event.target.value)}
                   >
-                    <option value="">Ninguna</option>
+                    <option value="">{t("common.none")}</option>
                     {inventory.exhibitions.map((exhibition) => (
                       <option key={exhibition.id} value={exhibition.id}>
                         {exhibition.title}
@@ -9110,12 +9992,12 @@ function ExpenseModal({
                   </select>
                 </label>
                 <label>
-                  Galería o persona
+                  {t("financials.expense.galleryOrPerson")}
                   <select
                     value={form.contactId ?? ""}
                     onChange={(event) => set("contactId", event.target.value)}
                   >
-                    <option value="">Ninguna</option>
+                    <option value="">{t("common.none")}</option>
                     {inventory.contacts.map((contact) => (
                       <option key={contact.id} value={contact.id}>
                         {contact.name}
@@ -9128,25 +10010,31 @@ function ExpenseModal({
           )}
 
           <div className="cuentas-step">
-            <p className="cuentas-q">Ticket o factura (opcional)</p>
+            <p className="cuentas-q">{t("financials.expense.qReceipt")}</p>
             <div className="receipt-box">
               {receiptUrl ? (
-                <img className="receipt-thumb" src={receiptUrl} alt="Ticket" />
+                <img
+                  className="receipt-thumb"
+                  src={receiptUrl}
+                  alt={t("financials.expense.ticket")}
+                />
               ) : (
-                <p className="muted">Todavía no hay foto del ticket.</p>
+                <p className="muted">{t("financials.expense.noReceipt")}</p>
               )}
               <button type="button" className="ghost" onClick={attachReceipt}>
-                {receiptUrl ? "Cambiar foto" : "Hacer foto / elegir imagen"}
+                {receiptUrl
+                  ? t("artwork.photo.change")
+                  : t("financials.expense.pickReceipt")}
               </button>
             </div>
           </div>
         </div>
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
           <button type="button" disabled={saving} onClick={save}>
-            {saving ? "Guardando…" : "Guardar gasto"}
+            {saving ? t("common.saving") : t("financials.expense.save")}
           </button>
         </div>
       </div>
@@ -9165,6 +10053,7 @@ function FinancialExportModal({
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [exhibitionId, setExhibitionId] = useState("");
@@ -9211,7 +10100,7 @@ function FinancialExportModal({
 
       const expenseRows = [
         ...expenses.map((expense) => ({
-          category: expenseCategoryLabel(expense.category),
+          category: expenseCategoryLabel(expense.category, t),
           date: expense.date || "",
           amount: parseMoney(expense.amount) ?? 0,
           note: expense.note,
@@ -9227,10 +10116,12 @@ function FinancialExportModal({
             taxRates: inventory.settings.taxRates ?? []
           };
           return {
-            category: "Pago a galerista",
+            category: t("financials.export.row.galleryPayment"),
             date: payment.date || "",
             amount: galleryPaymentCost(payment, art, settings),
-            note: art?.title ? `Obra: ${art.title}` : "Obra entregada como pago",
+            note: art?.title
+              ? t("financials.export.row.artwork", { title: art.title })
+              : t("financials.export.row.artworkAsPayment"),
             where: contactName(payment.contactId) || payment.contactName || ""
           };
         })
@@ -9239,10 +10130,10 @@ function FinancialExportModal({
         const art = inventory.artworks.find((a) => a.id === sale.artworkId);
         const contextLabel =
           sale.context === "gallery"
-            ? "Venta en galería"
+            ? t("financials.export.row.saleGallery")
             : sale.context === "exhibition"
-              ? "Venta en exposición"
-              : "Venta directa";
+              ? t("financials.export.row.saleExhibition")
+              : t("financials.export.row.saleDirect");
         return {
           date: sale.date || "",
           amount: saleIncomeAmount(sale),
@@ -9261,7 +10152,7 @@ function FinancialExportModal({
       const spent = expenseRows.reduce((sum, row) => sum + row.amount, 0);
       const earned = incomeRows.reduce((sum, row) => sum + row.amount, 0);
 
-      const path = await requireApi("exportFinancialsSheet")({
+      const path = await requireApi("exportFinancialsSheet", t)({
         filename: "cuentas.xlsx",
         fromDate: fromDate || undefined,
         toDate: toDate || undefined,
@@ -9271,11 +10162,11 @@ function FinancialExportModal({
         totals: { spent, earned, net: earned - spent }
       });
       if (path) {
-        onToast("Resumen guardado.");
+        onToast(t("financials.toast.summarySaved"));
         onClose();
       }
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo exportar.");
+      onError(error instanceof Error ? error.message : t("common.error.export"));
     } finally {
       setBusy(false);
     }
@@ -9285,25 +10176,22 @@ function FinancialExportModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h3>Hacer un resumen en Excel</h3>
+          <h3>{t("financials.export.title")}</h3>
           <button type="button" className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
         </div>
         <div className="modal-body export-wizard">
-          <p className="muted small-note">
-            Elige qué incluir. Si no tocas nada, se incluyen todos los gastos y las
-            ventas con impuesto.
-          </p>
+          <p className="muted small-note">{t("financials.export.lead")}</p>
           <div className="export-step">
-            <h4>1. ¿Qué periodo?</h4>
+            <h4>{t("financials.export.step1")}</h4>
             <div className="form-grid two">
               <label>
-                Desde
+                {t("exhibition.field.from")}
                 <DateField value={fromDate} onChange={setFromDate} />
               </label>
               <label>
-                Hasta
+                {t("exhibition.field.until")}
                 <DateField value={toDate} onChange={setToDate} />
               </label>
             </div>
@@ -9315,16 +10203,16 @@ function FinancialExportModal({
                 setToDate("");
               }}
             >
-              Todo el tiempo
+              {t("financials.filter.allTime")}
             </button>
           </div>
           <div className="export-step">
-            <h4>2. ¿Solo una exposición?</h4>
+            <h4>{t("financials.export.step2")}</h4>
             <select
               value={exhibitionId}
               onChange={(event) => setExhibitionId(event.target.value)}
             >
-              <option value="">No, todas</option>
+              <option value="">{t("financials.export.allExhibitions")}</option>
               {inventory.exhibitions.map((exhibition) => (
                 <option key={exhibition.id} value={exhibition.id}>
                   {exhibition.title}
@@ -9333,7 +10221,7 @@ function FinancialExportModal({
             </select>
           </div>
           <div className="export-step">
-            <h4>3. Incluir también</h4>
+            <h4>{t("financials.export.step3")}</h4>
             <label className="checkline">
               <input
                 type="checkbox"
@@ -9342,7 +10230,7 @@ function FinancialExportModal({
                   setIncludeGalleryPayments(event.target.checked)
                 }
               />
-              Incluir obras «pago a galerista» como gasto
+              {t("financials.export.includePayments")}
             </label>
             <label className="checkline">
               <input
@@ -9352,16 +10240,16 @@ function FinancialExportModal({
                   setIncludeSalesWithoutTax(event.target.checked)
                 }
               />
-              Incluir ventas sin impuesto
+              {t("financials.export.includeNoTax")}
             </label>
           </div>
         </div>
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
           <button type="button" disabled={busy} onClick={generate}>
-            {busy ? "Creando…" : "Crear Excel"}
+            {busy ? t("setup.working") : t("financials.export.create")}
           </button>
         </div>
       </div>
@@ -9388,6 +10276,7 @@ function FinancialsPage({
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }) {
+  const { lang, t } = useLanguage();
   const thisYear = new Date().getFullYear();
   const [editing, setEditing] = useState<Expense | null | "new">(null);
   const [showExport, setShowExport] = useState(false);
@@ -9498,12 +10387,12 @@ function FinancialsPage({
 
   async function remove(id: string) {
     try {
-      const data = await requireApi("deleteExpense")(id);
+      const data = await requireApi("deleteExpense", t)(id);
       setInventory(data);
       setConfirmId(null);
-      onToast("Gasto eliminado.");
+      onToast(t("financials.toast.expenseDeleted"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo eliminar.");
+      onError(error instanceof Error ? error.message : t("common.error.delete"));
     }
   }
 
@@ -9517,22 +10406,19 @@ function FinancialsPage({
     <section className="list-page financials-page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">Dinero</p>
-          <h2>Cuentas</h2>
-          <p className="page-lead">
-            Anota gastos aquí. Las ventas cuentan lo que tú recibes (después de
-            comisión de galería, si la hay). «Pago a galerista» cuenta como coste.
-          </p>
+          <p className="eyebrow">{t("financials.eyebrow")}</p>
+          <h2>{t("financials.title")}</h2>
+          <p className="page-lead">{t("financials.leadLong")}</p>
         </div>
         <label className="checkline hide-money-toggle">
           <input type="checkbox" checked={hideMoney} onChange={toggleHideMoney} />
-          Ocultar importes
+          {t("financials.hideAmounts")}
         </label>
       </div>
 
       <div className="cuentas-toolbar">
         <label className="cuentas-select">
-          Año
+          {t("financials.filter.year")}
           <select
             value={periodMode === "range" ? "range" : year === "all" ? "all" : String(year)}
             onChange={(event) => {
@@ -9545,7 +10431,9 @@ function FinancialsPage({
               setYear(value === "all" ? "all" : Number(value));
             }}
           >
-            <option value={String(thisYear)}>Este año ({thisYear})</option>
+            <option value={String(thisYear)}>
+              {t("common.thisYearWith", { year: thisYear })}
+            </option>
             {yearOptions
               .filter((y) => y !== thisYear)
               .map((y) => (
@@ -9553,23 +10441,25 @@ function FinancialsPage({
                   {y}
                 </option>
               ))}
-            <option value="all">Todo el tiempo</option>
-            <option value="range">Elegir fechas…</option>
+            <option value="all">{t("financials.filter.allTime")}</option>
+            <option value="range">{t("financials.filter.pickDates")}</option>
           </select>
         </label>
 
         <label className="cuentas-select">
-          Tipo de gasto
+          {t("financials.filter.expenseType")}
           <select
             value={category}
             onChange={(event) =>
               setCategory(event.target.value as "all" | ExpenseCategory)
             }
           >
-            <option value="all">Todos</option>
-            <option value="material">Materiales</option>
-            <option value="exhibition">Exposición</option>
-            <option value="misc">Otros</option>
+            <option value="all">{t("common.all")}</option>
+            <option value="material">{t("financials.expense.type.materials")}</option>
+            <option value="exhibition">
+              {t("financials.expense.type.exhibition")}
+            </option>
+            <option value="misc">{t("financials.expense.type.other")}</option>
           </select>
         </label>
 
@@ -9578,18 +10468,18 @@ function FinancialsPage({
           className={`ghost${showMore ? " is-on" : ""}`}
           onClick={() => setShowMore((v) => !v)}
         >
-          {showMore ? "Menos filtros" : "Más filtros"}
+          {showMore ? t("common.fewerFilters") : t("common.moreFilters")}
         </button>
       </div>
 
       {periodMode === "range" && (
         <div className="cuentas-range-row">
           <label>
-            Desde
+            {t("exhibition.field.from")}
             <DateField value={fromDate} onChange={setFromDate} />
           </label>
           <label>
-            Hasta
+            {t("exhibition.field.until")}
             <DateField value={toDate} onChange={setToDate} />
           </label>
         </div>
@@ -9598,12 +10488,12 @@ function FinancialsPage({
       {showMore && (
         <div className="cuentas-more-filters">
           <label>
-            Exposición
+            {t("movement.detail.exhibition")}
             <select
               value={exhibitionId}
               onChange={(event) => setExhibitionId(event.target.value)}
             >
-              <option value="">Todas</option>
+              <option value="">{t("common.allFeminine")}</option>
               {inventory.exhibitions.map((exhibition) => (
                 <option key={exhibition.id} value={exhibition.id}>
                   {exhibition.title}
@@ -9612,12 +10502,12 @@ function FinancialsPage({
             </select>
           </label>
           <label>
-            Persona / galería
+            {t("financials.filter.personGallery")}
             <select
               value={contactId}
               onChange={(event) => setContactId(event.target.value)}
             >
-              <option value="">Todas</option>
+              <option value="">{t("common.allFeminine")}</option>
               {inventory.contacts.map((contact) => (
                 <option key={contact.id} value={contact.id}>
                   {contact.name}
@@ -9627,7 +10517,7 @@ function FinancialsPage({
           </label>
           {(category !== "all" || exhibitionId || contactId) && (
             <button type="button" className="ghost small" onClick={clearExtra}>
-              Limpiar
+              {t("common.clear")}
             </button>
           )}
         </div>
@@ -9635,21 +10525,21 @@ function FinancialsPage({
 
       <div className="money-totals money-totals-stack">
         <div className="money-card spent">
-          <span>Gastado</span>
+          <span>{t("financials.totals.spent")}</span>
           <strong>{moneyLabel(spent)}</strong>
         </div>
         <div className="money-card earned">
-          <span>Recibido</span>
+          <span>{t("financials.totals.received")}</span>
           <strong>{moneyLabel(earned)}</strong>
         </div>
       </div>
 
       <div className="cuentas-actions">
         <button type="button" className="cuentas-primary" onClick={() => setEditing("new")}>
-          + Añadir un gasto
+          {t("financials.actions.addExpense")}
         </button>
         <button type="button" className="ghost" onClick={() => setShowExport(true)}>
-          Hacer resumen en Excel
+          {t("financials.actions.excelSummary")}
         </button>
       </div>
 
@@ -9659,14 +10549,14 @@ function FinancialsPage({
           className="cuentas-link-card"
           onClick={() => setShowExpenses(true)}
         >
-          <span className="cuentas-link-label">Gastos del periodo</span>
+          <span className="cuentas-link-label">{t("financials.expenses.title")}</span>
           <strong>{expenses.length}</strong>
           <span className="muted">
             {expenses.length === 0
               ? allExpenses.length === 0
-                ? "Todavía no hay gastos"
-                : "Ninguno en este filtro"
-              : "Ver detalle"}
+                ? t("financials.expenses.none")
+                : t("financials.expenses.noneInFilter")
+              : t("common.viewDetail")}
           </span>
         </button>
         {galleryPayments.length > 0 && (
@@ -9675,9 +10565,11 @@ function FinancialsPage({
             className="cuentas-link-card"
             onClick={() => setShowPayments(true)}
           >
-            <span className="cuentas-link-label">Pago a galerista</span>
+            <span className="cuentas-link-label">
+              {t("financials.expense.galleryPayment")}
+            </span>
             <strong>{galleryPayments.length}</strong>
-            <span className="muted">Ver detalle</span>
+            <span className="muted">{t("common.viewDetail")}</span>
           </button>
         )}
       </div>
@@ -9689,7 +10581,7 @@ function FinancialsPage({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="modal-head">
-              <h3>Gastos ({expenses.length})</h3>
+              <h3>{t("financials.expenses.countTitle", { count: expenses.length })}</h3>
               <button
                 type="button"
                 className="icon-button ghost"
@@ -9703,8 +10595,8 @@ function FinancialsPage({
                 <div className="empty-friendly">
                   <p>
                     {allExpenses.length === 0
-                      ? "Todavía no hay gastos. Empieza con «Añadir un gasto»."
-                      : "No hay gastos en este periodo."}
+                      ? t("financials.expenses.emptyFriendly")
+                      : t("financials.expenses.empty")}
                   </p>
                 </div>
               ) : (
@@ -9723,13 +10615,13 @@ function FinancialsPage({
                           onClick={() => setEditing(expense)}
                         >
                           <span className="expense-cat-pill">
-                            {expenseCategoryLabel(expense.category)}
+                            {expenseCategoryLabel(expense.category, t)}
                           </span>
                           <strong className="expense-note">
-                            {expense.note || "Sin descripción"}
+                            {expense.note || t("financials.expense.noDescription")}
                           </strong>
                           <span className="muted expense-meta">
-                            {expense.date || "Sin fecha"}
+                            {expense.date || t("common.noDate")}
                             {where ? ` · ${where}` : ""}
                           </span>
                           <strong className="expense-amount">
@@ -9741,7 +10633,7 @@ function FinancialsPage({
                           className="ghost danger small"
                           onClick={() => setConfirmId(expense.id)}
                         >
-                          Borrar
+                          {t("common.erase")}
                         </button>
                       </div>
                     );
@@ -9754,14 +10646,14 @@ function FinancialsPage({
                 type="button"
                 onClick={() => setEditing("new")}
               >
-                + Añadir un gasto
+                {t("financials.actions.addExpense")}
               </button>
               <button
                 type="button"
                 className="ghost"
                 onClick={() => setShowExpenses(false)}
               >
-                Cerrar
+                {t("common.close")}
               </button>
             </div>
           </div>
@@ -9775,7 +10667,11 @@ function FinancialsPage({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="modal-head">
-              <h3>Pago a galerista ({galleryPayments.length})</h3>
+              <h3>
+                {t("financials.payments.countTitle", {
+                  count: galleryPayments.length
+                })}
+              </h3>
               <button
                 type="button"
                 className="icon-button ghost"
@@ -9796,12 +10692,14 @@ function FinancialsPage({
                   return (
                     <div className="expense-card" key={payment.id}>
                       <div className="expense-card-main" style={{ cursor: "default" }}>
-                        <span className="expense-cat-pill">Pago a galerista</span>
+                        <span className="expense-cat-pill">
+                          {t("financials.expense.galleryPayment")}
+                        </span>
                         <strong className="expense-note">
                           {art?.title || payment.artworkId}
                         </strong>
                         <span className="muted expense-meta">
-                          {payment.date || "Sin fecha"}
+                          {payment.date || t("common.noDate")}
                           {gallery ? ` · ${gallery}` : ""}
                         </span>
                         <strong className="expense-amount">{moneyLabel(amount)}</strong>
@@ -9817,7 +10715,7 @@ function FinancialsPage({
                 className="ghost"
                 onClick={() => setShowPayments(false)}
               >
-                Cerrar
+                {t("common.close")}
               </button>
             </div>
           </div>
@@ -9846,19 +10744,19 @@ function FinancialsPage({
         <div className="modal-backdrop" onClick={() => setConfirmId(null)}>
           <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h3>¿Borrar este gasto?</h3>
+              <h3>{t("confirm.expense.title")}</h3>
             </div>
-            <p className="confirm-message">Se quitará de las cuentas.</p>
+            <p className="confirm-message">{t("confirm.expense.message")}</p>
             <div className="modal-actions">
               <button type="button" className="ghost" onClick={() => setConfirmId(null)}>
-                Cancelar
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
                 className="ghost danger"
                 onClick={() => remove(confirmId)}
               >
-                Sí, borrar
+                {t("confirm.expense.confirm")}
               </button>
             </div>
           </div>
@@ -9892,6 +10790,11 @@ const ART_TYPE_I18N: Record<string, Record<PriceLang, string>> = {
   drawing: { es: "Dibujo", de: "Zeichnung", en: "Drawing" },
   print: { es: "Grabado", de: "Druck", en: "Print" },
   mixed_media: { es: "Técnica mixta", de: "Mischtechnik", en: "Mixed media" },
+  ipad_drawing: {
+    es: "Ipad Drawings",
+    de: "Ipad Drawings",
+    en: "Ipad Drawings"
+  },
   other: { es: "Otro", de: "Sonstiges", en: "Other" }
 };
 
@@ -9903,7 +10806,7 @@ function artTypeLabel(
   if (!value) return "";
   const translated = ART_TYPE_I18N[value]?.[lang];
   if (translated) return translated;
-  return labelFor(inventory, "artworkType", value);
+  return labelFor(inventory, "artworkType", value, lang);
 }
 
 
@@ -9997,13 +10900,14 @@ function OrderButtons({
   total: number;
   onMove: (dir: -1 | 1) => void;
 }) {
+  const t = useT();
   return (
     <span className="order-btns">
       <button
         type="button"
         className="ghost small order-btn"
         disabled={index === 0}
-        title="Subir"
+        title={t("common.moveUp")}
         onClick={() => onMove(-1)}
       >
         ↑
@@ -10012,7 +10916,7 @@ function OrderButtons({
         type="button"
         className="ghost small order-btn"
         disabled={index >= total - 1}
-        title="Bajar"
+        title={t("common.moveDown")}
         onClick={() => onMove(1)}
       >
         ↓
@@ -10111,6 +11015,7 @@ function RichTextField({
   baseBold?: boolean;
   baseItalic?: boolean;
 }) {
+  const t = useT();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -10149,7 +11054,7 @@ function RichTextField({
         pointer-events: none;
       }
     </style></head><body contenteditable="true" data-placeholder="${(
-      placeholder || "Escribe aquí…"
+      placeholder || t("richtext.placeholder")
     ).replace(/"/g, "&quot;")}"></body></html>`);
     doc.close();
 
@@ -10335,11 +11240,15 @@ function RichTextField({
   return (
     <div className="rich-editor">
       <div className="rich-toolbar">
-        <div className="rich-tool-group" role="group" aria-label="Estilo por letra">
+        <div
+          className="rich-tool-group"
+          role="group"
+          aria-label={t("richtext.group.perLetter")}
+        >
           <button
             type="button"
             className="rich-tool"
-            title="Negrita (selección)"
+            title={t("richtext.bold")}
             onMouseDown={(e) => {
               e.preventDefault();
               run("bold");
@@ -10350,7 +11259,7 @@ function RichTextField({
           <button
             type="button"
             className="rich-tool"
-            title="Cursiva (selección)"
+            title={t("richtext.italic")}
             onMouseDown={(e) => {
               e.preventDefault();
               run("italic");
@@ -10361,7 +11270,7 @@ function RichTextField({
           <button
             type="button"
             className="rich-tool"
-            title="Subrayado (selección)"
+            title={t("richtext.underline")}
             onMouseDown={(e) => {
               e.preventDefault();
               run("underline");
@@ -10371,7 +11280,7 @@ function RichTextField({
           </button>
         </div>
         <RichMenuSelect
-          label="Fuente"
+          label={t("richtext.font")}
           value={pickedFont}
           className="rich-font"
           options={PRICELIST_FONTS.map((font) => ({
@@ -10381,7 +11290,7 @@ function RichTextField({
           onPick={(v) => applyFont(v)}
         />
         <RichMenuSelect
-          label="Tamaño"
+          label={t("richtext.size")}
           value={pickedSize}
           className="rich-size"
           options={RICH_TEXT_SIZES.map((pt) => ({
@@ -10390,7 +11299,7 @@ function RichTextField({
           }))}
           onPick={(v) => applySize(v)}
         />
-        <label className="rich-color" title="Color del texto">
+        <label className="rich-color" title={t("richtext.color")}>
           <input
             type="color"
             defaultValue="#2a2620"
@@ -10399,7 +11308,11 @@ function RichTextField({
           />
         </label>
       </div>
-      <iframe className="rich-frame" title="Editor de texto" ref={iframeRef} />
+      <iframe
+        className="rich-frame"
+        title={t("richtext.frameTitle")}
+        ref={iframeRef}
+      />
     </div>
   );
 }
@@ -10441,7 +11354,7 @@ function sectionsFromApplication(
 function applicationKindLabel(kind: ApplicationKind, lang: PriceLang = "es"): string {
   const map: Record<ApplicationKind, Record<PriceLang, string>> = {
     concurso: { es: "Concurso", en: "Competition", de: "Wettbewerb" },
-    beca: { es: "Beca / stipendio", en: "Grant / stipend", de: "Stipendium" },
+    beca: { es: "Beca", en: "Grant / stipend", de: "Stipendium" },
     residencia: { es: "Residencia", en: "Residency", de: "Residenz" },
     otro: { es: "Otro", en: "Other", de: "Sonstiges" }
   };
@@ -10473,6 +11386,7 @@ function SeriesPage({
   onToast: (message: string) => void;
   onOpenArtwork: (artworkId: string) => void;
 }) {
+  const t = useT();
   // Series come from paintings (plus any already saved metadata).
   const names = uniqueValues([
     ...inventory.artworks.map((a) => a.series),
@@ -10492,12 +11406,9 @@ function SeriesPage({
     <section className="list-page series-page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">Colecciones</p>
-          <h2>Series (metadatos)</h2>
-          <p className="page-lead">
-            Las series aparecen solas cuando las usas en una obra. Aquí añades textos y
-            documentos compartidos.
-          </p>
+          <p className="eyebrow">{t("series.page.eyebrow")}</p>
+          <h2>{t("series.page.title")}</h2>
+          <p className="page-lead">{t("series.page.lead")}</p>
         </div>
       </div>
 
@@ -10505,9 +11416,7 @@ function SeriesPage({
         <aside className="series-sidebar">
           <div className="series-name-list">
             {names.length === 0 ? (
-              <p className="muted small-note">
-                Aún no hay series. Pon un nombre de serie al guardar una obra.
-              </p>
+              <p className="muted small-note">{t("series.empty.sidebar")}</p>
             ) : (
               names.map((name) => (
                 <button
@@ -10535,7 +11444,7 @@ function SeriesPage({
         <div className="series-detail">
           {!selectedName ? (
             <div className="empty-friendly">
-              <p>Elige una serie a la izquierda.</p>
+              <p>{t("series.empty.pick")}</p>
             </div>
           ) : (
             <SeriesDetailPanel
@@ -10574,6 +11483,7 @@ function SeriesDetailPanel({
   onToast: (message: string) => void;
   onOpenArtwork: (artworkId: string) => void;
 }) {
+  const t = useT();
   const [texts, setTexts] = useState<SeriesText[]>(info?.texts ?? []);
   const [openId, setOpenId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -10590,16 +11500,16 @@ function SeriesDetailPanel({
   async function save(nextTexts = texts) {
     setSaving(true);
     try {
-      const data = await requireApi("saveSeriesInfo")({
+      const data = await requireApi("saveSeriesInfo", t)({
         id: info?.id,
         name,
         texts: nextTexts,
         notes: info?.notes ?? ""
       });
       setInventory(data);
-      onToast("Serie guardada.");
+      onToast(t("series.toast.saved"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+      onError(error instanceof Error ? error.message : t("common.error.save"));
     } finally {
       setSaving(false);
     }
@@ -10607,7 +11517,7 @@ function SeriesDetailPanel({
 
   function addText() {
     const id = `txt-${Date.now()}`;
-    const next = [...texts, { id, topic: "Nuevo texto", body: "" }];
+    const next = [...texts, { id, topic: t("series.texts.new"), body: "" }];
     setTexts(next);
     setOpenId(id);
   }
@@ -10625,7 +11535,7 @@ function SeriesDetailPanel({
   async function addDocument() {
     let seriesId = info?.id;
     if (!seriesId) {
-      const data = await requireApi("saveSeriesInfo")({
+      const data = await requireApi("saveSeriesInfo", t)({
         name,
         texts,
         notes: info?.notes ?? ""
@@ -10635,14 +11545,14 @@ function SeriesDetailPanel({
         (s) => s.name.toLowerCase() === name.toLowerCase()
       )?.id;
       if (!seriesId) {
-        onError("No se pudo crear la serie.");
+        onError(t("series.error.create"));
         return;
       }
     }
-    const result = await requireApi("importImage")("series", seriesId, "document");
+    const result = await requireApi("importImage", t)("series", seriesId, "document");
     if (!result) return;
     setInventory(result.inventory);
-    onToast("Documento añadido.");
+    onToast(t("series.toast.docAdded"));
   }
 
   return (
@@ -10650,25 +11560,23 @@ function SeriesDetailPanel({
       <div className="related-head">
         <h3>{name}</h3>
         <button type="button" disabled={saving} onClick={() => void save()}>
-          {saving ? "Guardando…" : "Guardar"}
+          {saving ? t("common.saving") : t("common.save")}
         </button>
       </div>
 
       <div className="series-texts-head">
-        <h4>Textos</h4>
+        <h4>{t("series.texts.title")}</h4>
         <button type="button" className="ghost" onClick={addText}>
-          + Añadir texto
+          {t("series.texts.add")}
         </button>
       </div>
-      <p className="muted small-note">
-        Cada texto tiene un tema. Solo ves el tema y el principio; ábrelo para editar.
-      </p>
+      <p className="muted small-note">{t("series.texts.hint")}</p>
 
       {texts.length === 0 ? (
         <div className="empty-friendly">
-          <p>Todavía no hay textos en esta serie.</p>
+          <p>{t("series.texts.empty")}</p>
           <button type="button" onClick={addText}>
-            Añadir el primero
+            {t("common.addFirst")}
           </button>
         </div>
       ) : (
@@ -10685,7 +11593,7 @@ function SeriesDetailPanel({
                   className="series-text-summary"
                   onClick={() => setOpenId(open ? null : text.id)}
                 >
-                  <strong>{text.topic || "Sin tema"}</strong>
+                  <strong>{text.topic || t("common.noTopic")}</strong>
                   {!open && preview && (
                     <span className="muted series-text-preview">{preview}</span>
                   )}
@@ -10694,21 +11602,21 @@ function SeriesDetailPanel({
                 {open && (
                   <div className="series-text-body">
                     <label>
-                      Tema
+                      {t("series.texts.topic")}
                       <input
                         value={text.topic}
-                        placeholder="Ej. Idea principal, contexto histórico…"
+                        placeholder={t("series.texts.topicPlaceholder")}
                         onChange={(event) =>
                           updateText(text.id, { topic: event.target.value })
                         }
                       />
                     </label>
                     <label>
-                      Texto
+                      {t("series.texts.body")}
                       <textarea
                         rows={5}
                         value={text.body}
-                        placeholder="Escribe aquí…"
+                        placeholder={t("series.texts.bodyPlaceholder")}
                         onChange={(event) =>
                           updateText(text.id, { body: event.target.value })
                         }
@@ -10719,7 +11627,7 @@ function SeriesDetailPanel({
                       className="ghost danger small"
                       onClick={() => removeText(text.id)}
                     >
-                      Quitar este texto
+                      {t("series.texts.remove")}
                     </button>
                   </div>
                 )}
@@ -10731,13 +11639,13 @@ function SeriesDetailPanel({
 
       <div className="series-docs">
         <div className="related-head">
-          <h4>Documentos</h4>
+          <h4>{t("series.docs.title")}</h4>
           <button type="button" className="ghost" onClick={addDocument}>
-            + Añadir documento
+            {t("series.docs.add")}
           </button>
         </div>
         {docs.length === 0 ? (
-          <p className="muted small-note">Sin documentos todavía.</p>
+          <p className="muted small-note">{t("series.docs.empty")}</p>
         ) : (
           <ul className="doc-list">
             {docs.map((doc) => (
@@ -10750,7 +11658,7 @@ function SeriesDetailPanel({
                     void window.inventoryApi.openDocument(doc.absolutePath)
                   }
                 >
-                  {doc.originalName || doc.caption || "Documento"}
+                  {doc.originalName || doc.caption || t("common.documentOne")}
                 </button>
               </li>
             ))}
@@ -10759,9 +11667,9 @@ function SeriesDetailPanel({
       </div>
 
       <div className="series-works">
-        <h4>Obras en esta serie ({works.length})</h4>
+        <h4>{t("series.works", { count: works.length })}</h4>
         {works.length === 0 ? (
-          <p className="muted small-note">Ninguna obra usa este nombre todavía.</p>
+          <p className="muted small-note">{t("series.works.empty")}</p>
         ) : (
           <div className="expense-list">
             {works.map((art) => (
@@ -10799,6 +11707,7 @@ function ExampleLibraryPage({
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
   onOpenGenerator: () => void;
 }) {
+  const t = useT();
   const stored = useMemo(
     () => (inventory.textGeneratorExamples ?? []).map(normalizeTextExample),
     [inventory.textGeneratorExamples]
@@ -10830,14 +11739,14 @@ function ExampleLibraryPage({
       const cleaned = examples
         .map(normalizeTextExample)
         .filter((example) => example.topic.trim() || example.body.trim());
-      const data = await requireApi("saveTextGeneratorExamples")(cleaned);
+      const data = await requireApi("saveTextGeneratorExamples", t)(cleaned);
       setInventory(data);
       onDirtyChange?.(false);
-      onToast("Biblioteca guardada.");
+      onToast(t("examples.toast.saved"));
       return true;
     } catch (error) {
       onError(
-        error instanceof Error ? error.message : "No se pudo guardar la biblioteca."
+        error instanceof Error ? error.message : t("examples.error.save")
       );
       return false;
     } finally {
@@ -10881,16 +11790,13 @@ function ExampleLibraryPage({
     <section className="list-page examples-page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">Textos de referencia</p>
-          <h2>Biblioteca de ejemplos</h2>
-          <p className="page-lead">
-            Guarda aquí textos que te gusten (tuyos o de otros). En el Generador
-            de texto podrás elegir cuáles usar como referencia de tono.
-          </p>
+          <p className="eyebrow">{t("examples.eyebrow")}</p>
+          <h2>{t("examples.title")}</h2>
+          <p className="page-lead">{t("examples.leadLong")}</p>
         </div>
         <div className="row-actions">
           <button type="button" className="ghost" onClick={onOpenGenerator}>
-            Ir al generador
+            {t("examples.goGenerator")}
           </button>
           <button
             type="button"
@@ -10898,7 +11804,7 @@ function ExampleLibraryPage({
             disabled={!dirty || saving}
             onClick={() => void persist()}
           >
-            {saving ? "Guardando…" : dirty ? "Guardar cambios" : "Todo guardado"}
+            {saving ? t("common.saving") : dirty ? t("examples.saveChanges") : t("examples.allSaved")}
           </button>
         </div>
       </div>
@@ -10906,26 +11812,27 @@ function ExampleLibraryPage({
       <div className="examples-toolbar">
         <input
           className="search-input grow"
-          placeholder="Buscar por tema o por palabras del texto..."
+          placeholder={t("examples.searchLong")}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
         <span className="count-pill">
-          {search ? `${list.length} de ${examples.length}` : `${examples.length}`}{" "}
-          ejemplo{examples.length === 1 ? "" : "s"}
+          {search
+            ? t("examples.count", {
+                n: list.length,
+                total: examples.length
+              })
+            : t("examples.countTotal", { n: examples.length })}
         </span>
         <button type="button" onClick={addExample}>
-          + Nuevo ejemplo
+          {t("examples.add")}
         </button>
       </div>
 
       {examples.length === 0 ? (
-        <div className="empty-state">
-          Todavía no hay ejemplos. Pulsa «+ Nuevo ejemplo» y pega un texto que
-          te guste.
-        </div>
+        <div className="empty-state">{t("examples.emptyLong")}</div>
       ) : list.length === 0 ? (
-        <p className="muted">Ningún ejemplo coincide con esa búsqueda.</p>
+        <p className="muted">{t("examples.noMatch")}</p>
       ) : (
         <div className="examples-grid">
           {list.map((example) => {
@@ -10942,7 +11849,7 @@ function ExampleLibraryPage({
                     <input
                       className="example-topic-input"
                       value={example.topic}
-                      placeholder="Tema (ej. declaración de artista)"
+                      placeholder={t("examples.topicPlaceholder")}
                       autoFocus
                       onChange={(event) =>
                         update(example.id, { topic: event.target.value })
@@ -10951,7 +11858,7 @@ function ExampleLibraryPage({
                     <textarea
                       rows={12}
                       value={example.body}
-                      placeholder="Pega aquí el texto de ejemplo…"
+                      placeholder={t("examples.bodyPlaceholder")}
                       onChange={(event) =>
                         update(example.id, { body: event.target.value })
                       }
@@ -10962,28 +11869,28 @@ function ExampleLibraryPage({
                         className="ghost danger small"
                         onClick={() => remove(example.id)}
                       >
-                        Borrar
+                        {t("common.erase")}
                       </button>
                       <button
                         type="button"
                         className="small"
                         onClick={() => setEditingId(null)}
                       >
-                        Listo
+                        {t("common.done")}
                       </button>
                     </div>
                   </>
                 ) : (
                   <>
                     <div className="example-card-head">
-                      <strong>{example.topic || "Sin tema"}</strong>
+                      <strong>{example.topic || t("common.noTopic")}</strong>
                       <span className="muted small-note">
-                        {countWords(body)} palabras
+                        {t("examples.words", { n: countWords(body) })}
                       </span>
                     </div>
                     <p className={`example-card-body${open ? " is-open" : ""}`}>
                       {body || (
-                        <span className="muted">Sin texto todavía.</span>
+                        <span className="muted">{t("examples.noTextYet")}</span>
                       )}
                     </p>
                     <div className="example-card-actions">
@@ -10995,7 +11902,7 @@ function ExampleLibraryPage({
                             setExpandedId(open ? null : example.id)
                           }
                         >
-                          {open ? "Ver menos" : "Ver entero"}
+                          {open ? t("examples.showLess") : t("examples.showAll")}
                         </button>
                       )}
                       <button
@@ -11003,7 +11910,7 @@ function ExampleLibraryPage({
                         className="ghost small"
                         onClick={() => setEditingId(example.id)}
                       >
-                        Editar
+                        {t("common.edit")}
                       </button>
                     </div>
                   </>
@@ -11016,7 +11923,7 @@ function ExampleLibraryPage({
 
       {dirty && (
         <p className="muted small-note examples-dirty-note">
-          Tienes cambios sin guardar.
+          {t("examples.dirty")}
         </p>
       )}
     </section>
@@ -11036,6 +11943,7 @@ function TextGeneratorPage({
   onToast: (message: string) => void;
   onOpenExampleLibrary: () => void;
 }) {
+  const { lang, t } = useLanguage();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [systemPromptOpen, setSystemPromptOpen] = useState(false);
@@ -11097,7 +12005,7 @@ function TextGeneratorPage({
     .filter((artwork): artwork is Artwork => Boolean(artwork));
   const selectedSeriesNames = uniqueValues(
     selectedArtworks.map((artwork) => artwork.series)
-  );
+  ).filter((name) => name.trim() && !isNoSeries(name));
   const artworksWithPhoto = selectedArtworks.filter((art) =>
     Boolean(photos[art.id])
   );
@@ -11195,12 +12103,8 @@ function TextGeneratorPage({
           .map((artwork, index) => {
             const lines = [
               `${index + 1}. ${artwork.title}`,
-              `Serie: ${artwork.series || "sin serie"}`,
-              `Técnica / tipo: ${labelFor(
-                inventory,
-                "artworkType",
-                artwork.type
-              )}`,
+              `Serie: ${seriesLabel(artwork.series, t)}`,
+              `Técnica / tipo: ${labelFor(inventory, "artworkType", artwork.type, lang)}`,
               `Tamaño: ${formatSize(artwork) || "sin medidas"}`,
               `Año: ${artwork.yearMade || "sin año"}`
             ];
@@ -11324,7 +12228,7 @@ function TextGeneratorPage({
     try {
       const next =
         systemPrompt.trim() || DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT;
-      const data = await requireApi("saveSettings")({
+      const data = await requireApi("saveSettings", t)({
         ...inventory.settings,
         textGeneratorSystemPrompt: next
       });
@@ -11333,12 +12237,12 @@ function TextGeneratorPage({
         data.settings.textGeneratorSystemPrompt?.trim() ||
           DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
       );
-      onToast("Instrucciones fijas guardadas.");
+      onToast(t("textgen.toast.systemSaved"));
     } catch (error) {
       onError(
         error instanceof Error
           ? error.message
-          : "No se pudieron guardar las instrucciones."
+          : t("textgen.error.systemSave")
       );
     } finally {
       setSystemPromptSaving(false);
@@ -11353,18 +12257,16 @@ function TextGeneratorPage({
       selectedSeriesTextKeys.length > 0 ||
       referenceLinks.some((link) => link.url.trim());
     if (!hasSomething) {
-      onError("Añade al menos una obra, una nota, un enlace, un texto de serie o un ejemplo.");
+      onError(t("textgen.error.needSomething"));
       return;
     }
     setCopying("text");
     try {
-      await copyTextToClipboard(generatedText);
-      onToast("Texto copiado. Pégalo en ChatGPT con ⌘V.");
+      await copyTextToClipboard(generatedText, t);
+      onToast(t("textgen.toast.copiedPaste"));
     } catch (error) {
       onError(
-        error instanceof Error
-          ? error.message
-          : "No se pudo copiar. Selecciona el texto a la derecha y cópialo con ⌘C."
+        error instanceof Error ? error.message : t("textgen.error.copyManual")
       );
     } finally {
       setCopying(null);
@@ -11381,9 +12283,7 @@ function TextGeneratorPage({
   function startPhotoDrag() {
     const api = window.inventoryApi?.startPhotoDrag;
     if (typeof api !== "function") {
-      onError(
-        "La app necesita reiniciarse para arrastrar las fotos. Cierra la ventana y vuelve a abrirla."
-      );
+      onError(t("textgen.error.restartDrag"));
       return;
     }
     api(photoFiles());
@@ -11391,18 +12291,20 @@ function TextGeneratorPage({
 
   async function openPhotoFolder() {
     if (artworksWithPhoto.length === 0) {
-      onError("Ninguna de las obras elegidas tiene foto principal.");
+      onError(t("textgen.error.noPhotos"));
       return;
     }
     setCopying("folder");
     try {
-      const { count } = await requireApi("openPhotoFolder")(photoFiles());
+      const { count } = await requireApi("openPhotoFolder", t)(photoFiles());
       onToast(
-        `${count} foto${count === 1 ? "" : "s"} en la carpeta «Fotos para el chat». Arrástralas al chat desde ahí.`
+        count === 1
+          ? t("textgen.toast.photoFolderOne", { count })
+          : t("textgen.toast.photoFolder", { count })
       );
     } catch (error) {
       onError(
-        error instanceof Error ? error.message : "No se pudo abrir la carpeta."
+        error instanceof Error ? error.message : t("textgen.error.openFolder")
       );
     } finally {
       setCopying(null);
@@ -11411,23 +12313,23 @@ function TextGeneratorPage({
 
   async function copyPhotos() {
     if (artworksWithPhoto.length === 0) {
-      onError("Ninguna de las obras elegidas tiene foto principal.");
+      onError(t("textgen.error.noPhotos"));
       return;
     }
     setCopying("images");
     try {
-      const { count } = await requireApi("writeClipboardImageFiles")(
+      const { count } = await requireApi("writeClipboardImageFiles", t)(
         photoFiles()
       );
-      if (count === 0) throw new Error("No se pudo leer ninguna de las fotos.");
+      if (count === 0) throw new Error(t("textgen.error.readPhotos"));
       onToast(
-        `${count} foto${count === 1 ? "" : "s"} copiada${
-          count === 1 ? "" : "s"
-        }. Pega en el chat con ⌘V para adjuntarla${count === 1 ? "" : "s"}.`
+        count === 1
+          ? t("textgen.toast.photoCopiedOne", { count })
+          : t("textgen.toast.photosCopiedCount", { count })
       );
     } catch (error) {
       onError(
-        error instanceof Error ? error.message : "No se pudieron copiar las fotos."
+        error instanceof Error ? error.message : t("textgen.error.copyPhotos")
       );
     } finally {
       setCopying(null);
@@ -11455,12 +12357,22 @@ function TextGeneratorPage({
           <span className="textgen-series-toggle-main">
             <strong>{series.name}</strong>
             <span className="muted small-note">
-              {linked ? "de las obras elegidas" : "otra serie"}
+              {linked
+                ? t("textgen.series.fromWorks")
+                : t("textgen.series.other")}
               {" · "}
               {texts.length === 0
-                ? "sin textos"
-                : `${texts.length} texto${texts.length === 1 ? "" : "s"}`}
-              {selectedCount > 0 ? ` · ${selectedCount} marcado${selectedCount === 1 ? "" : "s"}` : ""}
+                ? t("textgen.series.noTexts")
+                : texts.length === 1
+                  ? t("textgen.series.textCountOne", { n: texts.length })
+                  : t("textgen.series.textCount", { n: texts.length })}
+              {selectedCount > 0
+                ? ` · ${
+                    selectedCount === 1
+                      ? t("textgen.series.checkedCountOne", { n: selectedCount })
+                      : t("textgen.series.checkedCount", { n: selectedCount })
+                  }`
+                : ""}
             </span>
           </span>
           <span className="series-text-chevron" aria-hidden>
@@ -11471,7 +12383,7 @@ function TextGeneratorPage({
           <div className="textgen-series-body">
             {texts.length === 0 ? (
               <p className="muted small-note">
-                Esta serie aún no tiene textos. Añádelos en la pestaña Series.
+                {t("textgen.series.emptyHint")}
               </p>
             ) : (
               <div className="textgen-check-list">
@@ -11492,7 +12404,7 @@ function TextGeneratorPage({
                             onChange={() => toggleSeriesText(key)}
                           />
                           <span>
-                            <strong>{text.topic || "Sin tema"}</strong>
+                            <strong>{text.topic || t("common.noTopic")}</strong>
                           </span>
                         </label>
                         <button
@@ -11502,13 +12414,15 @@ function TextGeneratorPage({
                             setExpandedTextKey(textOpen ? null : key)
                           }
                         >
-                          {textOpen ? "Ocultar" : "Ver texto"}
+                          {textOpen
+                            ? t("common.hide")
+                            : t("textgen.series.viewText")}
                         </button>
                       </div>
                       {textOpen && (
                         <div className="textgen-series-text-full">
                           {text.body.trim() || (
-                            <span className="muted">Sin texto</span>
+                            <span className="muted">{t("common.noText")}</span>
                           )}
                         </div>
                       )}
@@ -11533,32 +12447,42 @@ function TextGeneratorPage({
     <section className="list-page text-generator-page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">Ayuda para redactar</p>
-          <h2>Generador de texto</h2>
-          <p className="page-lead">
-            Reúne obras, textos de series, notas y ejemplos. Después copia el
-            texto y las fotos al chat, en dos pasos.
-          </p>
+          <p className="eyebrow">{t("textgen.eyebrow")}</p>
+          <h2>{t("textgen.title")}</h2>
+          <p className="page-lead">{t("textgen.leadLong")}</p>
         </div>
       </div>
 
       <div className="textgen-summary">
         <span className="textgen-chip">
-          {selectedArtworks.length} obra{selectedArtworks.length === 1 ? "" : "s"}
+          {selectedArtworks.length === 1
+            ? t("textgen.chip.worksOne", { n: selectedArtworks.length })
+            : t("textgen.chip.works", { n: selectedArtworks.length })}
         </span>
         <span className="textgen-chip">
-          {artworksWithPhoto.length} foto{artworksWithPhoto.length === 1 ? "" : "s"}
+          {artworksWithPhoto.length === 1
+            ? t("textgen.chip.photosOne", { n: artworksWithPhoto.length })
+            : t("textgen.chip.photos", { n: artworksWithPhoto.length })}
         </span>
         <span className="textgen-chip">
-          {selectedSeriesTextKeys.length} texto
-          {selectedSeriesTextKeys.length === 1 ? "" : "s"} de serie
+          {selectedSeriesTextKeys.length === 1
+            ? t("textgen.chip.seriesTextsOne", {
+                n: selectedSeriesTextKeys.length
+              })
+            : t("textgen.chip.seriesTexts", {
+                n: selectedSeriesTextKeys.length
+              })}
         </span>
         <span className="textgen-chip">
-          {pickedExamples.length} ejemplo{pickedExamples.length === 1 ? "" : "s"}
+          {pickedExamples.length === 1
+            ? t("textgen.chip.examplesOne", { n: pickedExamples.length })
+            : t("textgen.chip.examples", { n: pickedExamples.length })}
         </span>
         {missingPhotoCount > 0 && (
           <span className="textgen-chip warn">
-            {missingPhotoCount} obra{missingPhotoCount === 1 ? "" : "s"} sin foto
+            {missingPhotoCount === 1
+              ? t("textgen.chip.worksNoPhotoOne", { n: missingPhotoCount })
+              : t("textgen.chip.worksNoPhoto", { n: missingPhotoCount })}
           </span>
         )}
       </div>
@@ -11571,15 +12495,12 @@ function TextGeneratorPage({
               className="textgen-system-toggle"
               onClick={() => setSystemPromptOpen((open) => !open)}
             >
-              <span>Instrucciones fijas (sistema)</span>
+              <span>{t("textgen.section.system")}</span>
               <span className="muted">{systemPromptOpen ? "▲" : "▼"}</span>
             </button>
             {systemPromptOpen && (
               <div className="textgen-system-body">
-                <p className="muted small-note">
-                  Va al inicio de lo que copias. Queda guardado; no hace falta
-                  tocarlo cada vez.
-                </p>
+                <p className="muted small-note">{t("textgen.system.hint")}</p>
                 <textarea
                   className="textgen-system-input"
                   rows={5}
@@ -11594,7 +12515,7 @@ function TextGeneratorPage({
                       setSystemPrompt(DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT)
                     }
                   >
-                    Restaurar pred.
+                    {t("textgen.system.restore")}
                   </button>
                   <button
                     type="button"
@@ -11602,7 +12523,7 @@ function TextGeneratorPage({
                     disabled={systemPromptSaving}
                     onClick={() => void saveSystemPrompt()}
                   >
-                    {systemPromptSaving ? "…" : "Guardar"}
+                    {systemPromptSaving ? "…" : t("common.save")}
                   </button>
                 </div>
               </div>
@@ -11611,7 +12532,7 @@ function TextGeneratorPage({
 
           <div className="pl-block">
             <div className="pl-block-head">
-              <span className="pl-block-title">1. Obras</span>
+              <span className="pl-block-title">{t("textgen.section.works")}</span>
               <div className="row-actions">
                 {selectedArtworks.length > 1 && (
                   <button
@@ -11619,20 +12540,26 @@ function TextGeneratorPage({
                     className="ghost small"
                     onClick={() =>
                       setSelectedIds((current) =>
-                        sortArtworkIdsBySeries(current, inventory)
+                        sortArtworkIdsBySeries(
+                          current,
+                          inventory,
+                          t("series.noSeriesLabel")
+                        )
                       )
                     }
                   >
-                    Ordenar por serie
+                    {t("textgen.sortBySeries")}
                   </button>
                 )}
                 <button type="button" onClick={() => setShowPicker(true)}>
-                  + Elegir obras
+                  {t("textgen.pickWorks")}
                 </button>
               </div>
             </div>
             {selectedArtworks.length === 0 ? (
-              <p className="muted small-note">No hay obras seleccionadas.</p>
+              <p className="muted small-note">
+                {t("textgen.noWorksSelected")}
+              </p>
             ) : (
               <div className="textgen-work-list">
                 {selectedArtworks.map((artwork, index) => (
@@ -11650,14 +12577,14 @@ function TextGeneratorPage({
                       {photos[artwork.id] ? (
                         <img src={photos[artwork.id].dataUrl} alt="" />
                       ) : (
-                        <span className="muted">Sin foto</span>
+                        <span className="muted">{t("common.noPhoto")}</span>
                       )}
                     </div>
                     <div>
                       <strong>{artwork.title}</strong>
                       <span className="muted">
                         {[
-                          artwork.series || "sin serie",
+                          seriesLabel(artwork.series, t),
                           artwork.yearMade,
                           formatSize(artwork)
                         ]
@@ -11674,7 +12601,7 @@ function TextGeneratorPage({
                         )
                       }
                     >
-                      Quitar
+                      {t("common.remove")}
                     </button>
                   </div>
                 ))}
@@ -11690,7 +12617,7 @@ function TextGeneratorPage({
                 onClick={() => setSeriesOpen((open) => !open)}
               >
                 <span className="pl-block-title">
-                  2. Textos de las series
+                  {t("textgen.section.seriesTexts")}
                   {selectedSeriesTextKeys.length > 0
                     ? ` (${selectedSeriesTextKeys.length})`
                     : ""}
@@ -11700,19 +12627,17 @@ function TextGeneratorPage({
             </div>
             {!seriesOpen ? (
               <p className="muted small-note">
-                Cerrado. Ábrelo para revisar textos completos y marcar cuáles
-                van al chat.
+                {t("textgen.series.collapsedHint")}
               </p>
             ) : seriesForPrompt.linked.length === 0 &&
               seriesForPrompt.other.length === 0 ? (
               <p className="muted small-note">
-                Todavía no hay series con metadatos. Créalos en la pestaña Series.
+                {t("textgen.series.noneHint")}
               </p>
             ) : (
               <div className="textgen-series-list">
                 <p className="muted small-note">
-                  Pulsa una serie para abrirla. Ahí puedes leer el texto entero
-                  antes de marcarlo.
+                  {t("textgen.series.openHint")}
                 </p>
                 {seriesForPrompt.linked.map((series) =>
                   renderSeriesTextPicker(series, true)
@@ -11729,7 +12654,7 @@ function TextGeneratorPage({
                     <div className="textgen-series-block" key={`missing-${name}`}>
                       <strong>{name}</strong>
                       <p className="muted small-note">
-                        No hay ficha de serie. Créala en Series para añadir textos.
+                        {t("textgen.series.missingInfo")}
                       </p>
                     </div>
                   ))}
@@ -11741,8 +12666,10 @@ function TextGeneratorPage({
                       onClick={() => setShowOtherSeries((value) => !value)}
                     >
                       {showOtherSeries
-                        ? "Ocultar otras series"
-                        : `Mostrar otras series (${seriesForPrompt.other.length})`}
+                        ? t("textgen.series.hideOthers")
+                        : t("textgen.series.showOthers", {
+                            n: seriesForPrompt.other.length
+                          })}
                     </button>
                     {showOtherSeries &&
                       seriesForPrompt.other.map((series) =>
@@ -11756,13 +12683,15 @@ function TextGeneratorPage({
 
           <div className="pl-block">
             <div className="pl-block-head">
-              <span className="pl-block-title">3. Encargo y notas</span>
+              <span className="pl-block-title">
+                {t("textgen.section.brief")}
+              </span>
               <button type="button" className="ghost" onClick={startSystemDictation}>
-                Dictar con el Mac
+                {t("textgen.dictate")}
               </button>
             </div>
             <label className="field">
-              Qué quieres escribir
+              {t("textgen.field.instruction")}
               <textarea
                 rows={3}
                 value={instruction}
@@ -11770,72 +12699,69 @@ function TextGeneratorPage({
               />
             </label>
             <label className="field">
-              Notas libres (escribe, pega o dicta)
+              {t("textgen.field.notes")}
               <textarea
                 ref={notesRef}
                 rows={5}
                 value={freeText}
-                placeholder="Ideas sueltas. No hace falta que estén ordenadas."
+                placeholder={t("textgen.field.notesPlaceholder")}
                 onChange={(event) => setFreeText(event.target.value)}
               />
             </label>
             {dictationHelpOpen && (
               <div className="textgen-dictation-help">
                 <p>
-                  <strong>El dictado lo hace tu Mac</strong>, no esta aplicación.
-                  El cursor ya está en «Notas libres».
+                  <strong>{t("textgen.dictation.title")}</strong>{" "}
+                  {t("textgen.dictation.lead")}
                 </p>
                 <ol>
-                  <li>Pulsa dos veces la tecla 🎤 (o la que tengas configurada).</li>
-                  <li>Habla con calma; el texto se escribe solo.</li>
-                  <li>Pulsa la tecla otra vez o Intro para terminar.</li>
+                  <li>{t("textgen.dictation.step1")}</li>
+                  <li>{t("textgen.dictation.step2")}</li>
+                  <li>{t("textgen.dictation.step3")}</li>
                 </ol>
                 <p className="muted small-note">
-                  ¿No pasa nada? Actívalo en Ajustes del Sistema → Teclado →
-                  Dictado. También está en el menú Edit → Start Dictation.
+                  {t("textgen.dictation.help")}
                 </p>
                 <button
                   type="button"
                   className="ghost small"
                   onClick={() => setDictationHelpOpen(false)}
                 >
-                  Entendido
+                  {t("common.gotIt")}
                 </button>
               </div>
             )}
             <label className="field">
-              Idioma de la respuesta
+              {t("textgen.field.responseLang")}
               <select
                 value={responseLanguage}
                 onChange={(event) =>
                   setResponseLanguage(event.target.value as "es" | "en" | "de")
                 }
               >
-                <option value="es">Español</option>
+                <option value="es">{t("cert.modal.spanish")}</option>
                 <option value="en">English</option>
                 <option value="de">Deutsch</option>
               </select>
             </label>
             <p className="muted small-note">
-              El texto copiado pedirá a ChatGPT que responda en este idioma.
+              {t("textgen.responseLangHint")}
             </p>
             <div className="pl-block-head" style={{ marginTop: "0.35rem" }}>
               <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
-                Enlaces de referencia
+                {t("textgen.links.title")}
               </span>
               <button
                 type="button"
                 className="ghost small"
                 onClick={addReferenceLink}
               >
-                + Enlace
+                {t("textgen.links.add")}
               </button>
             </div>
-            <p className="muted small-note">
-              ChatGPT recibirá la instrucción de consultar estas direcciones.
-            </p>
+            <p className="muted small-note">{t("textgen.links.hint")}</p>
             {referenceLinks.length === 0 ? (
-              <p className="muted small-note">Ningún enlace todavía.</p>
+              <p className="muted small-note">{t("textgen.links.empty")}</p>
             ) : (
               <div className="textgen-link-list">
                 {referenceLinks.map((link) => (
@@ -11855,7 +12781,7 @@ function TextGeneratorPage({
                     />
                     <input
                       value={link.note}
-                      placeholder="Para qué sirve (opcional)"
+                      placeholder={t("textgen.links.notePlaceholder")}
                       onChange={(event) =>
                         setReferenceLinks((current) =>
                           current.map((item) =>
@@ -11875,7 +12801,7 @@ function TextGeneratorPage({
                         )
                       }
                     >
-                      Quitar
+                      {t("common.remove")}
                     </button>
                   </div>
                 ))}
@@ -11886,7 +12812,7 @@ function TextGeneratorPage({
           <div className="pl-block">
             <div className="pl-block-head">
               <span className="pl-block-title">
-                4. Ejemplos de estilo
+                {t("textgen.section.examples")}
                 {pickedExamples.length > 0 ? ` (${pickedExamples.length})` : ""}
               </span>
               <div className="row-actions">
@@ -11895,32 +12821,30 @@ function TextGeneratorPage({
                   className="ghost small"
                   onClick={onOpenExampleLibrary}
                 >
-                  Abrir biblioteca
+                  {t("textgen.openLibrary")}
                 </button>
                 <button
                   type="button"
                   onClick={() => setExamplePickerOpen(true)}
                 >
-                  + Elegir ejemplos
+                  {t("textgen.pickExamples")}
                 </button>
               </div>
             </div>
             {examples.length === 0 ? (
               <p className="muted small-note">
-                Tu biblioteca está vacía. Guarda ahí los textos que te gusten
-                («Abrir biblioteca») y luego elígelos desde aquí.
+                {t("textgen.examples.emptyLibrary")}
               </p>
             ) : pickedExamples.length === 0 ? (
               <p className="muted small-note">
-                Ningún ejemplo elegido. ChatGPT los usa como referencia de tono,
-                nunca los copia.
+                {t("textgen.examples.nonePicked")}
               </p>
             ) : (
               <div className="textgen-example-list">
                 {pickedExamples.map((example) => (
                   <div className="textgen-example" key={example.id}>
                     <div className="textgen-example-head">
-                      <strong>{example.topic || "Sin tema"}</strong>
+                      <strong>{example.topic || t("common.noTopic")}</strong>
                       <button
                         type="button"
                         className="ghost danger small"
@@ -11930,7 +12854,7 @@ function TextGeneratorPage({
                           )
                         }
                       >
-                        Quitar
+                        {t("common.remove")}
                       </button>
                     </div>
                     {example.body.trim() && (
@@ -11951,9 +12875,9 @@ function TextGeneratorPage({
             <div className="textgen-step">
               <span className="textgen-step-num">1</span>
               <div className="textgen-step-text">
-                <strong>Copia el texto</strong>
+                <strong>{t("textgen.step1.title")}</strong>
                 <span className="muted small-note">
-                  Pégalo en ChatGPT con ⌘V.
+                  {t("textgen.step1.hint")}
                 </span>
               </div>
               <button
@@ -11962,19 +12886,21 @@ function TextGeneratorPage({
                 disabled={copying !== null}
                 onClick={() => void copyText()}
               >
-                {copying === "text" ? "…" : "Copiar texto"}
+                {copying === "text" ? "…" : t("textgen.copy.text")}
               </button>
             </div>
             <div className="textgen-step">
               <span className="textgen-step-num">2</span>
               <div className="textgen-step-text">
-                <strong>Copia las fotos</strong>
+                <strong>{t("textgen.step2.title")}</strong>
                 <span className="muted small-note">
                   {artworksWithPhoto.length === 0
-                    ? "Ninguna obra elegida tiene foto principal."
+                    ? t("textgen.step2.noPhotos")
                     : artworksWithPhoto.length === 1
-                      ? "1 foto. Vuelve al mismo chat y pega otra vez con ⌘V."
-                      : `${artworksWithPhoto.length} fotos. Al pegar solo entra una; para llevarlas todas usa el recuadro de abajo.`}
+                      ? t("textgen.step2.onePhoto")
+                      : t("textgen.step2.manyPhotos", {
+                          n: artworksWithPhoto.length
+                        })}
                 </span>
               </div>
               <button
@@ -11983,19 +12909,15 @@ function TextGeneratorPage({
                 disabled={copying !== null || artworksWithPhoto.length === 0}
                 onClick={() => void copyPhotos()}
               >
-                {copying === "images" ? "…" : "Copiar fotos"}
+                {copying === "images" ? "…" : t("textgen.copy.photos")}
               </button>
             </div>
             <div className="textgen-steps-note">
-              <p className="muted small-note">
-                El Mac solo guarda una cosa a la vez en el portapapeles, por eso
-                van en dos pasos: primero el texto, después las fotos.
-              </p>
+              <p className="muted small-note">{t("textgen.steps.note")}</p>
               {artworksWithPhoto.length > 1 && (
                 <div className="textgen-fallback">
                   <p className="muted small-note">
-                    Arrastra este recuadro hasta la ventana del chat y se
-                    adjuntan las {artworksWithPhoto.length} de una vez.
+                    {t("textgen.drag.hint", { n: artworksWithPhoto.length })}
                   </p>
                   <div
                     className="textgen-drag-tile"
@@ -12006,7 +12928,7 @@ function TextGeneratorPage({
                     }}
                   >
                     <span aria-hidden>⇧</span>
-                    Arrastrar {artworksWithPhoto.length} fotos al chat
+                    {t("textgen.drag.tile", { n: artworksWithPhoto.length })}
                   </div>
                   <button
                     type="button"
@@ -12016,7 +12938,7 @@ function TextGeneratorPage({
                   >
                     {copying === "folder"
                       ? "…"
-                      : "O abrir la carpeta con las fotos"}
+                      : t("textgen.openPhotoFolder")}
                   </button>
                 </div>
               )}
@@ -12024,17 +12946,17 @@ function TextGeneratorPage({
           </div>
           <div className="textgen-preview-head">
             <div>
-              <span className="pl-block-title">Texto preparado</span>
-              <p className="muted small-note">
-                Solo incluye lo que hayas marcado a la izquierda.
-              </p>
+              <span className="pl-block-title">
+                {t("textgen.preview.title")}
+              </span>
+              <p className="muted small-note">{t("textgen.preview.hint")}</p>
             </div>
           </div>
           <textarea
             className="textgen-output"
             readOnly
             value={generatedText}
-            aria-label="Texto preparado para ChatGPT"
+            aria-label={t("textgen.preview.aria")}
           />
         </div>
       </div>
@@ -12043,7 +12965,7 @@ function TextGeneratorPage({
         <ArtworkPickerModal
           inventory={inventory}
           initialIds={selectedIds}
-          title="Elegir obras para el generador"
+          title={t("textgen.picker.works")}
           onConfirm={(ids) => {
             const kept = selectedIds.filter((id) => ids.includes(id));
             const added = ids.filter((id) => !selectedIds.includes(id));
@@ -12086,6 +13008,7 @@ function ExamplePickerModal({
   onOpenLibrary: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [picked, setPicked] = useState<string[]>(initialIds);
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -12109,7 +13032,7 @@ function ExamplePickerModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-head">
-          <h3>Elegir ejemplos de estilo</h3>
+          <h3>{t("textgen.picker.examples")}</h3>
           <button className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
@@ -12117,23 +13040,20 @@ function ExamplePickerModal({
         <div className="modal-toolbar">
           <input
             className="search-input grow"
-            placeholder="Buscar por tema o por palabras del texto..."
+            placeholder={t("examples.searchLong")}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             autoFocus
           />
           <button type="button" className="ghost small" onClick={onOpenLibrary}>
-            Abrir biblioteca
+            {t("textgen.openLibrary")}
           </button>
         </div>
         <div className="modal-body modal-pick-list">
           {examples.length === 0 ? (
-            <p className="muted">
-              Todavía no hay ejemplos guardados. Añádelos en la Biblioteca de
-              ejemplos.
-            </p>
+            <p className="muted">{t("examples.pickerEmpty")}</p>
           ) : list.length === 0 ? (
-            <p className="muted">Ningún ejemplo coincide con esa búsqueda.</p>
+            <p className="muted">{t("examples.noMatch")}</p>
           ) : (
             list.map((example) => {
               const open = openId === example.id;
@@ -12153,10 +13073,10 @@ function ExamplePickerModal({
                       onChange={() => toggle(example.id)}
                     />
                     <span className="pick-title">
-                      {example.topic || "Sin tema"}
+                      {example.topic || t("common.noTopic")}
                     </span>
                     <span className="muted picker-meta">
-                      {countWords(body)} palabras
+                      {t("examples.words", { n: countWords(body) })}
                     </span>
                   </label>
                   <p className="muted small-note example-pick-preview">
@@ -12168,7 +13088,7 @@ function ExamplePickerModal({
                       className="ghost small"
                       onClick={() => setOpenId(open ? null : example.id)}
                     >
-                      {open ? "Ocultar" : "Ver entero"}
+                      {open ? t("common.hide") : t("examples.showAll")}
                     </button>
                   )}
                 </div>
@@ -12178,10 +13098,10 @@ function ExamplePickerModal({
         </div>
         <div className="modal-actions">
           <button type="button" onClick={() => onConfirm(picked)}>
-            Usar {picked.length} ejemplo{picked.length === 1 ? "" : "s"}
+            {t("textgen.picker.useExamples", { n: picked.length })}
           </button>
           <button type="button" className="ghost" onClick={onClose}>
-            Cancelar
+            {t("common.cancel")}
           </button>
         </div>
       </div>
@@ -12208,11 +13128,18 @@ function ApplicationsPage({
   guard?: (action: () => void) => void;
   resetToken?: number;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState<Application | null | "new">(null);
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<"all" | ApplicationKind>("all");
   const [yearFilter, setYearFilter] = useState<"all" | number>("all");
   const thisYear = new Date().getFullYear();
+  const kindLabels: Record<ApplicationKind, string> = {
+    concurso: t("applications.kind.contest"),
+    beca: t("applications.kind.grant"),
+    residencia: t("applications.kind.residency"),
+    otro: t("applications.kind.other")
+  };
 
   const lastResetToken = useRef(resetToken);
   useEffect(() => {
@@ -12287,36 +13214,34 @@ function ApplicationsPage({
         <>
           <div className="page-head">
             <div>
-              <p className="eyebrow">Presentaciones</p>
-              <h2>Solicitudes</h2>
-              <p className="page-lead">
-                Concursos, becas y residencias. Las más recientes arriba.
-              </p>
+              <p className="eyebrow">{t("applications.eyebrow")}</p>
+              <h2>{t("applications.title")}</h2>
+              <p className="page-lead">{t("applications.leadRecent")}</p>
             </div>
             <button
               type="button"
               className="cuentas-primary"
               onClick={() => setEditing("new")}
             >
-              + Nueva solicitud
+              {t("applications.add")}
             </button>
           </div>
 
           <div className="list-toolbar">
             <input
               className="search-input grow"
-              placeholder="Buscar por título, organización…"
+              placeholder={t("applications.search")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
             <div className="segmented small">
               {(
                 [
-                  ["all", "Todas"],
-                  ["concurso", "Concursos"],
-                  ["beca", "Becas"],
-                  ["residencia", "Residencias"],
-                  ["otro", "Otras"]
+                  ["all", t("applications.filter.all")],
+                  ["concurso", t("applications.filter.contests")],
+                  ["beca", t("applications.filter.grants")],
+                  ["residencia", t("applications.filter.residencies")],
+                  ["otro", t("applications.filter.other")]
                 ] as Array<["all" | ApplicationKind, string]>
               ).map(([value, label]) => (
                 <button
@@ -12330,7 +13255,7 @@ function ApplicationsPage({
               ))}
             </div>
             <label className="sort-control">
-              Año
+              {t("library.filter.year")}
               <select
                 value={yearFilter === "all" ? "all" : String(yearFilter)}
                 onChange={(event) => {
@@ -12338,8 +13263,10 @@ function ApplicationsPage({
                   setYearFilter(value === "all" ? "all" : Number(value));
                 }}
               >
-                <option value="all">Todos</option>
-                <option value={String(thisYear)}>Este año ({thisYear})</option>
+                <option value="all">{t("common.all")}</option>
+                <option value={String(thisYear)}>
+                  {t("common.thisYearWith", { year: thisYear })}
+                </option>
                 {yearOptions
                   .filter((y) => y !== thisYear)
                   .map((y) => (
@@ -12359,7 +13286,7 @@ function ApplicationsPage({
                   setYearFilter("all");
                 }}
               >
-                Limpiar
+                {t("common.clear")}
               </button>
             )}
             <span className="count-pill">{list.length}</span>
@@ -12367,21 +13294,21 @@ function ApplicationsPage({
 
           {allApps.length === 0 ? (
             <div className="empty-friendly">
-              <p>Todavía no hay solicitudes.</p>
+              <p>{t("applications.empty")}</p>
               <button type="button" onClick={() => setEditing("new")}>
-                Crear la primera
+                {t("applications.createFirst")}
               </button>
             </div>
           ) : list.length === 0 ? (
-            <p className="muted">Ninguna solicitud con estos filtros.</p>
+            <p className="muted">{t("applications.noMatch")}</p>
           ) : (
             <div className="app-line-list">
               <div className="app-line-head">
-                <span>Tipo</span>
-                <span>Solicitud</span>
-                <span>Organización</span>
-                <span>Fecha</span>
-                <span>Obras</span>
+                <span>{t("applications.col.kind")}</span>
+                <span>{t("applications.col.application")}</span>
+                <span>{t("applications.col.organization")}</span>
+                <span>{t("applications.col.date")}</span>
+                <span>{t("applications.col.works")}</span>
                 <span />
               </div>
               {list.map((app) => (
@@ -12392,7 +13319,7 @@ function ApplicationsPage({
                   onClick={() => setEditing(app)}
                 >
                   <span className="expense-cat-pill">
-                    {applicationKindLabel(app.kind)}
+                    {kindLabels[app.kind]}
                   </span>
                   <strong>{app.title}</strong>
                   <span>{app.organization || "—"}</span>
@@ -12435,6 +13362,7 @@ function ApplicationEditor({
   onDirtyChange?: (dirty: boolean) => void;
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
 }) {
+  const t = useT();
   const initialLang: PriceLang =
     application?.language === "en" || application?.language === "de"
       ? application.language
@@ -12517,7 +13445,7 @@ function ApplicationEditor({
               return "";
             }
           })(),
-          headerCompetition: "Concurso",
+          headerCompetition: t("applications.kind.contest"),
           artworkIds: []
         }
   );
@@ -12709,12 +13637,12 @@ function ApplicationEditor({
 
   async function persist(): Promise<boolean> {
     if (!form.title.trim()) {
-      onError("Pon un nombre a la solicitud (para tu lista).");
+      onError(t("application.error.needName"));
       return false;
     }
     setBusy(true);
     try {
-      const data = await requireApi("saveApplication")(form);
+      const data = await requireApi("saveApplication", t)(form);
       setInventory(data);
       const saved =
         data.applications.find((a) => a.id === form.id) ||
@@ -12730,10 +13658,10 @@ function ApplicationEditor({
         }));
       }
       onDirtyChange?.(false);
-      onToast("Solicitud guardada.");
+      onToast(t("application.toast.saved"));
       return true;
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo guardar.");
+      onError(error instanceof Error ? error.message : t("common.error.save"));
       return false;
     } finally {
       setBusy(false);
@@ -12927,10 +13855,12 @@ function ApplicationEditor({
     await persist();
     setExportBusy(true);
     try {
-      const path = await requireApi("generateApplicationPdf")(buildPayload());
-      if (path) onToast("PDF generado.");
+      const path = await requireApi("generateApplicationPdf", t)(buildPayload());
+      if (path) onToast(t("application.toast.pdfDone"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "No se pudo generar.");
+      onError(
+        error instanceof Error ? error.message : t("application.error.pdf")
+      );
     } finally {
       setExportBusy(false);
     }
@@ -12940,12 +13870,12 @@ function ApplicationEditor({
     <div className="application-editor">
       <div className="form-head">
         <div>
-          <p className="eyebrow">Solicitud</p>
-          <h2>{form.title || "Nueva solicitud"}</h2>
+          <p className="eyebrow">{t("application.editor.eyebrow")}</p>
+          <h2>{form.title || t("application.editor.newTitle")}</h2>
         </div>
         <div className="form-head-actions">
           <button type="button" className="ghost" onClick={onBack}>
-            Volver
+            {t("common.back")}
           </button>
           <button
             type="button"
@@ -12953,10 +13883,10 @@ function ApplicationEditor({
             disabled={exportBusy}
             onClick={() => void exportPdf()}
           >
-            {exportBusy ? "…" : "Generar PDF"}
+            {exportBusy ? "…" : t("application.editor.generatePdf")}
           </button>
           <button type="button" disabled={busy} onClick={() => void persist()}>
-            {busy ? "Guardando…" : "Guardar"}
+            {busy ? t("common.saving") : t("common.save")}
           </button>
         </div>
       </div>
@@ -12969,43 +13899,45 @@ function ApplicationEditor({
       >
         <div className="app-config">
           <AppFormBlock
-            title="1. Ficha (solo para ti)"
+            title={t("application.block.details")}
             open={Boolean(openBlocks.ficha)}
             onToggle={() => toggleBlock("ficha")}
-            summary={form.title.trim() || "Nombre, tipo, fecha…"}
+            summary={
+              form.title.trim() || t("application.block.detailsSummary")
+            }
           >
             <div className="form-grid two">
               <label>
-                Nombre en la lista
+                {t("application.field.listName")}
                 <input
                   value={form.title}
-                  placeholder="Ej. Beca Berlin 2026 · borrador"
+                  placeholder={t("application.field.listNamePlaceholder")}
                   onChange={(event) => set("title", event.target.value)}
                 />
               </label>
               <label>
-                Tipo
+                {t("applications.col.kind")}
                 <select
                   value={form.kind}
                   onChange={(event) =>
                     set("kind", event.target.value as ApplicationKind)
                   }
                 >
-                  <option value="concurso">Concurso</option>
-                  <option value="beca">Beca / stipendio</option>
-                  <option value="residencia">Residencia</option>
-                  <option value="otro">Otro</option>
+                  <option value="concurso">{t("applications.kind.contest")}</option>
+                  <option value="beca">{t("applications.kind.grant")}</option>
+                  <option value="residencia">{t("applications.kind.residency")}</option>
+                  <option value="otro">{t("applications.kind.other")}</option>
                 </select>
               </label>
               <label>
-                Fecha límite
+                {t("applications.col.deadline")}
                 <DateField
                   value={form.deadline ?? ""}
                   onChange={(value) => set("deadline", value)}
                 />
               </label>
               <label>
-                Idioma del PDF
+                {t("application.field.pdfLanguage")}
                 <select
                   value={language}
                   onChange={(event) =>
@@ -13023,27 +13955,23 @@ function ApplicationEditor({
           </AppFormBlock>
 
           <AppFormBlock
-            title="2. Pie del PDF"
+            title={t("application.block.footer")}
             open={Boolean(openBlocks.pie)}
             onToggle={() => toggleBlock("pie")}
             summary={
               [form.headerArtistName, form.headerCompetition]
                 .map((s) => s?.trim())
                 .filter(Boolean)
-                .join(" · ") || "Artista y concurso al pie"
+                .join(" · ") || t("application.block.footerSummary")
             }
           >
-            <p className="muted small-note">
-              Nombre a la izquierda, concurso a la derecha y número de página en
-              el centro, abajo en cada página. El nombre se recuerda para las
-              siguientes solicitudes.
-            </p>
+            <p className="muted small-note">{t("application.footer.hint")}</p>
             <div className="form-grid two">
               <label>
-                Nombre de la artista
+                {t("application.field.artistName")}
                 <input
                   value={form.headerArtistName ?? ""}
-                  placeholder="Tu nombre completo"
+                  placeholder={t("application.field.artistNamePlaceholder")}
                   onChange={(event) => {
                     const value = event.target.value;
                     set("headerArtistName", value);
@@ -13056,10 +13984,10 @@ function ApplicationEditor({
                 />
               </label>
               <label>
-                Concurso / convocatoria
+                {t("application.field.competition")}
                 <input
                   value={form.headerCompetition ?? ""}
-                  placeholder="Ej. Concurso XYZ 2026"
+                  placeholder={t("application.field.competitionPlaceholder")}
                   onChange={(event) => set("headerCompetition", event.target.value)}
                 />
               </label>
@@ -13067,24 +13995,21 @@ function ApplicationEditor({
           </AppFormBlock>
 
           <AppFormBlock
-            title="3. Portada del PDF"
+            title={t("application.block.cover")}
             open={Boolean(openBlocks.portada)}
             onToggle={() => toggleBlock("portada")}
             summary={
               (form.documentTitle || "").trim() ||
-              "Título y líneas de la portada"
+              t("application.block.coverSummary")
             }
           >
-            <p className="muted small-note">
-              Cada bloque es una línea de la portada. Fuente y tamaño se eligen
-              debajo del texto. El índice se genera solo.
-            </p>
+            <p className="muted small-note">{t("application.cover.hint")}</p>
             <div className="cover-portada-lines">
               <CoverLineEditor
-                label="Línea por encima"
-                hint="Arriba del título"
+                label={t("application.cover.above")}
+                hint={t("application.cover.aboveHint")}
                 value={form.coverSubtitle ?? ""}
-                placeholder="Ej. Convocatoria 2026"
+                placeholder={t("application.cover.abovePlaceholder")}
                 style={form.coverStyles?.above}
                 defaultSize={10}
                 defaultBold
@@ -13092,10 +14017,10 @@ function ApplicationEditor({
                 onStyleChange={(patch) => setCoverLineStyle("above", patch)}
               />
               <CoverLineEditor
-                label="Título"
-                hint="Principal"
+                label={t("application.cover.title")}
+                hint={t("application.cover.titleHint")}
                 value={form.documentTitle ?? ""}
-                placeholder="Título que verá el jurado"
+                placeholder={t("application.cover.titlePlaceholder")}
                 style={form.coverStyles?.title}
                 defaultSize={28}
                 defaultBold
@@ -13103,20 +14028,20 @@ function ApplicationEditor({
                 onStyleChange={(patch) => setCoverLineStyle("title", patch)}
               />
               <CoverLineEditor
-                label="Línea por debajo"
-                hint="Bajo el título"
+                label={t("application.cover.below")}
+                hint={t("application.cover.belowHint")}
                 value={form.organization ?? ""}
-                placeholder="Organización o lugar"
+                placeholder={t("application.cover.belowPlaceholder")}
                 style={form.coverStyles?.below}
                 defaultSize={11.5}
                 onValueChange={(value) => set("organization", value)}
                 onStyleChange={(patch) => setCoverLineStyle("below", patch)}
               />
               <CoverLineEditor
-                label="Segunda línea"
-                hint="Debajo de todo"
+                label={t("application.cover.second")}
+                hint={t("application.cover.secondHint")}
                 value={form.coverNote ?? ""}
-                placeholder="Nota extra, contacto…"
+                placeholder={t("application.cover.secondPlaceholder")}
                 multiline
                 style={form.coverStyles?.second}
                 defaultSize={10.5}
@@ -13127,13 +14052,17 @@ function ApplicationEditor({
           </AppFormBlock>
 
           <AppFormBlock
-            title="4. Obras (orden = PDF)"
+            title={t("application.block.works")}
             open={Boolean(openBlocks.obras)}
             onToggle={() => toggleBlock("obras")}
             summary={
               selectedArts.length
-                ? `${selectedArts.length} obra${selectedArts.length === 1 ? "" : "s"}`
-                : "Elegir obras del PDF"
+                ? `${selectedArts.length} ${
+                    selectedArts.length === 1
+                      ? t("common.workOne")
+                      : t("common.workMany")
+                  }`
+                : t("application.block.worksSummary")
             }
             actions={
               <div className="row-actions">
@@ -13142,7 +14071,7 @@ function ApplicationEditor({
                     <button
                       type="button"
                       className="ghost small"
-                      title="Ordena los bloques de serie de A a Z. No cambia el orden de las obras dentro de cada serie."
+                      title={t("application.works.sortSeriesTitle")}
                       onClick={() =>
                         set(
                           "artworkIds",
@@ -13154,17 +14083,17 @@ function ApplicationEditor({
                         )
                       }
                     >
-                      Series A→Z
+                      {t("application.works.sortSeries")}
                     </button>
                   )}
                 <button type="button" className="small" onClick={() => setShowPicker(true)}>
-                  + Elegir obras
+                  {t("textgen.pickWorks")}
                 </button>
               </div>
             }
           >
             <label className="field">
-              Etiqueta del grupo de obras
+              {t("application.field.worksHeading")}
               <input
                 value={form.headingWorks ?? ""}
                 placeholder={APP_HEADING_DEFAULTS[language].works}
@@ -13172,7 +14101,7 @@ function ApplicationEditor({
               />
             </label>
             <label className="field">
-              Índice de obras (portada)
+              {t("application.field.tocMode")}
               <select
                 value={form.tocWorksMode || "list"}
                 onChange={(event) => {
@@ -13194,19 +14123,23 @@ function ApplicationEditor({
                   }
                 }}
               >
-                <option value="list">Una línea por obra</option>
-                <option value="bySeries">Agrupar por serie (N cuadros)</option>
+                <option value="list">{t("application.toc.list")}</option>
+                <option value="bySeries">
+                  {t("application.toc.bySeries")}
+                </option>
                 <option value="worksOnly">
-                  Solo «{form.headingWorks || APP_HEADING_DEFAULTS[language].works}»
-                  → primera página
+                  {t("application.toc.worksOnly", {
+                    label:
+                      form.headingWorks ||
+                      APP_HEADING_DEFAULTS[language].works
+                  })}
                 </option>
               </select>
             </label>
             {(form.tocWorksMode || "list") === "bySeries" ? (
               <>
                 <p className="muted small-note">
-                  Orden del PDF: primero las series (bloques), luego las obras
-                  dentro de cada serie.
+                  {t("application.works.orderSeriesHint")}
                 </p>
                 <ApplicationSeriesOrder
                   artworkIds={form.artworkIds ?? []}
@@ -13226,11 +14159,12 @@ function ApplicationEditor({
             ) : (
               <>
                 <p className="muted small-note">
-                  Orden manual con ↑ ↓. Puedes mezclar series como quieras; así
-                  salen en el PDF.
+                  {t("application.works.orderManualHint")}
                 </p>
                 {selectedArts.length === 0 ? (
-                  <p className="muted small-note">Todavía no has elegido obras.</p>
+                  <p className="muted small-note">
+                    {t("application.works.noneChosen")}
+                  </p>
                 ) : (
                   <div className="expense-list">
                     {selectedArts.map((art, index) => (
@@ -13272,7 +14206,7 @@ function ApplicationEditor({
                             )
                           }
                         >
-                          Quitar
+                          {t("common.remove")}
                         </button>
                       </div>
                     ))}
@@ -13283,25 +14217,27 @@ function ApplicationEditor({
           </AppFormBlock>
 
           <AppFormBlock
-            title="5. Textos"
+            title={t("application.editor.block5")}
             open={Boolean(openBlocks.textos)}
             onToggle={() => toggleBlock("textos")}
             summary={
               sections.length
-                ? `${sections.length} sección${sections.length === 1 ? "" : "es"}`
-                : "Secciones de texto del PDF"
+                ? sections.length === 1
+                  ? t("application.sections.countOne", { n: sections.length })
+                  : t("application.sections.count", { n: sections.length })
+                : t("application.block.textsSummary")
             }
             actions={
               <button type="button" className="ghost small" onClick={addSection}>
-                + Añadir sección
+                {t("application.sections.add")}
               </button>
             }
           >
             {sections.length === 0 ? (
               <div className="empty-friendly">
-                <p>Añade secciones (encabezado + texto).</p>
+                <p>{t("application.sections.emptyHint")}</p>
                 <button type="button" onClick={addSection}>
-                  + Primera sección
+                  {t("application.sections.addFirst")}
                 </button>
               </div>
             ) : (
@@ -13309,14 +14245,14 @@ function ApplicationEditor({
                 <div className="app-section-heading-format">
                   <div className="app-section-heading-format-head">
                     <span className="cover-line-label">
-                      Formato de todos los encabezados
+                      {t("application.format.headings")}
                     </span>
                     <span className="cover-line-hint">
-                      Se aplica a cada sección a la vez
+                      {t("application.format.headingsHint")}
                     </span>
                   </div>
                   <SharedTextFormatTools
-                    ariaLabel="encabezados"
+                    ariaLabel={t("application.format.headingsAria")}
                     style={form.sectionHeadingStyle}
                     defaults={{ font: "Georgia", sizePt: 18, bold: true, italic: false }}
                     onChange={setSectionHeadingStyle}
@@ -13325,14 +14261,14 @@ function ApplicationEditor({
                 <div className="app-section-heading-format">
                   <div className="app-section-heading-format-head">
                     <span className="cover-line-label">
-                      Formato de todos los textos
+                      {t("application.format.bodies")}
                     </span>
                     <span className="cover-line-hint">
-                      Base de todos los cuerpos · N/I por letra sigue en el editor
+                      {t("application.format.bodiesHint")}
                     </span>
                   </div>
                   <SharedTextFormatTools
-                    ariaLabel="textos"
+                    ariaLabel={t("application.format.bodiesAria")}
                     style={form.sectionBodyStyle}
                     defaults={{
                       font: "Georgia",
@@ -13363,7 +14299,10 @@ function ApplicationEditor({
                         }
                       >
                         <strong>
-                          {section.heading || `Sección ${index + 1}`}
+                          {section.heading ||
+                            t("application.sections.fallback", {
+                              n: index + 1
+                            })}
                         </strong>
                         {!open && preview && (
                           <span className="muted app-section-preview">
@@ -13378,7 +14317,7 @@ function ApplicationEditor({
                       {open && (
                         <div className="app-section-body">
                           <label className="field">
-                            Encabezado
+                            {t("pricelist.field.header")}
                             <input
                               value={section.heading}
                               onChange={(event) =>
@@ -13389,7 +14328,7 @@ function ApplicationEditor({
                             />
                           </label>
                           <div className="field">
-                            <span>Texto</span>
+                            <span>{t("series.texts.body")}</span>
                             <RichTextField
                               key={section.id}
                               value={section.bodyHtml}
@@ -13407,7 +14346,7 @@ function ApplicationEditor({
                             className="ghost danger small"
                             onClick={() => removeSection(section.id)}
                           >
-                            Quitar sección
+                            {t("application.sections.remove")}
                           </button>
                         </div>
                       )}
@@ -13419,14 +14358,14 @@ function ApplicationEditor({
           </AppFormBlock>
 
           <AppFormBlock
-            title="Tipografías y marco"
+            title={t("application.block.fonts")}
             open={Boolean(openBlocks.tipografia)}
             onToggle={() => toggleBlock("tipografia")}
             summary={`${fontTitle} · ${fontBody}`}
           >
             <div className="form-row">
               <label className="field">
-                Fichas de obra (título y datos)
+                {t("application.field.fontWorks")}
                 <select
                   value={fontTitle}
                   onChange={(event) => setFontTitle(event.target.value)}
@@ -13439,7 +14378,7 @@ function ApplicationEditor({
                 </select>
               </label>
               <label className="field">
-                Cuerpo de texto
+                {t("application.field.fontBody")}
                 <select
                   value={fontBody}
                   onChange={(event) => setFontBody(event.target.value)}
@@ -13459,14 +14398,14 @@ function ApplicationEditor({
                   checked={hideFrame}
                   onChange={(event) => setHideFrame(event.target.checked)}
                 />
-                Sin marco gris alrededor de la pintura
+                {t("application.field.noFrame")}
               </label>
             </div>
             {!hideFrame ? (
               <>
                 <div className="form-row">
                   <label className="field">
-                    Color del marco
+                    {t("application.field.frameColor")}
                     <input
                       type="color"
                       className="color-chip"
@@ -13475,7 +14414,7 @@ function ApplicationEditor({
                     />
                   </label>
                   <label className="field">
-                    Grosor del marco
+                    {t("application.field.frameWidth")}
                     <div className="range-inline">
                       <input
                         type="range"
@@ -13491,7 +14430,7 @@ function ApplicationEditor({
                   </label>
                 </div>
                 <label className="field">
-                  Espacio entre marco y pintura
+                  {t("application.field.framePadding")}
                   <div className="range-inline">
                     <input
                       type="range"
@@ -13508,7 +14447,7 @@ function ApplicationEditor({
               </>
             ) : (
               <label className="field">
-                Espacio alrededor de la pintura
+                {t("application.field.imagePadding")}
                 <div className="range-inline">
                   <input
                     type="range"
@@ -13523,11 +14462,7 @@ function ApplicationEditor({
                 </div>
               </label>
             )}
-            <p className="muted small-note">
-              Cuadrado al 95% del ancho, centrado. La pintura queda inscrita.
-              Grosor y espacio crecen hacia dentro (la pintura se hace más
-              pequeña).
-            </p>
+            <p className="muted small-note">{t("application.frame.note")}</p>
           </AppFormBlock>
         </div>
 
@@ -13535,21 +14470,21 @@ function ApplicationEditor({
           className="app-split-handle"
           role="separator"
           aria-orientation="vertical"
-          aria-label="Cambiar tamaño de la vista previa"
-          title="Arrastra para dar más o menos espacio a la vista previa"
+          aria-label={t("application.preview.resizeAria")}
+          title={t("application.preview.resizeTitle")}
           onPointerDown={onSplitPointerDown}
         />
 
         <div className="pl-preview-pane">
           <div className="app-preview-toolbar">
             <span className="pl-fp-label muted">
-              Vista previa del PDF ({selectedArts.length} obras)
+              {t("application.preview.label", { n: selectedArts.length })}
             </span>
             <div className="app-preview-zoom">
               <button
                 type="button"
                 className="ghost small app-zoom-btn"
-                aria-label="Alejar"
+                aria-label={t("common.zoomOut")}
                 disabled={previewZoom <= 0.4}
                 onClick={() => nudgePreviewZoom(-0.1)}
               >
@@ -13558,7 +14493,7 @@ function ApplicationEditor({
               <button
                 type="button"
                 className="ghost small app-zoom-pct"
-                title="Restablecer zoom"
+                title={t("common.zoomReset")}
                 onClick={() => setPreviewZoom(1)}
               >
                 {Math.round(previewZoom * 100)}%
@@ -13566,7 +14501,7 @@ function ApplicationEditor({
               <button
                 type="button"
                 className="ghost small app-zoom-btn"
-                aria-label="Acercar"
+                aria-label={t("common.zoomIn")}
                 disabled={previewZoom >= 2.5}
                 onClick={() => nudgePreviewZoom(0.1)}
               >
@@ -13577,7 +14512,7 @@ function ApplicationEditor({
           <iframe
             ref={previewFrameRef}
             className="app-pdf-frame"
-            title="Vista previa de la solicitud"
+            title={t("application.preview.frameTitle")}
           />
         </div>
       </div>
@@ -13587,7 +14522,7 @@ function ApplicationEditor({
           inventory={inventory}
           excludeIds={[]}
           initialIds={form.artworkIds ?? []}
-          title="Elegir obras para la solicitud"
+          title={t("application.picker.works")}
           onConfirm={(ids) => {
             const current = form.artworkIds ?? [];
             const kept = current.filter((id) => ids.includes(id));
@@ -13625,6 +14560,7 @@ function PriceListPage({
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [mode, setMode] = useState<"free" | "exhibition">(
     preset?.exhibitionId ? "exhibition" : "free"
   );
@@ -13750,7 +14686,7 @@ function PriceListPage({
 
   async function generate() {
     if (selectedIds.length === 0) {
-      onError("Selecciona al menos una obra para la lista.");
+      onError(t("pricelist.error.needWorks"));
       return;
     }
     setBusy(true);
@@ -13795,10 +14731,12 @@ function PriceListPage({
       });
       if (savedPath) {
         onError("");
-        onToast("Lista generada (PDF).");
+        onToast(t("pricelist.toast.done"));
       }
     } catch (caught) {
-      onError(caught instanceof Error ? caught.message : "No se pudo generar la lista.");
+      onError(
+        caught instanceof Error ? caught.message : t("pricelist.error.generate")
+      );
     } finally {
       setBusy(false);
     }
@@ -13808,12 +14746,12 @@ function PriceListPage({
     <section className="list-page pricelist-page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">Documentos</p>
-          <h2>Generar folleto de obras</h2>
+          <p className="eyebrow">{t("pricelist.eyebrow")}</p>
+          <h2>{t("pricelist.title")}</h2>
         </div>
         <div className="form-head-actions">
           <button disabled={busy} onClick={() => void generate()}>
-            Generar PDF
+            {t("pricelist.generatePdf")}
           </button>
         </div>
       </div>
@@ -13825,24 +14763,24 @@ function PriceListPage({
               className={`seg ${mode === "free" ? "active" : ""}`}
               onClick={() => setMode("free")}
             >
-              Selección libre
+              {t("pricelist.mode.free")}
             </button>
             <button
               className={`seg ${mode === "exhibition" ? "active" : ""}`}
               onClick={() => setMode("exhibition")}
             >
-              De una exposición
+              {t("pricelist.mode.exhibition")}
             </button>
           </div>
 
           {mode === "exhibition" && (
             <label className="field">
-              Exposición
+              {t("movement.exhibition.select")}
               <select
                 value={exhibitionId}
                 onChange={(event) => setExhibitionId(event.target.value)}
               >
-                <option value="">— Seleccionar —</option>
+                <option value="">{t("common.selectPlaceholder")}</option>
                 {inventory.exhibitions.map((exh) => (
                   <option key={exh.id} value={exh.id}>
                     {exh.title}
@@ -13857,30 +14795,22 @@ function PriceListPage({
             <div className="pl-block">
               <div className="pl-block-head">
                 <span className="pl-block-title">
-                  Obras elegidas ({freeSelected.length})
+                  {t("pricelist.chosenWorks", { count: freeSelected.length })}
                 </span>
                 <button type="button" onClick={() => setShowFreePicker(true)}>
-                  + Añadir obras
+                  {t("pricelist.addWorks")}
                 </button>
               </div>
               {freeSelected.length === 0 && (
-                <p className="muted small-note">
-                  Usa «Añadir obras» para elegirlas en una ventana con búsqueda.
-                </p>
+                <p className="muted small-note">{t("pricelist.pickHint")}</p>
               )}
             </div>
           )}
 
           {selectedIds.length > 0 && (
             <div className="pl-block">
-              <span className="pl-block-title">
-                Imagen y orden de cada obra
-              </span>
-              <p className="muted small-note">
-                Usa ↑ ↓ para elegir el orden del folleto. Los precios se toman de
-                la exposición (o del precio de venta si no hay exposición);
-                cámbialos allí si hace falta.
-              </p>
+              <span className="pl-block-title">{t("pricelist.rowsTitle")}</span>
+              <p className="muted small-note">{t("pricelist.rowsHint")}</p>
               <div className="pl-row-list">
                 {selectedIds.map((id, index) => {
                   const art = artworkById.get(id);
@@ -13898,7 +14828,9 @@ function PriceListPage({
                         {art.title}
                       </span>
                       <button className="ghost small" onClick={() => pickImage(id)}>
-                        {customImages[id] ? "Cambiar imagen" : "Otra imagen"}
+                        {customImages[id]
+                          ? t("pricelist.changeImage")
+                          : t("pricelist.otherImage")}
                       </button>
                       {mode === "free" && (
                         <button
@@ -13910,7 +14842,7 @@ function PriceListPage({
                             )
                           }
                         >
-                          Quitar
+                          {t("common.remove")}
                         </button>
                       )}
                     </div>
@@ -13921,36 +14853,36 @@ function PriceListPage({
           )}
 
           <label className="field">
-            Encabezado (título del documento)
+            {t("pricelist.field.headerFull")}
             <input
               value={header}
-              placeholder="ej. Galería X · Obra reciente"
+              placeholder={t("pricelist.headerPlaceholder")}
               onChange={(event) => setHeader(event.target.value)}
             />
           </label>
           <label className="field">
-            Subtítulo (opcional)
+            {t("pricelist.field.subtitleOptional")}
             <input
               value={subtitle}
-              placeholder="ej. Madrid · Marzo 2026"
+              placeholder={t("pricelist.subtitlePlaceholder")}
               onChange={(event) => setSubtitle(event.target.value)}
             />
           </label>
 
           <div className="form-row">
             <label className="field">
-              Texto a la izquierda (sala y ciudad)
+              {t("pricelist.field.leftFull")}
               <input
                 value={leftHeader}
-                placeholder="ej. Sala XYZ, Heidelberg"
+                placeholder={t("pricelist.leftPlaceholder")}
                 onChange={(event) => setLeftHeader(event.target.value)}
               />
             </label>
             <label className="field">
-              Texto a la derecha (fechas)
+              {t("pricelist.field.rightFull")}
               <input
                 value={rightHeader}
-                placeholder="ej. del 20/04/2000 al 31/05/2020"
+                placeholder={t("pricelist.rightPlaceholder")}
                 onChange={(event) => setRightHeader(event.target.value)}
               />
             </label>
@@ -13958,7 +14890,7 @@ function PriceListPage({
 
           <div className="form-row">
             <label className="field">
-              Idioma del «tipo de arte»
+              {t("pricelist.field.artTypeLang")}
               <select
                 value={language}
                 onChange={(event) => setLanguage(event.target.value as PriceLang)}
@@ -13971,14 +14903,14 @@ function PriceListPage({
               </select>
             </label>
             <label className="field">
-              Imágenes por página
+              {t("pricelist.field.perPageLabel")}
               <select
                 value={imagesPerPage}
                 onChange={(event) => setImagesPerPage(Number(event.target.value))}
               >
                 {[2, 3, 4, 5, 6].map((value) => (
                   <option key={value} value={value}>
-                    {value} por página
+                    {t("pricelist.field.perPage", { n: value })}
                   </option>
                 ))}
               </select>
@@ -13991,7 +14923,7 @@ function PriceListPage({
               checked={showPrice}
               onChange={(event) => setShowPrice(event.target.checked)}
             />
-            Mostrar precio (en euros)
+            {t("pricelist.field.showPriceEuros")}
           </label>
           {showPrice && (
             <label className="checkline">
@@ -14000,13 +14932,13 @@ function PriceListPage({
                 checked={priceBold}
                 onChange={(event) => setPriceBold(event.target.checked)}
               />
-              Precio en negrita
+              {t("pricelist.field.boldPrice")}
             </label>
           )}
 
           <div className="form-row">
             <label className="field">
-              Espacio entre imagen y texto
+              {t("pricelist.field.imageGap")}
               <div className="range-inline">
                 <input
                   type="range"
@@ -14019,7 +14951,7 @@ function PriceListPage({
               </div>
             </label>
             <label className="field">
-              Color del borde del marco
+              {t("pricelist.field.frameColor")}
               <input
                 type="color"
                 className="color-chip"
@@ -14030,7 +14962,7 @@ function PriceListPage({
           </div>
 
           <div className="pl-style-block">
-            <span className="pl-block-title">Estilo del título</span>
+            <span className="pl-block-title">{t("pricelist.style.title")}</span>
             <div className="pl-style-row">
               <select
                 value={fontHeader}
@@ -14066,7 +14998,7 @@ function PriceListPage({
           </div>
 
           <div className="pl-style-block">
-            <span className="pl-block-title">Estilo del subtítulo</span>
+            <span className="pl-block-title">{t("pricelist.style.subtitle")}</span>
             <div className="pl-style-row">
               <select
                 value={fontSubtitle}
@@ -14095,7 +15027,7 @@ function PriceListPage({
           </div>
 
           <label className="field">
-            Tipografía del texto de las obras
+            {t("pricelist.field.bodyFont")}
             <select value={fontBody} onChange={(event) => setFontBody(event.target.value)}>
               {PRICELIST_FONTS.map((font) => (
                 <option key={font} value={font}>
@@ -14108,7 +15040,7 @@ function PriceListPage({
 
         <div className="pl-preview-pane">
           <span className="pl-fp-label muted">
-            Vista previa · así saldrá el PDF ({selectedIds.length} obras)
+            {t("pricelist.preview.lead", { count: selectedIds.length })}
           </span>
           <div className="pl-paper">
             <div className="pl-sheet" style={{ fontFamily: fontBody }}>
@@ -14145,8 +15077,8 @@ function PriceListPage({
               {selectedIds.length === 0 ? (
                 <p className="muted">
                   {mode === "exhibition"
-                    ? "Selecciona una exposición con obras."
-                    : "Añade obras para verlas aquí."}
+                    ? t("pricelist.preview.pickExhibition")
+                    : t("pricelist.preview.addWorks")}
                 </p>
               ) : (
                 selectedIds.map((id, index) => {
@@ -14172,7 +15104,11 @@ function PriceListPage({
                     <Fragment key={id}>
                       {pageBreakHere && (
                         <div className="pl-page-break">
-                          <span>Página {Math.floor(index / imagesPerPage) + 1}</span>
+                          <span>
+                            {t("pricelist.preview.page", {
+                              n: Math.floor(index / imagesPerPage) + 1
+                            })}
+                          </span>
                         </div>
                       )}
                     <div
@@ -14203,7 +15139,7 @@ function PriceListPage({
                               }}
                             />
                           ) : (
-                            <span className="pl-sheet-noimg">Sin imagen</span>
+                            <span className="pl-sheet-noimg">{t("common.noImage")}</span>
                           )}
                         </div>
                       </div>
@@ -14245,7 +15181,7 @@ function PriceListPage({
         <ArtworkPickerModal
           inventory={inventory}
           excludeIds={freeSelected}
-          title="Añadir obras a la lista"
+          title={t("pricelist.picker.title")}
           onConfirm={(ids) => {
             setFreeSelected((current) => [...current, ...ids]);
             setShowFreePicker(false);
@@ -14294,6 +15230,7 @@ function SharedTextFormatTools({
   };
   onChange: (patch: Partial<CoverLineStyle>) => void;
 }) {
+  const t = useT();
   const font = style?.font ?? defaults.font;
   const sizePt =
     style?.sizePt != null && Number.isFinite(style.sizePt)
@@ -14305,7 +15242,7 @@ function SharedTextFormatTools({
     <div className="cover-line-tools">
       <select
         className="cover-line-font"
-        aria-label={`Fuente de ${ariaLabel}`}
+        aria-label={t("format.fontOf", { label: ariaLabel })}
         value={font}
         onChange={(event) =>
           onChange({
@@ -14324,7 +15261,7 @@ function SharedTextFormatTools({
       </select>
       <label className="cover-line-size">
         <select
-          aria-label={`Tamaño de ${ariaLabel}`}
+          aria-label={t("format.sizeOf", { label: ariaLabel })}
           value={String(sizePt)}
           onChange={(event) => {
             const n = Number(event.target.value);
@@ -14346,12 +15283,12 @@ function SharedTextFormatTools({
       <div
         className="cover-line-style-toggles"
         role="group"
-        aria-label={`Estilo de ${ariaLabel}`}
+        aria-label={t("format.styleOf", { label: ariaLabel })}
       >
         <button
           type="button"
           className={`toggle-chip${boldOn ? " on" : ""}`}
-          title="Negrita (base)"
+          title={t("format.boldBase")}
           onClick={() => onChange({ bold: !boldOn })}
         >
           N
@@ -14359,7 +15296,7 @@ function SharedTextFormatTools({
         <button
           type="button"
           className={`toggle-chip${italicOn ? " on" : ""}`}
-          title="Cursiva (base)"
+          title={t("format.italicBase")}
           onClick={() => onChange({ italic: !italicOn })}
         >
           <em>I</em>
@@ -14435,6 +15372,7 @@ function CoverLineEditor({
   onValueChange: (value: string) => void;
   onStyleChange: (patch: Partial<CoverLineStyle>) => void;
 }) {
+  const t = useT();
   const sizeValue =
     style?.sizePt != null && Number.isFinite(style.sizePt)
       ? style.sizePt
@@ -14466,7 +15404,7 @@ function CoverLineEditor({
       <div className="cover-line-tools">
         <select
           className="cover-line-font"
-          aria-label={`Fuente · ${label}`}
+          aria-label={t("format.fontFor", { label })}
           value={style?.font ?? ""}
           onChange={(event) =>
             onStyleChange({
@@ -14475,7 +15413,7 @@ function CoverLineEditor({
             })
           }
         >
-          <option value="">Fuente pred.</option>
+          <option value="">{t("format.fontDefault")}</option>
           {PRICELIST_FONTS.map((font) => (
             <option key={font} value={font}>
               {font}
@@ -14484,7 +15422,7 @@ function CoverLineEditor({
         </select>
         <label className="cover-line-size">
           <select
-            aria-label={`Tamaño · ${label}`}
+            aria-label={t("format.sizeFor", { label })}
             value={String(sizeValue)}
             onChange={(event) => {
               const n = Number(event.target.value);
@@ -14503,11 +15441,15 @@ function CoverLineEditor({
           </select>
           <span>pt</span>
         </label>
-        <div className="cover-line-style-toggles" role="group" aria-label="Estilo">
+        <div
+          className="cover-line-style-toggles"
+          role="group"
+          aria-label={t("format.style")}
+        >
           <button
             type="button"
             className={`toggle-chip${boldOn ? " on" : ""}`}
-            title="Negrita"
+            title={t("format.bold")}
             onClick={() => onStyleChange({ bold: !boldOn })}
           >
             N
@@ -14515,7 +15457,7 @@ function CoverLineEditor({
           <button
             type="button"
             className={`toggle-chip${italicOn ? " on" : ""}`}
-            title="Cursiva"
+            title={t("format.italic")}
             onClick={() => onStyleChange({ italic: !italicOn })}
           >
             <em>I</em>
@@ -14553,6 +15495,7 @@ function NavButton({
   onClick: () => void;
   children: ReactNode;
 }) {
+  const { lang, t } = useLanguage();
   return (
     <button className={active ? "nav-button active" : "nav-button"} onClick={onClick}>
       {children}
@@ -14614,7 +15557,8 @@ function toInput(artwork: Artwork, inventory: InventoryData): ArtworkInput {
 function sortArtworks(
   artworks: Artwork[],
   sort: SortKey,
-  inventory: InventoryData
+  inventory: InventoryData,
+  lang: Lang = "es"
 ): Artwork[] {
   const copy = [...artworks];
   switch (sort) {
@@ -14636,8 +15580,8 @@ function sortArtworks(
       return copy.sort((a, b) => parseNum(a.yearMade) - parseNum(b.yearMade) || 0);
     case "type":
       return copy.sort((a, b) =>
-        labelFor(inventory, "artworkType", a.type).localeCompare(
-          labelFor(inventory, "artworkType", b.type)
+        labelFor(inventory, "artworkType", a.type, lang).localeCompare(
+          labelFor(inventory, "artworkType", b.type, lang)
         )
       );
     case "price_desc":
@@ -14655,19 +15599,61 @@ function num(value?: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function lookupOptions(inventory: InventoryData, category: string) {
-  const seen = new Set<string>();
-  return inventory.lookups.filter((lookup) => {
-    if (lookup.category !== category) return false;
-    const key = lookup.value.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+/**
+ * Same list as `lookupOptions`, with the built-in values shown in the current
+ * language. Values the user added themselves keep the label they typed.
+ */
+function translatedLookupOptions(
+  inventory: InventoryData,
+  category: string,
+  lang: Lang
+): LookupOption[] {
+  return lookupOptions(inventory, category).map((option) => ({
+    ...option,
+    label: lookupLabel(lang, category, option.value, option.label)
+  }));
 }
 
-function labelFor(inventory: InventoryData, category: string, value?: string) {
+function lookupOptions(inventory: InventoryData, category: string) {
+  const seen = new Set<string>();
+  const out: LookupOption[] = [];
+  // Always surface built-in defaults (e.g. Ipad Drawings) even if this library
+  // was created before they existed or the in-memory list is stale.
+  for (const lookup of [
+    ...DEFAULT_LOOKUPS.filter((item) => item.category === category),
+    ...inventory.lookups.filter((item) => item.category === category)
+  ]) {
+    const key = lookup.value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(lookup);
+  }
+  return out;
+}
+
+/** Stored series value meaning the work is not part of any series. */
+const NO_SERIES_VALUE = "no_series";
+
+function isNoSeries(value?: string): boolean {
+  return (value ?? "").trim() === NO_SERIES_VALUE;
+}
+
+function seriesLabel(value: string | undefined, t: Translate): string {
+  const s = (value ?? "").trim();
+  if (!s) return "—";
+  if (isNoSeries(s)) return t("series.field.none");
+  return s;
+}
+
+function labelFor(
+  inventory: InventoryData,
+  category: string,
+  value?: string,
+  lang: Lang = "es"
+) {
   if (!value) return "";
+  const translated = lookupLabel(lang, category, value, "");
+  if (translated) return translated;
   return (
     inventory.lookups.find(
       (lookup) => lookup.category === category && lookup.value === value
@@ -14703,22 +15689,38 @@ function sortMovementsDesc<T extends { date?: string; createdAt?: string }>(
   );
 }
 
-function movementSummary(movement: Movement, inventory: InventoryData): string {
+function movementSummary(
+  movement: Movement,
+  inventory: InventoryData,
+  t: Translate,
+  lang: Lang = "es"
+): string {
   if (movementKind(movement.type) === "exhibition") {
     const title =
       movement.exhibitionTitle || exhibitionTitle(inventory, movement.exhibitionId);
-    return title ? `Exposición · ${title}` : "Exposición";
+    return title
+      ? t("movement.summary.exhibition", { title })
+      : lookupLabel(
+          lang,
+          "movementType",
+          "exhibition",
+          t("exhibitions.col.exhibition")
+        );
   }
-  return labelFor(inventory, "movementType", movement.type);
+  return labelFor(inventory, "movementType", movement.type, lang);
 }
 
-function movementSubtitle(movement: Movement, inventory: InventoryData): string {
+function movementSubtitle(
+  movement: Movement,
+  inventory: InventoryData,
+  t: Translate
+): string {
   if (movementKind(movement.type) === "exhibition") {
     return movement.returned
-      ? "Devuelta al estudio"
+      ? t("movement.summary.returned")
       : movement.keptAtGallery
-        ? "Con galería tras exposición"
-        : "En exposición";
+        ? t("movement.summary.withGalleryAfter")
+        : t("movement.summary.inExhibition");
   }
   const parts: string[] = [];
   const who = movement.contactName || contactName(inventory, movement.contactId);
@@ -14736,6 +15738,7 @@ const DEFAULT_LOOKUP_KEYS = new Set([
   "artworkType:drawing",
   "artworkType:print",
   "artworkType:mixed_media",
+  "artworkType:ipad_drawing",
   "artworkType:other",
   "status:in_studio",
   "status:sold",

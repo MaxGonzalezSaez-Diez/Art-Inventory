@@ -29,8 +29,8 @@ the Excel file is readable on its own if you ever stop using the app.
 
 ## Languages
 
-The setup screen and the menus are available in **Spanish, English and German**. The rest
-of the interface is still Spanish — translating the remaining screens is in progress.
+The whole interface is available in **Spanish, English and German**. Pick a language on
+first launch, or change it anytime from the sidebar.
 
 ## About this project
 
