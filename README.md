@@ -1,9 +1,6 @@
 # Art Inventory
 
-A small desktop app for artists to keep track of their work: artworks, photos, series,
-exhibitions, contacts, prices and the paperwork that goes with them. Everything is stored
-in a normal folder on your own computer — one Excel file plus your images. No account,
-no cloud, no internet needed.
+A small desktop app for artists to keep track of their work.
 
 [![Download for macOS](https://img.shields.io/badge/Download%20for%20macOS-.dmg-2f6b4f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MaxGonzalezSaez-Diez/Mum-tools/releases/latest/download/ArtInventory-mac.dmg)
 
@@ -24,15 +21,6 @@ On first open the app asks two things: the language, and where to keep your libr
 folder (Documents, Desktop, or anywhere you choose). Both can be changed later from the
 sidebar.
 
-## What it does
-
-- **Artworks** — title, series, technique, size, year, status, photos and notes.
-- **Exhibitions and movements** — where each piece is, where it has been, and when it is due back.
-- **People and galleries** — contacts linked to the works they hold.
-- **Prices** — size factors and price lists, kept per exhibition.
-- **Documents** — artwork booklets, competition applications and certificates of authenticity, exported as PDF.
-- **Text generator** — collects the works, notes and sample texts you pick into a prompt you can paste into ChatGPT.
-
 ## Your data
 
 The app creates one folder (`ArtInventory` by default) containing `inventory.xlsx`, an
@@ -46,10 +34,7 @@ of the interface is still Spanish — translating the remaining screens is in pr
 
 ## About this project
 
-This app was written end to end by AI (GPT models driving Cursor), from the first line to
-this README. I reviewed and shipped it, and I take responsibility for what it does. It is
-a personal tool built for my mother, shared in case it is useful to someone else. There
-are no warranties: read the licence, keep backups of your folder.
+This app was written end to end by AI. There are no warranties: read the licence, keep backups of your folder.
 
 ## Building from source
 
