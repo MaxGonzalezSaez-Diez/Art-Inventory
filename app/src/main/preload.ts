@@ -20,10 +20,22 @@ import type {
   TextGeneratorExample
 } from "./types/inventory";
 import type { ApplicationPdfPayload } from "./applicationPdf";
+import type { AppLanguage, AppPreferences } from "./preferences";
 
 const api = {
   getLibraryPath: (): Promise<string> => ipcRenderer.invoke("library:getPath"),
   chooseLibrary: (): Promise<string> => ipcRenderer.invoke("library:choose"),
+  getPreferences: (): Promise<
+    AppPreferences & { choices: { documents: string; desktop: string } }
+  > => ipcRenderer.invoke("prefs:get"),
+  setLanguage: (language: AppLanguage): Promise<AppPreferences> =>
+    ipcRenderer.invoke("prefs:setLanguage", language),
+  pickLibraryParent: (): Promise<string | null> =>
+    ipcRenderer.invoke("prefs:pickLibraryParent"),
+  completeSetup: (payload: {
+    language: AppLanguage;
+    libraryPath: string;
+  }): Promise<AppPreferences> => ipcRenderer.invoke("prefs:completeSetup", payload),
   loadInventory: (): Promise<InventoryData> => ipcRenderer.invoke("inventory:load"),
   saveArtwork: (input: ArtworkInput): Promise<InventoryData> =>
     ipcRenderer.invoke("artwork:save", input),

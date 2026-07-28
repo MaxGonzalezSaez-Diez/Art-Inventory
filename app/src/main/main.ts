@@ -29,6 +29,13 @@ import {
   type ApplicationPdfPayload
 } from "./applicationPdf";
 import { exportImage, probeImage, type ImageExportOptions } from "./imageExport";
+import {
+  libraryFolderFor,
+  libraryLocationChoices,
+  readPreferences,
+  writePreferences,
+  type AppLanguage
+} from "./preferences";
 import type {
   AppSettings,
   ApplicationInput,
@@ -44,18 +51,16 @@ import type {
 let mainWindow: BrowserWindow | null = null;
 let libraryPath = "";
 
-function defaultLibraryPath(): string {
-  return path.join(app.getPath("documents"), "MumArtLibrary");
-}
-
 function store(): InventoryStore {
-  if (!libraryPath) libraryPath = defaultLibraryPath();
   return new InventoryStore(libraryPath);
 }
 
 async function createWindow(): Promise<void> {
-  libraryPath = defaultLibraryPath();
-  await ensureLibrary(libraryPath);
+  const prefs = await readPreferences();
+  libraryPath = prefs.libraryPath;
+  // Before setup finishes the folder is only a suggestion, so nothing is written
+  // to disk until the user confirms where the library should live.
+  if (prefs.setupComplete) await ensureLibrary(libraryPath);
 
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -99,8 +104,8 @@ app.on("activate", () => {
 });
 
 ipcMain.handle("library:getPath", async () => {
-  await ensureLibrary(libraryPath || defaultLibraryPath());
-  return libraryPath || defaultLibraryPath();
+  await ensureLibrary(libraryPath);
+  return libraryPath;
 });
 
 ipcMain.handle("library:choose", async () => {
@@ -115,8 +120,46 @@ ipcMain.handle("library:choose", async () => {
   if (result.canceled || !result.filePaths[0]) return libraryPath;
   libraryPath = result.filePaths[0];
   await ensureLibrary(libraryPath);
+  await writePreferences({ libraryPath });
   return libraryPath;
 });
+
+ipcMain.handle("prefs:get", async () => ({
+  ...(await readPreferences()),
+  choices: libraryLocationChoices()
+}));
+
+ipcMain.handle("prefs:setLanguage", async (_event, language: AppLanguage) =>
+  writePreferences({ language })
+);
+
+/** Lets the setup screen offer a folder other than Documents or Desktop. */
+ipcMain.handle("prefs:pickLibraryParent", async () => {
+  const options: OpenDialogOptions = {
+    title: "Where should the library live?",
+    properties: ["openDirectory", "createDirectory"]
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) return null;
+  return libraryFolderFor(result.filePaths[0]);
+});
+
+ipcMain.handle(
+  "prefs:completeSetup",
+  async (_event, payload: { language: AppLanguage; libraryPath: string }) => {
+    const chosen = String(payload?.libraryPath ?? "").trim();
+    if (!chosen) throw new Error("No folder was chosen for the library.");
+    await ensureLibrary(chosen);
+    libraryPath = chosen;
+    return writePreferences({
+      language: payload?.language,
+      libraryPath: chosen,
+      setupComplete: true
+    });
+  }
+);
 
 ipcMain.handle("inventory:load", async () => store().load());
 ipcMain.handle("artwork:save", async (_event, input: ArtworkInput) =>

@@ -1,0 +1,50 @@
+name: Release macOS app
+
+# Tag a commit (git tag v0.2.0 && git push --tags) and the DMG shows up as the
+# latest release, at a URL the README button can always point at.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # No Apple Developer certificate: the app is ad-hoc signed, which is why
+      # the README explains the Gatekeeper warning on first open.
+      - name: Build DMG
+        run: npm run dist:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "$TAG" = "main" ] || [ -z "$TAG" ]; then TAG="manual-$(date +%Y%m%d%H%M)"; fi
+          gh release create "$TAG" release/ArtInventory-mac.dmg \
+            --title "$TAG" \
+            --notes "macOS build. See the README for how to open it the first time." \
+            || gh release upload "$TAG" release/ArtInventory-mac.dmg --clobber

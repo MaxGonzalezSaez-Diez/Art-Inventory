@@ -47,6 +47,15 @@ import type {
   TextGeneratorExample
 } from "../main/types/inventory";
 import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT } from "../main/types/inventory";
+import type { AppPreferences } from "../main/preferences";
+import {
+  LANGUAGE_OPTIONS,
+  LanguageProvider,
+  translate,
+  useT,
+  type Lang,
+  type Translate
+} from "./i18n";
 import { buildApplicationHtml } from "../main/applicationDocumentHtml";
 
 /** Import an edited JPEG/PNG data-URL as an artwork main photo. */
@@ -122,6 +131,7 @@ const emptyArtwork: ArtworkInput = {
 };
 
 export function App() {
+  const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [page, setPage] = useState<Page>("library");
   const [selectedArtworkId, setSelectedArtworkId] = useState("");
@@ -146,7 +156,11 @@ export function App() {
   const [appResetToken, setAppResetToken] = useState(0);
 
   useEffect(() => {
-    void refresh();
+    void (async () => {
+      const loaded = await loadPreferences();
+      setPrefs(loaded);
+      if (loaded.setupComplete) await refresh();
+    })();
   }, []);
 
   useEffect(() => {
@@ -173,7 +187,17 @@ export function App() {
 
   async function chooseLibrary() {
     await window.inventoryApi.chooseLibrary();
+    setPrefs(await loadPreferences());
     await refresh();
+  }
+
+  async function changeLanguage(next: Lang) {
+    setPrefs((current) => (current ? { ...current, language: next } : current));
+    try {
+      await requireApi("setLanguage")(next);
+    } catch {
+      /* the choice still applies to this session */
+    }
   }
 
   function guarded(action: () => void) {
@@ -241,22 +265,49 @@ export function App() {
     (contact) => contact.id === selectedContactId
   );
 
+  if (!prefs) return <div className="boot-screen">…</div>;
+
+  const lang = prefs.language;
+  const t: Translate = (key) => translate(lang, key);
+
+  if (!prefs.setupComplete) {
+    return (
+      <LanguageProvider value={{ lang, t }}>
+        <SetupScreen
+          preferences={prefs}
+          onLanguageChange={(next) =>
+            setPrefs((current) =>
+              current ? { ...current, language: next } : current
+            )
+          }
+          onDone={async (saved) => {
+            setPrefs((current) =>
+              current ? { ...current, ...saved, setupComplete: true } : current
+            );
+            await refresh();
+          }}
+        />
+      </LanguageProvider>
+    );
+  }
+
   return (
+    <LanguageProvider value={{ lang, t }}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <p className="eyebrow">Inventario</p>
-          <h1>Obras de arte</h1>
+          <p className="eyebrow">{t("brand.eyebrow")}</p>
+          <h1>{t("brand.title")}</h1>
         </div>
         <nav>
           <NavButton active={page === "library" || page === "form" || page === "detail"} onClick={() => guarded(() => goTo("library"))}>
-            <span className="nav-dot dot-obras" /> Lista de obras
+            <span className="nav-dot dot-obras" /> {t("nav.library")}
           </NavButton>
           <NavButton active={page === "series"} onClick={() => guarded(() => goTo("series"))}>
-            <span className="nav-dot dot-series" /> Series (metadatos)
+            <span className="nav-dot dot-series" /> {t("nav.series")}
           </NavButton>
           <NavButton active={page === "contacts"} onClick={() => guarded(() => goTo("contacts"))}>
-            <span className="nav-dot dot-people" /> Personas y galerías
+            <span className="nav-dot dot-people" /> {t("nav.contacts")}
           </NavButton>
           <NavButton
             active={page === "exhibitions"}
@@ -268,19 +319,19 @@ export function App() {
               })
             }
           >
-            <span className="nav-dot dot-exh" /> Exposiciones
+            <span className="nav-dot dot-exh" /> {t("nav.exhibitions")}
           </NavButton>
           <NavButton active={page === "pricelist"} onClick={() => guarded(() => openPriceList(null))}>
-            <span className="nav-dot dot-price" /> Folleto de obras
+            <span className="nav-dot dot-price" /> {t("nav.pricelist")}
           </NavButton>
           <NavButton active={page === "pricing"} onClick={() => guarded(() => goTo("pricing"))}>
-            <span className="nav-dot dot-factor" /> Factores y precios
+            <span className="nav-dot dot-factor" /> {t("nav.pricing")}
           </NavButton>
           <NavButton
             active={page === "financials"}
             onClick={() => guarded(() => goTo("financials"))}
           >
-            <span className="nav-dot dot-money" /> Cuentas
+            <span className="nav-dot dot-money" /> {t("nav.financials")}
           </NavButton>
           <NavButton
             active={page === "applications"}
@@ -291,26 +342,39 @@ export function App() {
               })
             }
           >
-            <span className="nav-dot dot-app" /> Solicitudes
+            <span className="nav-dot dot-app" /> {t("nav.applications")}
           </NavButton>
           <NavButton
             active={page === "textGenerator"}
             onClick={() => guarded(() => goTo("textGenerator"))}
           >
-            <span className="nav-dot dot-textgen" /> Generador de texto
+            <span className="nav-dot dot-textgen" /> {t("nav.textGenerator")}
           </NavButton>
           <NavButton
             active={page === "examples"}
             onClick={() => guarded(() => goTo("examples"))}
           >
-            <span className="nav-dot dot-examples" /> Biblioteca de ejemplos
+            <span className="nav-dot dot-examples" /> {t("nav.examples")}
           </NavButton>
         </nav>
         <div className="library-path">
-          <span>Carpeta local</span>
+          <label className="sidebar-language">
+            {t("sidebar.language")}
+            <select
+              value={lang}
+              onChange={(event) => void changeLanguage(event.target.value as Lang)}
+            >
+              {LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span>{t("sidebar.folder")}</span>
           <strong>{inventory?.libraryPath ?? "..."}</strong>
           <button className="ghost small" onClick={chooseLibrary}>
-            Cambiar carpeta
+            {t("sidebar.changeFolder")}
           </button>
         </div>
       </aside>
@@ -545,6 +609,158 @@ export function App() {
           </div>
         </div>
       )}
+    </div>
+    </LanguageProvider>
+  );
+}
+
+interface Preferences extends AppPreferences {
+  choices: { documents: string; desktop: string };
+}
+
+async function loadPreferences(): Promise<Preferences> {
+  const api = window.inventoryApi?.getPreferences;
+  if (typeof api !== "function") {
+    // Stale preload during development: behave like a finished setup.
+    const libraryPath = await window.inventoryApi.getLibraryPath();
+    return {
+      language: "es",
+      libraryPath,
+      setupComplete: true,
+      choices: { documents: libraryPath, desktop: libraryPath }
+    };
+  }
+  return api();
+}
+
+/** First run: pick a language and where the library folder should be created. */
+function SetupScreen({
+  preferences,
+  onLanguageChange,
+  onDone
+}: {
+  preferences: Preferences;
+  onLanguageChange: (lang: Lang) => void;
+  onDone: (saved: { language: Lang; libraryPath: string }) => Promise<void>;
+}) {
+  const t = useT();
+  const [target, setTarget] = useState(
+    preferences.libraryPath || preferences.choices.documents
+  );
+  const [customPath, setCustomPath] = useState(() =>
+    preferences.libraryPath === preferences.choices.documents ||
+    preferences.libraryPath === preferences.choices.desktop
+      ? ""
+      : preferences.libraryPath
+  );
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+
+  const choice =
+    target === preferences.choices.documents
+      ? "documents"
+      : target === preferences.choices.desktop
+        ? "desktop"
+        : "custom";
+
+  async function pickCustom() {
+    try {
+      const picked = await requireApi("pickLibraryParent")();
+      if (!picked) return;
+      setCustomPath(picked);
+      setTarget(picked);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("setup.failed"));
+    }
+  }
+
+  async function start() {
+    setWorking(true);
+    setError("");
+    try {
+      const saved = await requireApi("completeSetup")({
+        language: preferences.language,
+        libraryPath: target
+      });
+      await onDone({ language: saved.language, libraryPath: saved.libraryPath });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("setup.failed"));
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="setup-screen">
+      <div className="setup-card">
+        <p className="eyebrow">{t("setup.welcome")}</p>
+        <h1>{t("setup.title")}</h1>
+        <p className="page-lead">{t("setup.lead")}</p>
+
+        <section className="setup-block">
+          <h2>{t("setup.step1")}</h2>
+          <div className="setup-options">
+            {LANGUAGE_OPTIONS.map((option) => (
+              <button
+                type="button"
+                key={option.value}
+                className={`setup-option${
+                  preferences.language === option.value ? " is-picked" : ""
+                }`}
+                onClick={() => onLanguageChange(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="muted small-note">{t("setup.step1Help")}</p>
+        </section>
+
+        <section className="setup-block">
+          <h2>{t("setup.step2")}</h2>
+          <div className="setup-options">
+            <button
+              type="button"
+              className={`setup-option${choice === "documents" ? " is-picked" : ""}`}
+              onClick={() => setTarget(preferences.choices.documents)}
+            >
+              {t("setup.documents")}
+            </button>
+            <button
+              type="button"
+              className={`setup-option${choice === "desktop" ? " is-picked" : ""}`}
+              onClick={() => setTarget(preferences.choices.desktop)}
+            >
+              {t("setup.desktop")}
+            </button>
+            <button
+              type="button"
+              className={`setup-option${choice === "custom" ? " is-picked" : ""}`}
+              onClick={() => (customPath ? setTarget(customPath) : void pickCustom())}
+            >
+              {t("setup.custom")}
+            </button>
+            {choice === "custom" && (
+              <button type="button" className="ghost small" onClick={() => void pickCustom()}>
+                {t("setup.chooseFolder")}
+              </button>
+            )}
+          </div>
+          <p className="muted small-note">{t("setup.step2Help")}</p>
+          <p className="setup-path">{target}</p>
+          <p className="muted small-note">{t("setup.existingNote")}</p>
+        </section>
+
+        {error && <p className="notice">{error}</p>}
+
+        <button
+          type="button"
+          className="cuentas-primary setup-start"
+          disabled={working}
+          onClick={() => void start()}
+        >
+          {working ? t("setup.working") : t("setup.start")}
+        </button>
+      </div>
     </div>
   );
 }
