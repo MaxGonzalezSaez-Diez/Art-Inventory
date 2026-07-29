@@ -1,21 +1,16 @@
 # Art Inventory
 
-A small desktop app for artists to keep track of their work.
+A desktop app for artists to keep track of their work.
 
 [![Download for macOS](https://img.shields.io/badge/Download%20for%20macOS-.dmg-2f6b4f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MaxGonzalezSaez-Diez/Mum-tools/releases/latest/download/ArtInventory-mac.dmg)
 
-macOS only, Apple Silicon and Intel.
+macOS only
 
 ## Opening it the first time
 
 1. Open the downloaded `.dmg` and drag **Inventario de Arte** into Applications.
 2. The first launch shows a warning, because the app is not signed with a paid Apple
    developer certificate. Right-click the app and choose **Open**, then confirm.
-3. If macOS still refuses, run this once in Terminal:
-
-   ```bash
-   xattr -dr com.apple.quarantine "/Applications/Inventario de Arte.app"
-   ```
 
 On first open the app asks two things: the language, and where to keep your library
 folder (Documents, Desktop, or anywhere you choose). Both can be changed later from the
@@ -34,16 +29,7 @@ first launch, or change it anytime from the sidebar.
 
 ## About this project
 
-This app was written end to end by AI. There are no warranties: read the licence, keep backups of your folder.
-
-## Building from source
-
-```bash
-cd app
-npm install
-npm run dev     # development
-npm run dist:mac  # produces release/ArtInventory-mac.dmg
-```
+This app was written end to end by AI. There are NO WARRANTIES WHATSOEVER. You are responsible. Read the licence, keep backups of your folder.
 
 ## Licence
 
