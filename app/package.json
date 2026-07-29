@@ -1,5 +1,5 @@
 {
-  "name": "mum-art-inventory",
+  "name": "art-inventory",
   "version": "0.1.0",
   "private": true,
   "description": "A local desktop art inventory app with an Excel workbook backend.",
@@ -7,7 +7,7 @@
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MaxGonzalezSaez-Diez/Mum-tools.git"
+    "url": "https://github.com/MaxGonzalezSaez-Diez/Art-Inventory.git"
   },
   "main": "dist/main/main.js",
   "scripts": {
@@ -15,9 +15,9 @@
     "build": "tsc -p tsconfig.main.json && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit",
     "start": "npm run build && electron .",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win"
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never"
   },
   "build": {
     "appId": "com.mumart.inventory",
