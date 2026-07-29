@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, shell, type SaveDialogOptions } from "electron";
+import { BrowserWindow, shell } from "electron";
 import { writeFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
@@ -7,6 +7,7 @@ import {
   buildApplicationHtml,
   type ApplicationPdfPayload
 } from "./applicationDocumentHtml";
+import { chooseGeneratedSavePath } from "./exportPath";
 
 export type {
   ApplicationPdfPayload,
@@ -18,17 +19,19 @@ export { buildApplicationHtml } from "./applicationDocumentHtml";
 
 export async function generateApplicationDocument(
   mainWindow: BrowserWindow | null,
-  payload: ApplicationPdfPayload
+  payload: ApplicationPdfPayload,
+  libraryPath = ""
 ): Promise<string | null> {
-  const options: SaveDialogOptions = {
-    title: "Guardar solicitud en PDF",
-    defaultPath: `${(payload.title || "solicitud").replace(/[\\/:*?"<>|]/g, "_")}.pdf`,
-    filters: [{ name: "PDF", extensions: ["pdf"] }]
-  };
-  const result = mainWindow
-    ? await dialog.showSaveDialog(mainWindow, options)
-    : await dialog.showSaveDialog(options);
-  if (result.canceled || !result.filePath) return null;
+  const filePath = await chooseGeneratedSavePath(
+    mainWindow,
+    libraryPath,
+    `${(payload.title || "solicitud").replace(/[\\/:*?"<>|]/g, "_")}.pdf`,
+    {
+      title: "Guardar solicitud en PDF",
+      filters: [{ name: "PDF", extensions: ["pdf"] }]
+    }
+  );
+  if (!filePath) return null;
 
   const html = buildApplicationHtml(payload);
   const tempHtml = path.join(tmpdir(), `solicitud-${randomUUID()}.html`);
@@ -68,9 +71,9 @@ export async function generateApplicationDocument(
       margins: { marginType: "none" },
       displayHeaderFooter: false
     });
-    await writeFile(result.filePath, pdf);
-    void shell.openPath(result.filePath);
-    return result.filePath;
+    await writeFile(filePath, pdf);
+    void shell.openPath(filePath);
+    return filePath;
   } finally {
     win.destroy();
     void unlink(tempHtml).catch(() => undefined);
@@ -80,7 +83,8 @@ export async function generateApplicationDocument(
 /** @deprecated use generateApplicationDocument */
 export async function generateApplicationPdf(
   mainWindow: BrowserWindow | null,
-  payload: ApplicationPdfPayload
+  payload: ApplicationPdfPayload,
+  libraryPath = ""
 ): Promise<string | null> {
-  return generateApplicationDocument(mainWindow, payload);
+  return generateApplicationDocument(mainWindow, payload, libraryPath);
 }

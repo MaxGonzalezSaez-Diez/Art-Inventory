@@ -363,6 +363,26 @@ const strings = {
     en: "Artwork title",
     de: "Werktitel"
   },
+  "artwork.field.id": {
+    es: "ID",
+    en: "ID",
+    de: "ID"
+  },
+  "artwork.field.idPlaceholder": {
+    es: "Se crea al guardar",
+    en: "Created on save",
+    de: "Wird beim Speichern erzeugt"
+  },
+  "artwork.field.idHintPreview": {
+    es: "Vista previa del ID. Se confirma al pulsar Guardar.",
+    en: "ID preview. Confirmed when you press Save.",
+    de: "ID-Vorschau. Wird beim Speichern bestätigt."
+  },
+  "artwork.field.idHintSaved": {
+    es: "ID permanente de la obra (no cambia al editar).",
+    en: "Permanent work ID (does not change on edit).",
+    de: "Dauerhafte Werk-ID (ändert sich beim Bearbeiten nicht)."
+  },
   "artwork.field.type": { es: "Técnica", en: "Technique", de: "Technik" },
   "artwork.field.series": { es: "Serie", en: "Series", de: "Serie" },
   "artwork.field.year": { es: "Año", en: "Year", de: "Jahr" },
@@ -4495,6 +4515,11 @@ export const LOOKUP_LABELS = {
     es: "Ipad Drawings",
     en: "Ipad Drawings",
     de: "Ipad Drawings"
+  },
+  "artworkType:plexiglass": {
+    es: "Plexiglass",
+    en: "Plexiglass",
+    de: "Plexiglas"
   },
   "artworkType:other": { es: "Otro", en: "Other", de: "Sonstiges" },
 

@@ -3,14 +3,13 @@
  */
 import {
   BrowserWindow,
-  dialog,
-  shell,
-  type SaveDialogOptions
+  shell
 } from "electron";
 import { writeFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import path from "path";
+import { chooseGeneratedSavePath } from "./exportPath";
 import { makeGeneratedFileEditable } from "./makeFileEditable";
 
 export type CertificateLang = "es" | "en" | "de";
@@ -403,7 +402,8 @@ ${detailLines.join("\n")}
 
 export async function generateCertificateOfAuthenticity(
   parentWindow: BrowserWindow | null,
-  payload: CertificatePayload
+  payload: CertificatePayload,
+  libraryPath = ""
 ): Promise<string | null> {
   const lang = resolveLang(payload.language);
   const t = COPY[lang];
@@ -416,17 +416,16 @@ export async function generateCertificateOfAuthenticity(
       .replace(/^-+|-+$/g, "")
       .slice(0, 50)}` || t.filePrefix;
 
-  const options: SaveDialogOptions = {
-    title: t.saveTitle,
-    defaultPath: `${safeName}.pdf`,
-    filters: [{ name: "PDF", extensions: ["pdf"] }]
-  };
-
-  const result = parentWindow
-    ? await dialog.showSaveDialog(parentWindow, options)
-    : await dialog.showSaveDialog(options);
-
-  if (result.canceled || !result.filePath) return null;
+  const filePath = await chooseGeneratedSavePath(
+    parentWindow,
+    libraryPath,
+    `${safeName}.pdf`,
+    {
+      title: t.saveTitle,
+      filters: [{ name: "PDF", extensions: ["pdf"] }]
+    }
+  );
+  if (!filePath) return null;
 
   const win = new BrowserWindow({
     show: false,
@@ -444,10 +443,10 @@ export async function generateCertificateOfAuthenticity(
       margins: { marginType: "none" },
       displayHeaderFooter: false
     });
-    await writeFile(result.filePath, pdf);
-    await makeGeneratedFileEditable(result.filePath);
-    void shell.openPath(result.filePath);
-    return result.filePath;
+    await writeFile(filePath, pdf);
+    await makeGeneratedFileEditable(filePath);
+    void shell.openPath(filePath);
+    return filePath;
   } finally {
     win.destroy();
     void unlink(tempFile).catch(() => undefined);

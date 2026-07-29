@@ -19,8 +19,10 @@ sidebar.
 ## Your data
 
 The app creates one folder (`ArtInventory` by default) containing `inventory.xlsx`, an
-`images` folder and dated backups. Copy it, move it or back it up like any other folder;
-the Excel file is readable on its own if you ever stop using the app.
+`images` folder, a `generated` folder (PDFs, exported images, Excel sheets, and other
+files the app creates — the save dialog opens there by default), and dated backups.
+Copy it, move it or back it up like any other folder; the Excel file is readable on its
+own if you ever stop using the app.
 
 ## Languages
 

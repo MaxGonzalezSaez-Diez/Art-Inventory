@@ -16,6 +16,7 @@ import path from "path";
 import ExcelJS from "exceljs";
 import { InventoryStore } from "./excel/inventoryStore";
 import { ensureLibrary } from "./excel/workbook";
+import { chooseGeneratedSavePath } from "./exportPath";
 import {
   generatePriceList,
   type PriceListPayload
@@ -186,12 +187,12 @@ ipcMain.handle(
 ipcMain.handle(
   "pricelist:generate",
   async (_event, payload: PriceListPayload) =>
-    generatePriceList(mainWindow, payload)
+    generatePriceList(mainWindow, payload, libraryPath)
 );
 ipcMain.handle(
   "certificate:generate",
   async (_event, payload: CertificatePayload) =>
-    generateCertificateOfAuthenticity(mainWindow, payload)
+    generateCertificateOfAuthenticity(mainWindow, payload, libraryPath)
 );
 ipcMain.handle("exhibition:delete", async (_event, exhibitionId: string) =>
   store().deleteExhibition(exhibitionId)
@@ -391,7 +392,7 @@ ipcMain.handle("application:delete", async (_event, applicationId: string) =>
 ipcMain.handle(
   "application:generatePdf",
   async (_event, payload: ApplicationPdfPayload) =>
-    generateApplicationDocument(mainWindow, payload)
+    generateApplicationDocument(mainWindow, payload, libraryPath)
 );
 ipcMain.handle(
   "pricing:exportSheet",
@@ -404,15 +405,16 @@ ipcMain.handle(
       rows: Array<Array<string | number>>;
     }
   ): Promise<string | null> => {
-    const options = {
-      title: "Guardar hoja de cálculo",
-      defaultPath: payload.filename || "precios.xlsx",
-      filters: [{ name: "Excel", extensions: ["xlsx"] }]
-    };
-    const result = mainWindow
-      ? await dialog.showSaveDialog(mainWindow, options)
-      : await dialog.showSaveDialog(options);
-    if (result.canceled || !result.filePath) return null;
+    const filePath = await chooseGeneratedSavePath(
+      mainWindow,
+      libraryPath,
+      payload.filename || "precios.xlsx",
+      {
+        title: "Guardar hoja de cálculo",
+        filters: [{ name: "Excel", extensions: ["xlsx"] }]
+      }
+    );
+    if (!filePath) return null;
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet(payload.sheetName || "Precios");
@@ -427,9 +429,9 @@ ipcMain.handle(
       });
       column.width = Math.min(max + 2, 40);
     });
-    await workbook.xlsx.writeFile(result.filePath);
-    void shell.openPath(result.filePath);
-    return result.filePath;
+    await workbook.xlsx.writeFile(filePath);
+    void shell.openPath(filePath);
+    return filePath;
   }
 );
 ipcMain.handle(
@@ -461,15 +463,16 @@ ipcMain.handle(
       totals: { spent: number; earned: number; net: number };
     }
   ): Promise<string | null> => {
-    const options = {
-      title: "Guardar resumen de cuentas",
-      defaultPath: payload.filename || "cuentas.xlsx",
-      filters: [{ name: "Excel", extensions: ["xlsx"] }]
-    };
-    const result = mainWindow
-      ? await dialog.showSaveDialog(mainWindow, options)
-      : await dialog.showSaveDialog(options);
-    if (result.canceled || !result.filePath) return null;
+    const filePath = await chooseGeneratedSavePath(
+      mainWindow,
+      libraryPath,
+      payload.filename || "cuentas.xlsx",
+      {
+        title: "Guardar resumen de cuentas",
+        filters: [{ name: "Excel", extensions: ["xlsx"] }]
+      }
+    );
+    if (!filePath) return null;
 
     const workbook = new ExcelJS.Workbook();
     const summary = workbook.addWorksheet("Resumen");
@@ -564,9 +567,9 @@ ipcMain.handle(
       column.width = [14, 14, 22, 28, 18, 24, 16, 12][index] ?? 14;
     });
 
-    await workbook.xlsx.writeFile(result.filePath);
-    void shell.openPath(result.filePath);
-    return result.filePath;
+    await workbook.xlsx.writeFile(filePath);
+    void shell.openPath(filePath);
+    return filePath;
   }
 );
 ipcMain.handle("lookup:save", async (_event, input: LookupInput) =>
@@ -650,7 +653,8 @@ ipcMain.handle(
 
 ipcMain.handle(
   "image:export",
-  async (_event, options: ImageExportOptions) => exportImage(mainWindow, options)
+  async (_event, options: ImageExportOptions) =>
+    exportImage(mainWindow, options, libraryPath)
 );
 
 ipcMain.handle("image:probe", async (_event, sourcePath: string) =>
@@ -798,16 +802,15 @@ ipcMain.handle(
       .replace(/[^\p{L}\p{N}_-]+/gu, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 60) || "imagen";
-    const options = {
-      title: "Guardar copia de la imagen",
-      defaultPath: `${base}${ext}`
-    };
-    const result = mainWindow
-      ? await dialog.showSaveDialog(mainWindow, options)
-      : await dialog.showSaveDialog(options);
-    if (result.canceled || !result.filePath) return null;
-    await copyFile(filePath, result.filePath);
-    return result.filePath;
+    const destination = await chooseGeneratedSavePath(
+      mainWindow,
+      libraryPath,
+      `${base}${ext}`,
+      { title: "Guardar copia de la imagen" }
+    );
+    if (!destination) return null;
+    await copyFile(filePath, destination);
+    return destination;
   }
 );
 

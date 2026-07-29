@@ -49,6 +49,7 @@ import type {
   TextGeneratorExample
 } from "../main/types/inventory";
 import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT, DEFAULT_FIXED_TYPE_PRICES } from "../main/types/inventory";
+import { buildArtworkIdBase } from "../main/artworkId";
 import { DEFAULT_LOOKUPS } from "../main/excel/schema";
 import type { AppPreferences } from "../main/preferences";
 import {
@@ -1418,6 +1419,31 @@ function ArtworkForm({
                       value={form.title}
                       placeholder={t("artwork.field.titlePlaceholder")}
                       onChange={(event) => update("title", event.target.value)}
+                    />
+                  </label>
+
+                  <label className="field">
+                    {t("artwork.field.id")}
+                    <input
+                      className="artwork-id-readonly"
+                      value={
+                        form.id ||
+                        buildArtworkIdBase({
+                          title: form.title,
+                          yearMade: form.yearMade,
+                          height: isIpadDrawing ? "" : form.height,
+                          width: isIpadDrawing ? "" : form.width,
+                          unit: form.unit
+                        })
+                      }
+                      placeholder={t("artwork.field.idPlaceholder")}
+                      readOnly
+                      disabled
+                      title={
+                        form.id
+                          ? t("artwork.field.idHintSaved")
+                          : t("artwork.field.idHintPreview")
+                      }
                     />
                   </label>
 
@@ -9353,7 +9379,12 @@ function PricingSettingsPage({
                 {
                   id: `fp-${Date.now()}`,
                   from: today,
-                  price: typeValue === "ipad_drawing" ? 250 : 0
+                  price:
+                    typeValue === "ipad_drawing"
+                      ? 250
+                      : typeValue === "plexiglass"
+                        ? 400
+                        : 0
                 }
               ]
             };
@@ -10794,6 +10825,11 @@ const ART_TYPE_I18N: Record<string, Record<PriceLang, string>> = {
     es: "Ipad Drawings",
     de: "Ipad Drawings",
     en: "Ipad Drawings"
+  },
+  plexiglass: {
+    es: "Plexiglass",
+    de: "Plexiglas",
+    en: "Plexiglass"
   },
   other: { es: "Otro", de: "Sonstiges", en: "Other" }
 };
@@ -15727,6 +15763,7 @@ const DEFAULT_LOOKUP_KEYS = new Set([
   "artworkType:print",
   "artworkType:mixed_media",
   "artworkType:ipad_drawing",
+  "artworkType:plexiglass",
   "artworkType:other",
   "status:in_studio",
   "status:sold",

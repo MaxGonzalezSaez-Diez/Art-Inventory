@@ -30,6 +30,7 @@ import type {
   EditionMode
 } from "../types/inventory";
 import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT, DEFAULT_FIXED_TYPE_PRICES } from "../types/inventory";
+import { createArtworkId } from "../artworkId";
 import {
   createEmptyWorkbook,
   ensureLibrary,
@@ -110,8 +111,19 @@ export class InventoryStore {
     const existing = input.id
       ? data.artworks.find((artwork) => artwork.id === input.id)
       : undefined;
+    const existingIds = data.artworks.map((item) => item.id);
     const id =
-      existing?.id ?? input.id ?? yearRandomId(data.artworks.map((item) => item.id));
+      existing?.id ??
+      createArtworkId(
+        {
+          title,
+          yearMade: input.yearMade,
+          height: input.height,
+          width: input.width,
+          unit: input.unit
+        },
+        existingIds
+      );
 
     const is3D = isThreeDimensional(input.type);
     const editionMode = input.editionMode ?? "unique";
@@ -1705,15 +1717,6 @@ function withResolvedImagePaths(
 
 function withImagePath(image: ArtworkImage, libraryPath: string): ArtworkImage {
   return { ...image, absolutePath: path.join(libraryPath, image.relativePath) };
-}
-
-function yearRandomId(existingIds: string[]): string {
-  const year = new Date().getFullYear();
-  let candidate = "";
-  do {
-    candidate = `${year}-${Math.floor(1000 + Math.random() * 9000)}`;
-  } while (existingIds.includes(candidate));
-  return candidate;
 }
 
 function slugify(value?: string): string {

@@ -1,13 +1,12 @@
 import {
   BrowserWindow,
-  dialog,
   nativeImage,
   shell,
-  type NativeImage,
-  type SaveDialogOptions
+  type NativeImage
 } from "electron";
 import { writeFile } from "fs/promises";
 import path from "path";
+import { chooseGeneratedSavePath } from "./exportPath";
 
 export type ImageExportFormat = "jpg" | "png" | "pdf";
 
@@ -332,7 +331,8 @@ function sanitizeName(name: string): string {
 
 export async function exportImage(
   parentWindow: BrowserWindow | null,
-  options: ImageExportOptions
+  options: ImageExportOptions,
+  libraryPath = ""
 ): Promise<ImageExportResult | null> {
   const source = nativeImage.createFromPath(options.sourcePath);
   if (source.isEmpty()) {
@@ -347,15 +347,16 @@ export async function exportImage(
   const filterName =
     options.format === "pdf" ? "PDF" : options.format === "png" ? "PNG" : "JPEG";
 
-  const dialogOptions: SaveDialogOptions = {
-    title: "Guardar imagen",
-    defaultPath: `${base}.${extension}`,
-    filters: [{ name: filterName, extensions: [extension] }]
-  };
-  const result = parentWindow
-    ? await dialog.showSaveDialog(parentWindow, dialogOptions)
-    : await dialog.showSaveDialog(dialogOptions);
-  if (result.canceled || !result.filePath) return null;
+  const filePath = await chooseGeneratedSavePath(
+    parentWindow,
+    libraryPath,
+    `${base}.${extension}`,
+    {
+      title: "Guardar imagen",
+      filters: [{ name: filterName, extensions: [extension] }]
+    }
+  );
+  if (!filePath) return null;
 
   const targetBytes = options.targetKB
     ? Math.round(options.targetKB * 1024)
@@ -384,10 +385,10 @@ export async function exportImage(
     buffer = applyDpiMetadata(encoded.buffer, options.format, prepared.dpi);
   }
 
-  await writeFile(result.filePath, buffer);
-  shell.showItemInFolder(result.filePath);
+  await writeFile(filePath, buffer);
+  shell.showItemInFolder(filePath);
   return {
-    path: result.filePath,
+    path: filePath,
     bytes: buffer.length,
     width,
     height,

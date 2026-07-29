@@ -1,8 +1,9 @@
-import { BrowserWindow, dialog, shell, type SaveDialogOptions } from "electron";
+import { BrowserWindow, shell } from "electron";
 import { writeFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { randomUUID } from "crypto";
+import { chooseGeneratedSavePath } from "./exportPath";
 import { makeGeneratedFileEditable } from "./makeFileEditable";
 
 export interface PriceListRow {
@@ -260,7 +261,8 @@ async function renderPdf(payload: PriceListPayload): Promise<Buffer> {
 
 export async function generatePriceList(
   parentWindow: BrowserWindow | null,
-  payload: PriceListPayload
+  payload: PriceListPayload,
+  libraryPath = ""
 ): Promise<string | null> {
   const safeName =
     (payload.header || "lista-de-precios")
@@ -269,21 +271,20 @@ export async function generatePriceList(
       .replace(/^-+|-+$/g, "")
       .slice(0, 60) || "lista-de-precios";
 
-  const options: SaveDialogOptions = {
-    title: "Guardar lista de precios",
-    defaultPath: `${safeName}.pdf`,
-    filters: [{ name: "PDF", extensions: ["pdf"] }]
-  };
-
-  const result = parentWindow
-    ? await dialog.showSaveDialog(parentWindow, options)
-    : await dialog.showSaveDialog(options);
-
-  if (result.canceled || !result.filePath) return null;
+  const filePath = await chooseGeneratedSavePath(
+    parentWindow,
+    libraryPath,
+    `${safeName}.pdf`,
+    {
+      title: "Guardar lista de precios",
+      filters: [{ name: "PDF", extensions: ["pdf"] }]
+    }
+  );
+  if (!filePath) return null;
 
   const buffer = await renderPdf(payload);
-  await writeFile(result.filePath, buffer);
-  await makeGeneratedFileEditable(result.filePath);
-  void shell.openPath(result.filePath);
-  return result.filePath;
+  await writeFile(filePath, buffer);
+  await makeGeneratedFileEditable(filePath);
+  void shell.openPath(filePath);
+  return filePath;
 }

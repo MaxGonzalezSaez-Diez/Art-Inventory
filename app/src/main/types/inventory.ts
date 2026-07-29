@@ -342,6 +342,10 @@ export const DEFAULT_FIXED_TYPE_PRICES: FixedTypePrice[] = [
   {
     typeValue: "ipad_drawing",
     prices: [{ id: "fp-ipad-default", from: "", price: 250 }]
+  },
+  {
+    typeValue: "plexiglass",
+    prices: [{ id: "fp-plexiglass-default", from: "", price: 400 }]
   }
 ];
 

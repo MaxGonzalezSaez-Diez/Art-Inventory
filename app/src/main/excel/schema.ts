@@ -6,6 +6,7 @@ export const LIBRARY_DIRECTORIES = [
   "images/originals",
   "images/editions",
   "images/exhibitions",
+  "generated",
   "backups"
 ] as const;
 
@@ -143,6 +144,7 @@ export const DEFAULT_LOOKUPS: LookupOption[] = [
   { category: "artworkType", value: "print", label: "Grabado / impresión" },
   { category: "artworkType", value: "mixed_media", label: "Técnica mixta" },
   { category: "artworkType", value: "ipad_drawing", label: "Ipad Drawings" },
+  { category: "artworkType", value: "plexiglass", label: "Plexiglass" },
   { category: "artworkType", value: "other", label: "Otro" },
   { category: "status", value: "not_made", label: "No generada" },
   { category: "status", value: "in_studio", label: "En estudio" },
