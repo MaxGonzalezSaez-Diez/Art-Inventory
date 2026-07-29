@@ -87,6 +87,8 @@ export interface ApplicationPdfPayload {
    * - worksOnly: single works heading → first work page
    */
   tocWorksMode?: "list" | "bySeries" | "worksOnly";
+  /** When false, omit the cover table of contents. Default true. */
+  showToc?: boolean;
   /** e.g. "cuadro" / "cuadros" for bySeries labels */
   workSingularLabel?: string;
   workPluralLabel?: string;
@@ -914,10 +916,14 @@ export function buildApplicationHtml(payload: ApplicationPdfPayload): string {
             : ""
         }
       </div>
-      <div class="cover-toc">
+      ${
+        payload.showToc === false
+          ? ""
+          : `<div class="cover-toc">
         <p class="toc-label">${escapeHtml(tocLabel)}</p>
         <div class="toc">${tocHtml || `<p class="cover-line">—</p>`}</div>
-      </div>
+      </div>`
+      }
     </div>
     ${"" /* cover: no footer */}
   </section>

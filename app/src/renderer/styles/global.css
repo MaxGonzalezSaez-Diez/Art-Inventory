@@ -6249,6 +6249,22 @@ button.ghost.danger:hover {
   display: grid;
   gap: 0.45rem;
 }
+.textgen-brief-row {
+  align-items: start;
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: minmax(0, 1.6fr) minmax(10rem, 0.7fr);
+}
+.textgen-brief-main textarea {
+  min-height: 6.5rem;
+}
+.textgen-brief-side {
+  display: grid;
+  gap: 0.4rem;
+}
+.application-toc-toggle {
+  margin: 0.35rem 0 0.85rem;
+}
 .textgen-link-row {
   align-items: center;
   display: grid;
@@ -6402,6 +6418,7 @@ button.ghost.danger:hover {
   .app-split-handle { display: none; }
   .app-config { padding-right: 0; }
   .textgen-layout { grid-template-columns: 1fr; }
+  .textgen-brief-row { grid-template-columns: 1fr; }
   .textgen-preview-pane { position: static; }
   .cover-portada-pair { grid-template-columns: 1fr; }
   .image-edit-layout { grid-template-columns: 1fr; }

@@ -531,6 +531,10 @@ export class InventoryStore {
         input.tocWorksMode === "list"
           ? input.tocWorksMode
           : existing?.tocWorksMode || "list",
+      showToc:
+        typeof input.showToc === "boolean"
+          ? input.showToc
+          : existing?.showToc !== false,
       headerArtistName: String(
         input.headerArtistName ?? existing?.headerArtistName ?? ""
       ).trim(),
@@ -1563,6 +1567,7 @@ function hydrateApplication(
       item.tocWorksMode === "bySeries" || item.tocWorksMode === "worksOnly"
         ? item.tocWorksMode
         : "list",
+    showToc: item.showToc !== false,
     headerArtistName: String(item.headerArtistName ?? "").trim(),
     headerCompetition: String(item.headerCompetition ?? "").trim(),
     artworkIds: uniquePreserveOrder(item.artworkIds),

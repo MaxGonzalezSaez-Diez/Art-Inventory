@@ -3626,9 +3626,9 @@ const strings = {
     de: "Was du schreiben möchtest"
   },
   "textgen.field.notes": {
-    es: "Notas libres (escribe, pega o dicta)",
-    en: "Free notes (type, paste, or dictate)",
-    de: "Freie Notizen (tippen, einfügen oder diktieren)"
+    es: "Notas libres (escribe o pega)",
+    en: "Free notes (type or paste)",
+    de: "Freie Notizen (tippen oder einfügen)"
   },
   "textgen.field.notesPlaceholder": {
     es: "Ideas sueltas. No hace falta que estén ordenadas.",
@@ -3972,9 +3972,14 @@ const strings = {
     de: "Titel und Zeilen der Titelseite"
   },
   "application.cover.hint": {
-    es: "Cada bloque es una línea de la portada. Fuente y tamaño se eligen debajo del texto. El índice se genera solo.",
-    en: "Each block is one line of the cover. Font and size are set below the text. The contents page is generated automatically.",
-    de: "Jeder Block ist eine Zeile der Titelseite. Schrift und Größe stellst du unter dem Text ein. Das Inhaltsverzeichnis entsteht automatisch."
+    es: "Cada bloque es una línea de la portada. Fuente y tamaño se eligen debajo del texto.",
+    en: "Each block is one line of the cover. Font and size are set below the text.",
+    de: "Jeder Block ist eine Zeile der Titelseite. Schrift und Größe stellst du unter dem Text ein."
+  },
+  "application.cover.showToc": {
+    es: "Índice",
+    en: "Contents",
+    de: "Inhaltsverzeichnis"
   },
   "application.cover.above": {
     es: "Línea por encima",

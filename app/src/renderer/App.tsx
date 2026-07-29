@@ -11388,11 +11388,24 @@ function SeriesPage({
 }) {
   const t = useT();
   // Series come from paintings (plus any already saved metadata).
+  // Skip blank / «sin serie» — those works have no series to describe.
   const names = uniqueValues([
     ...inventory.artworks.map((a) => a.series),
     ...inventory.seriesInfo.map((s) => s.name)
-  ]).sort((a, b) => a.localeCompare(b, "es"));
-  const [selectedName, setSelectedName] = useState<string | null>(names[0] ?? null);
+  ])
+    .filter((name) => name.trim() && !isNoSeries(name))
+    .sort((a, b) => a.localeCompare(b, "es"));
+  const [selectedName, setSelectedName] = useState<string | null>(
+    names[0] ?? null
+  );
+
+  useEffect(() => {
+    setSelectedName((current) =>
+      current && names.some((name) => name === current)
+        ? current
+        : names[0] ?? null
+    );
+  }, [names.join("\0")]);
 
   const info =
     inventory.seriesInfo.find(
@@ -11963,7 +11976,6 @@ function TextGeneratorPage({
   const [referenceLinks, setReferenceLinks] = useState<
     Array<{ id: string; url: string; note: string }>
   >([]);
-  const [dictationHelpOpen, setDictationHelpOpen] = useState(false);
   const examples = useMemo(
     () => (inventory.textGeneratorExamples ?? []).map(normalizeTextExample),
     [inventory.textGeneratorExamples]
@@ -11983,7 +11995,6 @@ function TextGeneratorPage({
   const [photos, setPhotos] = useState<
     Record<string, { dataUrl: string; sourcePath: string }>
   >({});
-  const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const autoSeriesKeysRef = useRef<Set<string>>(new Set());
 
   // Drop picks that no longer exist in the library.
@@ -12193,20 +12204,6 @@ function TextGeneratorPage({
     inventory,
     responseLanguageLine
   ]);
-
-  /**
-   * Chromium's Web Speech API needs Google's cloud recogniser, and Electron
-   * ships without that key, so it always fails. macOS dictation types straight
-   * into whichever field has focus, so we put the cursor there and explain it.
-   */
-  function startSystemDictation() {
-    const field = notesRef.current;
-    if (field) {
-      field.focus();
-      field.setSelectionRange(field.value.length, field.value.length);
-    }
-    setDictationHelpOpen(true);
-  }
 
   function addReferenceLink() {
     setReferenceLinks((current) => [
@@ -12686,68 +12683,38 @@ function TextGeneratorPage({
               <span className="pl-block-title">
                 {t("textgen.section.brief")}
               </span>
-              <button type="button" className="ghost" onClick={startSystemDictation}>
-                {t("textgen.dictate")}
-              </button>
             </div>
-            <label className="field">
-              {t("textgen.field.instruction")}
-              <textarea
-                rows={3}
-                value={instruction}
-                onChange={(event) => setInstruction(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              {t("textgen.field.notes")}
-              <textarea
-                ref={notesRef}
-                rows={5}
-                value={freeText}
-                placeholder={t("textgen.field.notesPlaceholder")}
-                onChange={(event) => setFreeText(event.target.value)}
-              />
-            </label>
-            {dictationHelpOpen && (
-              <div className="textgen-dictation-help">
-                <p>
-                  <strong>{t("textgen.dictation.title")}</strong>{" "}
-                  {t("textgen.dictation.lead")}
-                </p>
-                <ol>
-                  <li>{t("textgen.dictation.step1")}</li>
-                  <li>{t("textgen.dictation.step2")}</li>
-                  <li>{t("textgen.dictation.step3")}</li>
-                </ol>
+            <div className="textgen-brief-row">
+              <label className="field textgen-brief-main">
+                {t("textgen.field.instruction")}
+                <textarea
+                  rows={4}
+                  value={instruction}
+                  onChange={(event) => setInstruction(event.target.value)}
+                />
+              </label>
+              <div className="textgen-brief-side">
+                <label className="field">
+                  {t("textgen.field.responseLang")}
+                  <select
+                    value={responseLanguage}
+                    onChange={(event) =>
+                      setResponseLanguage(
+                        event.target.value as "es" | "en" | "de"
+                      )
+                    }
+                  >
+                    <option value="es">{t("cert.modal.spanish")}</option>
+                    <option value="en">English</option>
+                    <option value="de">Deutsch</option>
+                  </select>
+                </label>
                 <p className="muted small-note">
-                  {t("textgen.dictation.help")}
+                  {t("textgen.responseLangHint")}
                 </p>
-                <button
-                  type="button"
-                  className="ghost small"
-                  onClick={() => setDictationHelpOpen(false)}
-                >
-                  {t("common.gotIt")}
-                </button>
               </div>
-            )}
-            <label className="field">
-              {t("textgen.field.responseLang")}
-              <select
-                value={responseLanguage}
-                onChange={(event) =>
-                  setResponseLanguage(event.target.value as "es" | "en" | "de")
-                }
-              >
-                <option value="es">{t("cert.modal.spanish")}</option>
-                <option value="en">English</option>
-                <option value="de">Deutsch</option>
-              </select>
-            </label>
-            <p className="muted small-note">
-              {t("textgen.responseLangHint")}
-            </p>
-            <div className="pl-block-head" style={{ marginTop: "0.35rem" }}>
+            </div>
+            <div className="pl-block-head" style={{ marginTop: "0.75rem" }}>
               <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
                 {t("textgen.links.title")}
               </span>
@@ -12807,6 +12774,15 @@ function TextGeneratorPage({
                 ))}
               </div>
             )}
+            <label className="field" style={{ marginTop: "0.85rem" }}>
+              {t("textgen.field.notes")}
+              <textarea
+                rows={5}
+                value={freeText}
+                placeholder={t("textgen.field.notesPlaceholder")}
+                onChange={(event) => setFreeText(event.target.value)}
+              />
+            </label>
           </div>
 
           <div className="pl-block">
@@ -13398,6 +13374,7 @@ function ApplicationEditor({
           headingWorks: application.headingWorks || defaults.works,
           language: initialLang,
           tocWorksMode: application.tocWorksMode || "list",
+          showToc: application.showToc !== false,
           headerArtistName:
             application.headerArtistName ||
             (() => {
@@ -13438,6 +13415,7 @@ function ApplicationEditor({
           headingWorks: defaults.works,
           language: "es",
           tocWorksMode: "list",
+          showToc: true,
           headerArtistName: (() => {
             try {
               return localStorage.getItem("solicitud-artist-name") || "";
@@ -13707,6 +13685,7 @@ function ApplicationEditor({
       sectionsLabel: defs.sectionsLabel,
       emptyImageLabel: defs.emptyImage,
       tocWorksMode: form.tocWorksMode || "list",
+      showToc: form.showToc !== false,
       workSingularLabel: defs.workSingular,
       workPluralLabel: defs.workPlural,
       headerArtistName: form.headerArtistName,
@@ -13746,6 +13725,7 @@ function ApplicationEditor({
     JSON.stringify(form.sectionBodyStyle ?? {}),
     form.headingWorks,
     form.tocWorksMode,
+    form.showToc,
     form.headerArtistName,
     form.headerCompetition,
     language,
@@ -14004,6 +13984,14 @@ function ApplicationEditor({
             }
           >
             <p className="muted small-note">{t("application.cover.hint")}</p>
+            <label className="checkbox-field application-toc-toggle">
+              <input
+                type="checkbox"
+                checked={form.showToc !== false}
+                onChange={(event) => set("showToc", event.target.checked)}
+              />
+              <span>{t("application.cover.showToc")}</span>
+            </label>
             <div className="cover-portada-lines">
               <CoverLineEditor
                 label={t("application.cover.above")}

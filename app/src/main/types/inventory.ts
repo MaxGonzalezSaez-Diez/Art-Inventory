@@ -220,6 +220,8 @@ export interface Application {
    * - worksOnly: single “Obras” line pointing at the first painting page
    */
   tocWorksMode?: "list" | "bySeries" | "worksOnly";
+  /** When false, the cover omits the table of contents. Default true. */
+  showToc?: boolean;
   /** Name shown in PDF/Word header/footer (artist). */
   headerArtistName?: string;
   /** Competition / call name shown in PDF/Word header/footer. */

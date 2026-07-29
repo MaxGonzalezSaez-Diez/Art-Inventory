@@ -6,10 +6,8 @@ import {
   type NativeImage,
   type SaveDialogOptions
 } from "electron";
-import { writeFile, unlink } from "fs/promises";
-import { tmpdir } from "os";
+import { writeFile } from "fs/promises";
 import path from "path";
-import { randomUUID } from "crypto";
 
 export type ImageExportFormat = "jpg" | "png" | "pdf";
 
@@ -51,10 +49,6 @@ export function probeImage(sourcePath: string): ImageProbe | null {
   const image = nativeImage.createFromPath(sourcePath);
   if (image.isEmpty()) return null;
   return image.getSize();
-}
-
-function micronPerPxAt(dpi: number): number {
-  return 25400 / Math.max(1, dpi);
 }
 
 function cmToPx(cm: number, dpi: number): number {
@@ -262,39 +256,68 @@ function encodeRaster(
   return { buffer: best, width: size.width, height: size.height };
 }
 
-async function renderImagePdf(
+/**
+ * Build a one-page PDF that embeds a JPEG at the given pixel size / DPI.
+ * Avoids Electron printToPDF (custom page sizes often throw "Printing failed").
+ */
+function buildJpegPdf(
   jpeg: Buffer,
   size: { width: number; height: number },
   dpi: number
-): Promise<Buffer> {
-  const micron = micronPerPxAt(dpi);
-  const dataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
-  const html = `<!doctype html><html><head><meta charset="utf-8" /><style>
-    html,body{margin:0;padding:0;}
-    img{display:block;width:${size.width}px;height:${size.height}px;}
-  </style></head><body><img src="${dataUrl}" /></body></html>`;
-  const tempFile = path.join(tmpdir(), `imgpdf-${randomUUID()}.html`);
-  const win = new BrowserWindow({
-    show: false,
-    width: Math.max(200, size.width),
-    height: Math.max(200, size.height),
-    webPreferences: { sandbox: true }
-  });
-  try {
-    await writeFile(tempFile, html, "utf8");
-    await win.loadFile(tempFile);
-    return await win.webContents.printToPDF({
-      printBackground: true,
-      margins: { top: 0, bottom: 0, left: 0, right: 0 },
-      pageSize: {
-        width: Math.round(size.width * micron),
-        height: Math.round(size.height * micron)
-      }
-    });
-  } finally {
-    win.destroy();
-    await unlink(tempFile).catch(() => undefined);
+): Buffer {
+  const safeDpi = Math.max(1, dpi);
+  const pageW = (size.width * 72) / safeDpi;
+  const pageH = (size.height * 72) / safeDpi;
+  if (!(pageW > 0) || !(pageH > 0)) {
+    throw new Error("No se pudo calcular el tamaño de página del PDF.");
   }
+
+  const fmt = (n: number) =>
+    Number.isInteger(n) ? String(n) : n.toFixed(4).replace(/\.?0+$/, "");
+
+  const content = `q\n${fmt(pageW)} 0 0 ${fmt(pageH)} 0 0 cm\n/Im0 Do\nQ\n`;
+  const imageDict =
+    `<< /Type /XObject /Subtype /Image /Width ${size.width} /Height ${size.height} ` +
+    `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>`;
+
+  const objectBodies: Array<string | Buffer> = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${fmt(pageW)} ${fmt(pageH)}] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>`,
+    `<< /Length ${Buffer.byteLength(content, "utf8")} >>\nstream\n${content}endstream`,
+    Buffer.concat([
+      Buffer.from(`${imageDict}\nstream\n`, "utf8"),
+      jpeg,
+      Buffer.from("\nendstream", "utf8")
+    ])
+  ];
+
+  const parts: Buffer[] = [Buffer.from("%PDF-1.4\n", "utf8")];
+  const offsets: number[] = [0];
+  let cursor = parts[0].length;
+  objectBodies.forEach((body, index) => {
+    const id = index + 1;
+    offsets.push(cursor);
+    const chunk =
+      typeof body === "string"
+        ? Buffer.from(`${id} 0 obj\n${body}\nendobj\n`, "utf8")
+        : Buffer.concat([
+            Buffer.from(`${id} 0 obj\n`, "utf8"),
+            body,
+            Buffer.from("\nendobj\n", "utf8")
+          ]);
+    parts.push(chunk);
+    cursor += chunk.length;
+  });
+
+  const assembled = Buffer.concat(parts);
+  const xrefStart = assembled.length;
+  let xref = `xref\n0 ${objectBodies.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= objectBodies.length; i += 1) {
+    xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  }
+  xref += `trailer\n<< /Size ${objectBodies.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.concat([assembled, Buffer.from(xref, "utf8")]);
 }
 
 function sanitizeName(name: string): string {
@@ -349,7 +372,7 @@ export async function exportImage(
     const encoded = encodeRaster(prepared.image, "jpg", headroom);
     width = encoded.width;
     height = encoded.height;
-    buffer = await renderImagePdf(
+    buffer = buildJpegPdf(
       encoded.buffer,
       { width, height },
       prepared.dpi ?? 96
