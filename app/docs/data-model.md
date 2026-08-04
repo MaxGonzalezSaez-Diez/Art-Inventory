@@ -1,6 +1,6 @@
 # Data Model
 
-The app stores its data in `MumArtLibrary/inventory.xlsx`. The user edits data through the desktop UI; Excel is the hidden backend and should not be treated as the primary editing interface.
+The app stores its data in the user-chosen library folder (`ArtInventory` by default, or the legacy `MumArtLibrary` path). The user edits data through the desktop UI; Excel is a best-effort mirror and should not be treated as the primary editing interface.
 
 ## Workbook Sheets
 

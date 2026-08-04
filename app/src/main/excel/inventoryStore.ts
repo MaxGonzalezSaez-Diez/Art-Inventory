@@ -12,6 +12,7 @@ import type {
   ApplicationTextSection,
   Contact,
   ContactInput,
+  ContactReminder,
   CoverLineStyle,
   Edition,
   Exhibition,
@@ -20,10 +21,14 @@ import type {
   ExpenseInput,
   FixedTypePrice,
   ImportedImage,
+  InboxNote,
+  InboxTodo,
   InventoryData,
   LookupInput,
   LookupOption,
   Movement,
+  ReminderChannel,
+  ReminderIntervalUnit,
   SeriesInfo,
   SeriesInfoInput,
   TextGeneratorExample,
@@ -84,6 +89,9 @@ export class InventoryStore {
         seriesInfo: [],
         applications: [],
         textGeneratorExamples: [],
+        contactReminders: [],
+        inboxNotes: [],
+        inboxTodos: [],
         settings: defaultSettings()
       };
     } catch {
@@ -125,7 +133,6 @@ export class InventoryStore {
         existingIds
       );
 
-    const is3D = isThreeDimensional(input.type);
     const editionMode = input.editionMode ?? "unique";
 
     const editions = (editionMode === "multiple" ? input.editions ?? [] : []).map(
@@ -173,7 +180,7 @@ export class InventoryStore {
       yearMade: (input.yearMade ?? "").replace(/[^0-9]/g, "").slice(0, 4),
       height: input.height ?? "",
       width: input.width ?? "",
-      depth: is3D ? input.depth ?? "" : "",
+      depth: input.depth ?? "",
       unit: input.unit ?? "cm",
       status,
       galleryContactId: status === "consigned" ? input.galleryContactId ?? "" : "",
@@ -415,6 +422,86 @@ export class InventoryStore {
     const data = await this.load();
     data.textGeneratorExamples = (examples ?? []).map((example, index) =>
       hydrateTextGeneratorExample(example, index)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
+  async saveContactReminders(
+    reminders: ContactReminder[]
+  ): Promise<InventoryData> {
+    const data = await this.load();
+    data.contactReminders = (reminders ?? []).map((item, index) => {
+      const hydrated = hydrateContactReminder(item, index);
+      // Force a plain JSON-safe object so days/months cannot be dropped.
+      return {
+        id: hydrated.id,
+        contactId: hydrated.contactId,
+        channel: hydrated.channel,
+        intervalValue: hydrated.intervalValue,
+        intervalUnit: hydrated.intervalUnit,
+        ...(hydrated.intervalUnit === "months"
+          ? { intervalMonths: hydrated.intervalValue }
+          : {}),
+        note: hydrated.note ?? "",
+        lastDoneAt: hydrated.lastDoneAt ?? "",
+        createdAt: hydrated.createdAt,
+        updatedAt: hydrated.updatedAt
+      };
+    });
+    await this.persist(data);
+    return this.load();
+  }
+
+  async saveInboxNotes(notes: InboxNote[]): Promise<InventoryData> {
+    const data = await this.load();
+    data.inboxNotes = (notes ?? []).map((item, index) =>
+      hydrateInboxNote(item, index)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
+  async saveInboxTodos(todos: InboxTodo[]): Promise<InventoryData> {
+    const data = await this.load();
+    data.inboxTodos = (todos ?? []).map((item, index) =>
+      hydrateInboxTodo(item, index)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
+  /** Promote a previous photo version back to main (keeps current main in history). */
+  async restoreArtworkImage(
+    artworkId: string,
+    imageId: string
+  ): Promise<InventoryData> {
+    const data = await this.load();
+    const now = new Date().toISOString();
+    const target = data.images.find(
+      (image) =>
+        image.id === imageId &&
+        image.targetType === "artwork" &&
+        image.targetId === artworkId
+    );
+    if (!target) throw new Error("No se encontró esa versión de la foto.");
+
+    data.images = data.images.map((image) => {
+      if (image.targetType !== "artwork" || image.targetId !== artworkId) {
+        return image;
+      }
+      if (image.category === "main") {
+        return { ...image, category: "history" };
+      }
+      if (image.id === imageId) {
+        return { ...image, category: "main" };
+      }
+      return image;
+    });
+    data.artworks = data.artworks.map((artwork) =>
+      artwork.id === artworkId
+        ? { ...artwork, mainImageId: imageId, updatedAt: now }
+        : artwork
     );
     await this.persist(data);
     return this.load();
@@ -731,10 +818,35 @@ export class InventoryStore {
       category,
       relativePath,
       originalName,
-      createdAt: now
+      createdAt: now,
+      ...(category === "extra" && /original/i.test(originalName)
+        ? { caption: "Foto original" }
+        : {})
     };
 
-    if (category === "main" || category === "receipt" || category === "cover") {
+    if (category === "main" && targetType === "artwork") {
+      // Keep previous mains as history (for retouch undo); drop only duplicates of other cats.
+      data.images = data.images.map((item) =>
+        item.targetType === targetType &&
+        item.targetId === targetId &&
+        item.category === "main"
+          ? { ...item, category: "history" }
+          : item
+      );
+      // Cap history at 12 versions (oldest first).
+      const history = data.images
+        .filter(
+          (item) =>
+            item.targetType === targetType &&
+            item.targetId === targetId &&
+            item.category === "history"
+        )
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      if (history.length > 12) {
+        const drop = new Set(history.slice(0, history.length - 12).map((h) => h.id));
+        data.images = data.images.filter((item) => !drop.has(item.id));
+      }
+    } else if (category === "main" || category === "receipt" || category === "cover") {
       data.images = data.images.filter(
         (item) =>
           !(
@@ -746,7 +858,30 @@ export class InventoryStore {
           )
       );
     }
-    data.images.push(image);
+
+    if (
+      category === "extra" &&
+      /original/i.test(originalName)
+    ) {
+      // Keep the raw upload as the first additional image.
+      const others = data.images.filter(
+        (item) =>
+          !(
+            item.targetType === targetType &&
+            item.targetId === targetId &&
+            item.category === "extra"
+          )
+      );
+      const existingExtras = data.images.filter(
+        (item) =>
+          item.targetType === targetType &&
+          item.targetId === targetId &&
+          item.category === "extra"
+      );
+      data.images = [...others, image, ...existingExtras];
+    } else {
+      data.images.push(image);
+    }
 
     if (category === "main" && targetType === "artwork") {
       data.artworks = data.artworks.map((artwork) =>
@@ -1196,7 +1331,7 @@ function compactData(data: InventoryData): InventoryData {
     return {
       ...artwork,
       status,
-      depth: isThreeDimensional(artwork.type) ? artwork.depth ?? "" : "",
+      depth: artwork.depth ?? "",
       mainImageId: main?.id ?? "",
       mainImagePath: main?.relativePath ?? ""
     };
@@ -1392,6 +1527,9 @@ function emptyInventory(libraryPath: string): InventoryData {
     seriesInfo: [],
     applications: [],
     textGeneratorExamples: [],
+    contactReminders: [],
+    inboxNotes: [],
+    inboxTodos: [],
     settings: defaultSettings()
   };
 }
@@ -1421,6 +1559,17 @@ function normalizeRaw(
           hydrateTextGeneratorExample(item, index)
         )
       : [],
+    contactReminders: Array.isArray(raw.contactReminders)
+      ? raw.contactReminders.map((item, index) =>
+          hydrateContactReminder(item, index)
+        )
+      : [],
+    inboxNotes: Array.isArray(raw.inboxNotes)
+      ? raw.inboxNotes.map((item, index) => hydrateInboxNote(item, index))
+      : [],
+    inboxTodos: Array.isArray(raw.inboxTodos)
+      ? raw.inboxTodos.map((item, index) => hydrateInboxTodo(item, index))
+      : [],
     settings: normalizeSettings(raw.settings)
   };
 }
@@ -1432,7 +1581,84 @@ function hydrateTextGeneratorExample(
   return {
     id: String(item.id || `example-${index}`),
     topic: String(item.topic ?? item.title ?? "").trim(),
-    body: String(item.body ?? item.text ?? "")
+    body: String(item.body ?? item.text ?? ""),
+    category: String(item.category ?? "").trim()
+  };
+}
+
+function hydrateContactReminder(
+  item: Partial<ContactReminder>,
+  index: number
+): ContactReminder {
+  const channel: ReminderChannel = String(item.channel ?? "").trim() || "email";
+  const explicitUnit = String(item.intervalUnit ?? "")
+    .trim()
+    .toLowerCase();
+
+  let unit: ReminderIntervalUnit;
+  if (explicitUnit === "days" || explicitUnit === "day") {
+    unit = "days";
+  } else if (explicitUnit === "months" || explicitUnit === "month") {
+    unit = "months";
+  } else if (
+    item.intervalValue != null &&
+    Number.isFinite(Number(item.intervalValue)) &&
+    (item.intervalMonths == null || item.intervalMonths === undefined)
+  ) {
+    // Newer payloads sometimes omit unit but send intervalValue for days.
+    unit = "days";
+  } else {
+    unit = "months";
+  }
+
+  const preferValue =
+    unit === "days"
+      ? item.intervalValue ?? item.intervalMonths
+      : item.intervalValue ?? item.intervalMonths;
+  const rawValue = Number(preferValue);
+  const intervalValue = Math.max(
+    1,
+    Math.round(Number.isFinite(rawValue) && rawValue > 0 ? rawValue : 1)
+  );
+
+  const out: ContactReminder = {
+    id: String(item.id || `REM-${index}`),
+    contactId: String(item.contactId ?? "").trim(),
+    channel,
+    intervalValue,
+    intervalUnit: unit,
+    note: String(item.note ?? "").trim(),
+    lastDoneAt: String(item.lastDoneAt ?? "").trim(),
+    createdAt: String(item.createdAt ?? new Date().toISOString()),
+    updatedAt: String(item.updatedAt ?? item.createdAt ?? new Date().toISOString())
+  };
+  // Only month-based reminders keep the legacy mirror field.
+  if (unit === "months") {
+    out.intervalMonths = intervalValue;
+  }
+  return out;
+}
+
+function hydrateInboxNote(
+  item: Partial<InboxNote>,
+  index: number
+): InboxNote {
+  return {
+    id: String(item.id || `NOTE-${index}`),
+    body: String(item.body ?? "").trim(),
+    createdAt: String(item.createdAt ?? new Date().toISOString())
+  };
+}
+
+function hydrateInboxTodo(
+  item: Partial<InboxTodo>,
+  index: number
+): InboxTodo {
+  return {
+    id: String(item.id || `TODO-${index}`),
+    body: String(item.body ?? "").trim(),
+    doneAt: String(item.doneAt ?? "").trim(),
+    createdAt: String(item.createdAt ?? new Date().toISOString())
   };
 }
 

@@ -42,8 +42,11 @@ import type {
   ApplicationInput,
   ArtworkInput,
   ContactInput,
+  ContactReminder,
   ExhibitionInput,
   ExpenseInput,
+  InboxNote,
+  InboxTodo,
   LookupInput,
   SeriesInfoInput,
   TextGeneratorExample
@@ -68,7 +71,7 @@ async function createWindow(): Promise<void> {
     height: 860,
     minWidth: 1040,
     minHeight: 700,
-    title: "Mum Art Inventory",
+    title: "Inventario de Arte",
     backgroundColor: "#f7f3ee",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -204,6 +207,22 @@ ipcMain.handle(
   "textGenerator:saveExamples",
   async (_event, examples: TextGeneratorExample[]) =>
     store().saveTextGeneratorExamples(examples)
+);
+ipcMain.handle(
+  "inbox:saveReminders",
+  async (_event, reminders: ContactReminder[]) =>
+    store().saveContactReminders(reminders)
+);
+ipcMain.handle("inbox:saveNotes", async (_event, notes: InboxNote[]) =>
+  store().saveInboxNotes(notes)
+);
+ipcMain.handle("inbox:saveTodos", async (_event, todos: InboxTodo[]) =>
+  store().saveInboxTodos(todos)
+);
+ipcMain.handle(
+  "image:restoreArtwork",
+  async (_event, artworkId: string, imageId: string) =>
+    store().restoreArtworkImage(artworkId, imageId)
 );
 ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
   clipboard.writeText(String(text ?? ""));
@@ -727,7 +746,7 @@ ipcMain.handle("image:dataUrlToTemp", async (_event, dataUrl: string) => {
   if (!match) throw new Error("La imagen editada no es válida.");
   const mime = match[1].toLowerCase();
   const ext = mime.includes("png") ? ".png" : mime.includes("webp") ? ".webp" : ".jpg";
-  const tempPath = path.join(tmpdir(), `mum-edit-${randomUUID()}${ext}`);
+  const tempPath = path.join(tmpdir(), `art-edit-${randomUUID()}${ext}`);
   await writeFile(tempPath, Buffer.from(match[2], "base64"));
   return tempPath;
 });

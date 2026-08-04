@@ -116,7 +116,7 @@ export async function saveWorkbook(
 
 export function createEmptyWorkbook(): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Mum Art Inventory";
+  workbook.creator = "Inventario de Arte";
   workbook.created = new Date();
   workbook.modified = new Date();
 

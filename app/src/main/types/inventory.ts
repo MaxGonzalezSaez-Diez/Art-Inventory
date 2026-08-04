@@ -243,10 +243,63 @@ export interface TextGeneratorExample {
   /** Short topic label shown when picking examples. */
   topic: string;
   body: string;
+  /** Optional foldable group in the example library. Empty = uncategorized. */
+  category?: string;
   /** @deprecated migrated into topic */
   title?: string;
   /** @deprecated migrated into body */
   text?: string;
+}
+
+/**
+ * How to reach out for a contact reminder. Free string so the user can add
+ * her own methods through the `contactMethod` lookup list.
+ */
+export type ReminderChannel = string;
+
+/**
+ * Recurring “reach out” reminder tied to a contact (person or gallery).
+ * Optional on older libraries — missing arrays hydrate to [].
+ */
+export type ReminderIntervalUnit = "days" | "months";
+
+export interface ContactReminder {
+  id: string;
+  contactId: string;
+  channel: ReminderChannel;
+  /** How often to reach out. */
+  intervalValue: number;
+  intervalUnit: ReminderIntervalUnit;
+  /**
+   * @deprecated Prefer intervalValue + intervalUnit.
+   * Kept so older app builds still read month-based reminders.
+   */
+  intervalMonths?: number;
+  note?: string;
+  /** ISO date of last completed reach-out; empty = never. */
+  lastDoneAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Free-form inbox note, newest first in the UI. */
+export interface InboxNote {
+  id: string;
+  body: string;
+  createdAt: string;
+}
+
+/**
+ * Simple checklist item in Recordatorios → Todo.
+ * `doneAt` empty = active; set = archived (kept for history).
+ * Optional on older libraries — missing arrays hydrate to [].
+ */
+export interface InboxTodo {
+  id: string;
+  body: string;
+  /** ISO date when marked done; empty = still open. */
+  doneAt?: string;
+  createdAt: string;
 }
 
 export interface ApplicationInput
@@ -364,6 +417,12 @@ export interface InventoryData {
   seriesInfo: SeriesInfo[];
   applications: Application[];
   textGeneratorExamples: TextGeneratorExample[];
+  /** Recurring contact reach-out reminders (JSON-only; optional for old libs). */
+  contactReminders?: ContactReminder[];
+  /** Free inbox notes (JSON-only; optional for old libs). */
+  inboxNotes?: InboxNote[];
+  /** Checklist todos (JSON-only; optional for old libs). */
+  inboxTodos?: InboxTodo[];
   settings: AppSettings;
 }
 

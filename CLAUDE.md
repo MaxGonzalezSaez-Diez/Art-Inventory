@@ -1,0 +1,2 @@
+1. the UI has to be extremely clean and simple
+2. I have shipped version v0.0.1 so everything for now has to be backwards compatible and has to update accordingly. This is mission CRITICAL. No loss of data allowed. 

@@ -1,5 +1,7 @@
 import {
   Fragment,
+  Suspense,
+  lazy,
   useEffect,
   useMemo,
   useRef,
@@ -12,7 +14,12 @@ import {
   type ReactNode,
   type SetStateAction
 } from "react";
-import { ImageEditModal } from "./ImageEditModal";
+import type { ImageEditSaveResult } from "./imageEditTypes";
+
+const ImageEditModal = lazy(async () => {
+  const mod = await import("./ImageEditModal");
+  return { default: mod.ImageEditModal };
+});
 import type {
   AppSettings,
   Artwork,
@@ -46,7 +53,12 @@ import type {
   ApplicationCoverStyles,
   ApplicationTextSection,
   CoverLineStyle,
-  TextGeneratorExample
+  TextGeneratorExample,
+  ContactReminder,
+  ReminderChannel,
+  ReminderIntervalUnit,
+  InboxNote,
+  InboxTodo
 } from "../main/types/inventory";
 import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT, DEFAULT_FIXED_TYPE_PRICES } from "../main/types/inventory";
 import { buildArtworkIdBase } from "../main/artworkId";
@@ -66,7 +78,11 @@ import {
 import { buildApplicationHtml } from "../main/applicationDocumentHtml";
 
 /** Import an edited JPEG/PNG data-URL as an artwork main photo. */
-async function importEditedArtworkImage(dataUrl: string, artworkId: string) {
+async function importEditedArtworkImage(
+  dataUrl: string,
+  artworkId: string,
+  options?: { originalDataUrl?: string; keepOriginalAsExtra?: boolean }
+) {
   const api = window.inventoryApi as typeof window.inventoryApi & {
     importImageFromDataUrl?: (
       dataUrl: string,
@@ -76,24 +92,58 @@ async function importEditedArtworkImage(dataUrl: string, artworkId: string) {
       originalName?: string
     ) => Promise<{ image: unknown; inventory: InventoryData } | null>;
     dataUrlToTempPath?: (dataUrl: string) => Promise<string>;
+    updateImageCaption?: (
+      imageId: string,
+      caption: string
+    ) => Promise<InventoryData>;
   };
-  if (typeof api.importImageFromDataUrl === "function") {
-    return api.importImageFromDataUrl(
-      dataUrl,
-      "artwork",
-      artworkId,
-      "main",
-      "foto.jpg"
+
+  async function importOne(
+    url: string,
+    category: string,
+    originalName: string
+  ): Promise<{ image: { id: string }; inventory: InventoryData } | null> {
+    if (typeof api.importImageFromDataUrl === "function") {
+      return (await api.importImageFromDataUrl(
+        url,
+        "artwork",
+        artworkId,
+        category,
+        originalName
+      )) as { image: { id: string }; inventory: InventoryData } | null;
+    }
+    if (typeof api.dataUrlToTempPath === "function") {
+      const tempPath = await api.dataUrlToTempPath(url);
+      const data = (await api.importImageFromPath(
+        tempPath,
+        "artwork",
+        artworkId,
+        category
+      )) as
+        | InventoryData
+        | { image: unknown; inventory: InventoryData }
+        | null;
+      if (!data) return null;
+      const inventory =
+        "artworks" in data ? data : data.inventory;
+      return { image: { id: "" }, inventory };
+    }
+    throw new Error(
+      "La app necesita reiniciarse para guardar la foto. Cierra la ventana y vuelve a abrirla."
     );
   }
-  // Stale preload (app not fully restarted): write temp + import by path.
-  if (typeof api.dataUrlToTempPath === "function") {
-    const tempPath = await api.dataUrlToTempPath(dataUrl);
-    return api.importImageFromPath(tempPath, "artwork", artworkId, "main");
+
+  // Original first so it becomes the first additional image.
+  if (options?.keepOriginalAsExtra && options.originalDataUrl) {
+    await importOne(
+      options.originalDataUrl,
+      "extra",
+      "foto-original.jpg"
+    );
   }
-  throw new Error(
-    "La app necesita reiniciarse para guardar la foto. Cierra la ventana y vuelve a abrirla."
-  );
+
+  const main = await importOne(dataUrl, "main", "foto.jpg");
+  return main;
 }
 
 type Page =
@@ -109,7 +159,8 @@ type Page =
   | "series"
   | "applications"
   | "textGenerator"
-  | "examples";
+  | "examples"
+  | "inbox";
 
 interface PriceListPreset {
   exhibitionId?: string;
@@ -271,6 +322,13 @@ export function App() {
   const selectedContact = inventory?.contacts.find(
     (contact) => contact.id === selectedContactId
   );
+  const dueReminderCount = (inventory?.contactReminders ?? []).filter(
+    (reminder) => reminderDueInfo(reminder).due
+  ).length;
+  const openTodoCount = (inventory?.inboxTodos ?? []).filter(
+    (todo) => !todo.doneAt
+  ).length;
+  const inboxBadgeCount = dueReminderCount + openTodoCount;
 
   if (!prefs) return <div className="boot-screen">…</div>;
 
@@ -307,6 +365,27 @@ export function App() {
           <h1>{t("brand.title")}</h1>
         </div>
         <nav>
+          <div className="nav-inbox-block">
+            <NavButton
+              className="nav-button-inbox"
+              active={page === "inbox"}
+              onClick={() => guarded(() => goTo("inbox"))}
+            >
+              <span className="nav-inbox-mark" aria-hidden>
+                ✉
+              </span>
+              {t("nav.inbox")}
+              {inboxBadgeCount > 0 ? (
+                <span
+                  className="nav-badge"
+                  title={t("inbox.badgeTitle", { n: inboxBadgeCount })}
+                >
+                  {inboxBadgeCount}
+                </span>
+              ) : null}
+            </NavButton>
+          </div>
+          <div className="nav-rest">
           <NavButton active={page === "library" || page === "form" || page === "detail"} onClick={() => guarded(() => goTo("library"))}>
             <span className="nav-dot dot-obras" /> {t("nav.library")}
           </NavButton>
@@ -363,6 +442,7 @@ export function App() {
           >
             <span className="nav-dot dot-examples" /> {t("nav.examples")}
           </NavButton>
+          </div>
         </nav>
         <div className="library-path">
           <label className="sidebar-language">
@@ -387,6 +467,18 @@ export function App() {
       </aside>
 
       <main className="main-panel">
+        {(history.length > 0 ||
+          page === "form" ||
+          page === "detail" ||
+          page === "contactDetail") && (
+          <button
+            type="button"
+            className="floating-back"
+            onClick={() => guarded(() => goBack())}
+          >
+            {t("nav.floatingBack")}
+          </button>
+        )}
         {toast && (
           <div className="toast toast-enter" key={`t-${toast}`}>
             {toast}
@@ -557,7 +649,21 @@ export function App() {
             onToast={setToast}
             onDirtyChange={setDirty}
             saveRef={saveRef}
-            onOpenGenerator={() => guarded(() => goTo("textGenerator"))}
+          />
+        ) : page === "inbox" ? (
+          <InboxPage
+            inventory={inventory}
+            setInventory={setInventory}
+            onError={setMessage}
+            onToast={setToast}
+            onDirtyChange={setDirty}
+            saveRef={saveRef}
+            onOpenContact={(contactId) =>
+              guarded(() => {
+                setSelectedContactId(contactId);
+                goTo("contactDetail");
+              })
+            }
           />
         ) : (
           <div className="empty-state">{t("app.selectArtwork")}</div>
@@ -798,7 +904,7 @@ function LibraryPage({
   onSelect: (artwork: Artwork) => void;
 }) {
   const { lang, t } = useLanguage();
-  const [showFilters, setShowFilters] = useState(true);
+  const [showFilters, setShowFilters] = useState(false);
   const [sort, setSort] = useState<SortKey>("recent");
   const [search, setSearch] = useState("");
   const [types, setTypes] = useState<string[]>([]);
@@ -1178,6 +1284,8 @@ function ArtworkForm({
   const [pendingImage, setPendingImage] = useState<{
     path?: string;
     dataUrl: string;
+    originalDataUrl?: string;
+    keepOriginalAsExtra?: boolean;
   } | null>(null);
   const [imageEditorSrc, setImageEditorSrc] = useState<string | null>(null);
 
@@ -1199,7 +1307,6 @@ function ArtworkForm({
     };
   });
 
-  const is3D = isThreeDimensional(form.type);
   const isSeries = form.editionMode === "multiple";
   const isIpadDrawing = form.type === "ipad_drawing";
 
@@ -1267,7 +1374,11 @@ function ArtworkForm({
     if (saved && pendingImage) {
       const result = await importEditedArtworkImage(
         pendingImage.dataUrl,
-        saved.id
+        saved.id,
+        {
+          originalDataUrl: pendingImage.originalDataUrl,
+          keepOriginalAsExtra: pendingImage.keepOriginalAsExtra
+        }
       );
       if (result?.inventory) {
         data = result.inventory;
@@ -1307,8 +1418,12 @@ function ArtworkForm({
     }
   }
 
-  function saveEditedImage(dataUrl: string) {
-    setPendingImage({ dataUrl });
+  function saveEditedImage(result: ImageEditSaveResult) {
+    setPendingImage({
+      dataUrl: result.editedDataUrl,
+      originalDataUrl: result.originalDataUrl,
+      keepOriginalAsExtra: result.keepOriginalAsExtra
+    });
     setImageEditorSrc(null);
     onDirtyChange?.(true);
   }
@@ -1532,15 +1647,12 @@ function ArtworkForm({
                           }
                         />
                       </label>
-                      <label className={is3D ? "field" : "field disabled-field"}>
+                      <label className="field">
                         {t("artwork.field.depth")}
                         <input
                           inputMode="decimal"
-                          disabled={!is3D}
-                          value={is3D ? form.depth ?? "" : ""}
-                          placeholder={
-                            is3D ? "" : t("artwork.field.depth3dOnly")
-                          }
+                          value={form.depth ?? ""}
+                          placeholder={t("artwork.field.depthOptional")}
                           onChange={(event) =>
                             update("depth", event.target.value)
                           }
@@ -1605,11 +1717,14 @@ function ArtworkForm({
       </div>
 
       {imageEditorSrc ? (
-        <ImageEditModal
-          sourceDataUrl={imageEditorSrc}
-          onCancel={() => setImageEditorSrc(null)}
-          onSave={saveEditedImage}
-        />
+        <Suspense fallback={null}>
+          <ImageEditModal
+            sourceDataUrl={imageEditorSrc}
+            mode="upload"
+            onCancel={() => setImageEditorSrc(null)}
+            onSave={saveEditedImage}
+          />
+        </Suspense>
       ) : null}
 
       {error && <div className="error-banner">{error}</div>}
@@ -3180,9 +3295,20 @@ function ArtworkDetail({
   const [certLang, setCertLang] = useState<"es" | "en" | "de">("es");
   const [certCopyId, setCertCopyId] = useState<string>("");
   const [imageEditorSrc, setImageEditorSrc] = useState<string | null>(null);
+  const [imageEditorMode, setImageEditorMode] = useState<"upload" | "retouch">(
+    "upload"
+  );
   const [imageBusy, setImageBusy] = useState(false);
   const image = mainImageFor(artwork, inventory);
   const imageUrl = useImageDataUrl(image?.absolutePath);
+  const historyImages = inventory.images
+    .filter(
+      (item) =>
+        item.targetType === "artwork" &&
+        item.targetId === artwork.id &&
+        item.category === "history"
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const editions = inventory.editions.filter((item) => item.artworkId === artwork.id);
   const movements = sortMovementsDesc(
     inventory.movements.filter((item) => item.artworkId === artwork.id)
@@ -3192,18 +3318,63 @@ function ArtworkDetail({
     try {
       const picked = await window.inventoryApi.pickImagePath();
       if (!picked) return;
+      setImageEditorMode("upload");
       setImageEditorSrc(picked.dataUrl);
     } catch {
       /* ignore */
     }
   }
 
-  async function saveEditedImage(dataUrl: string) {
+  async function retouchCurrentImage() {
+    if (!image?.absolutePath) return;
     setImageBusy(true);
     try {
-      const result = await importEditedArtworkImage(dataUrl, artwork.id);
-      if (result?.inventory) setInventory(result.inventory);
+      const dataUrl = await window.inventoryApi.imageToDataUrl(image.absolutePath);
+      if (dataUrl) {
+        setImageEditorMode("retouch");
+        setImageEditorSrc(dataUrl);
+      }
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : t("artwork.error.addPhoto")
+      );
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function restoreHistoryImage(imageId: string) {
+    setImageBusy(true);
+    try {
+      const data = await window.inventoryApi.restoreArtworkImage(
+        artwork.id,
+        imageId
+      );
+      setInventory(data);
+      onToast(t("artwork.photo.restored"));
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : t("artwork.error.addPhoto")
+      );
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function saveEditedImage(result: ImageEditSaveResult) {
+    setImageBusy(true);
+    try {
+      const imported = await importEditedArtworkImage(
+        result.editedDataUrl,
+        artwork.id,
+        {
+          originalDataUrl: result.originalDataUrl,
+          keepOriginalAsExtra: result.keepOriginalAsExtra
+        }
+      );
+      if (imported?.inventory) setInventory(imported.inventory);
       setImageEditorSrc(null);
+      onToast(t("artwork.photo.retouchSaved"));
     } finally {
       setImageBusy(false);
     }
@@ -3306,21 +3477,66 @@ function ArtworkDetail({
     <section className="detail-layout">
       <div className="detail-image-panel">
         {imageUrl ? <img src={imageUrl} alt={artwork.title} /> : <div>{t("common.noPhoto")}</div>}
-        <div className="image-panel-actions">
-          <button className="ghost" onClick={() => void addImage()} disabled={imageBusy}>
+        <div className="image-panel-actions image-panel-actions-stack">
+          <button
+            type="button"
+            className="photo-action photo-action-change"
+            onClick={() => void addImage()}
+            disabled={imageBusy}
+          >
             {imageUrl ? t("artwork.photo.change") : t("artwork.photo.add")}
           </button>
-          <button className="ghost" onClick={() => setExporting(true)}>
+          {imageUrl ? (
+            <button
+              type="button"
+              className="photo-action photo-action-retouch"
+              onClick={() => void retouchCurrentImage()}
+              disabled={imageBusy}
+            >
+              {t("artwork.photo.retouch")}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="photo-action photo-action-export"
+            onClick={() => setExporting(true)}
+            disabled={!imageUrl}
+          >
             {t("artwork.detail.saveImage")}
           </button>
         </div>
+        {historyImages.length > 0 ? (
+          <div className="photo-history">
+            <p className="muted small-note">{t("artwork.photo.historyHint")}</p>
+            <ul className="photo-history-list">
+              {historyImages.slice(0, 6).map((item) => (
+                <li key={item.id}>
+                  <span className="muted small-note">
+                    {item.createdAt.slice(0, 10)}
+                  </span>
+                  <button
+                    type="button"
+                    className="ghost small"
+                    disabled={imageBusy}
+                    onClick={() => void restoreHistoryImage(item.id)}
+                  >
+                    {t("artwork.photo.restore")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
       {imageEditorSrc ? (
-        <ImageEditModal
-          sourceDataUrl={imageEditorSrc}
-          onCancel={() => setImageEditorSrc(null)}
-          onSave={saveEditedImage}
-        />
+        <Suspense fallback={null}>
+          <ImageEditModal
+            sourceDataUrl={imageEditorSrc}
+            mode={imageEditorMode}
+            onCancel={() => setImageEditorSrc(null)}
+            onSave={saveEditedImage}
+          />
+        </Suspense>
       ) : null}
       {certLangOpen ? (
         <div
@@ -4989,6 +5205,9 @@ function ExtraImageThumb({
   return (
     <div className="extra-image">
       {url ? <img src={url} alt={image.caption ?? ""} /> : <span className="muted">…</span>}
+      {image.caption ? (
+        <span className="extra-image-caption">{image.caption}</span>
+      ) : null}
       <button type="button" className="extra-image-remove" onClick={onDelete}>
         ✕
       </button>
@@ -9761,7 +9980,9 @@ function exampleMatchesSearch(
 ): boolean {
   const term = searchKey(search.trim());
   if (!term) return true;
-  const haystack = searchKey(`${example.topic} ${example.body}`);
+  const haystack = searchKey(
+    `${example.topic} ${example.body} ${example.category ?? ""}`
+  );
   return term
     .split(/\s+/)
     .every((word) => haystack.includes(word));
@@ -9773,7 +9994,8 @@ function normalizeTextExample(
   return {
     id: example.id,
     topic: String(example.topic ?? example.title ?? "").trim(),
-    body: String(example.body ?? example.text ?? "")
+    body: String(example.body ?? example.text ?? ""),
+    category: String(example.category ?? "").trim()
   };
 }
 
@@ -11745,8 +11967,7 @@ function ExampleLibraryPage({
   onError,
   onToast,
   onDirtyChange,
-  saveRef,
-  onOpenGenerator
+  saveRef
 }: {
   inventory: InventoryData;
   setInventory: (data: InventoryData) => void;
@@ -11754,7 +11975,6 @@ function ExampleLibraryPage({
   onToast: (message: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
-  onOpenGenerator: () => void;
 }) {
   const t = useT();
   const stored = useMemo(
@@ -11764,7 +11984,15 @@ function ExampleLibraryPage({
   const [examples, setExamples] = useState<TextGeneratorExample[]>(stored);
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [newCategory, setNewCategory] = useState("");
+  const [extraCategories, setExtraCategories] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [moveIds, setMoveIds] = useState<string[] | null>(null);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [moveTarget, setMoveTarget] = useState("");
+  const [moveNewName, setMoveNewName] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -11811,11 +12039,29 @@ function ExampleLibraryPage({
     };
   });
 
-  function addExample() {
+  function addExample(category = "") {
     const id = `example-${Date.now()}`;
     setSearch("");
-    setExamples((current) => [{ id, topic: "", body: "" }, ...current]);
+    setExamples((current) => [
+      { id, topic: "", body: "", category },
+      ...current
+    ]);
     setEditingId(id);
+    if (category) {
+      setCollapsed((current) => ({ ...current, [category]: false }));
+    }
+  }
+
+  function addCategory() {
+    const name = newCategory.trim();
+    if (!name) return;
+    setExtraCategories((current) =>
+      current.includes(name) ? current : [...current, name]
+    );
+    setNewCategory("");
+    setAddingCategory(false);
+    setCollapsed((current) => ({ ...current, [name]: false }));
+    addExample(name);
   }
 
   function update(id: string, patch: Partial<TextGeneratorExample>) {
@@ -11828,12 +12074,254 @@ function ExampleLibraryPage({
 
   function remove(id: string) {
     setExamples((current) => current.filter((example) => example.id !== id));
+    setSelectedIds((current) => current.filter((item) => item !== id));
     if (editingId === id) setEditingId(null);
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    );
+  }
+
+  function openMove(ids: string[]) {
+    if (ids.length === 0) return;
+    setMoveIds(ids);
+    setMoveTarget("");
+    setMoveNewName("");
+  }
+
+  function resolveTargetCategory(): string | null {
+    if (moveTarget === "__new__") {
+      const name = moveNewName.trim();
+      return name || null;
+    }
+    if (moveTarget === "__none__") return "";
+    return moveTarget;
+  }
+
+  function applyMove() {
+    if (!moveIds) return;
+    const target = resolveTargetCategory();
+    if (target == null) return;
+    const idSet = new Set(moveIds);
+    const next = examples.map((example) =>
+      idSet.has(example.id) ? { ...example, category: target } : example
+    );
+    setExamples(next);
+    // Emptying a whole category by moving everything out is how merging works
+    // here, so the drained category should not linger as an empty heading.
+    const stillUsed = new Set(next.map((e) => (e.category ?? "").trim()));
+    setExtraCategories((current) =>
+      current.filter((name) => name === target || stillUsed.has(name))
+    );
+    if (target) {
+      setExtraCategories((current) =>
+        current.includes(target) ? current : [...current, target]
+      );
+      setCollapsed((current) => ({ ...current, [target]: false }));
+    }
+    setSelectedIds([]);
+    setMoveIds(null);
   }
 
   const list = examples.filter((example) =>
     exampleMatchesSearch(example, search)
   );
+
+  const allCategoryNames = useMemo(() => {
+    const fromExamples = examples.map((e) => e.category?.trim() || "");
+    const set = new Set([...fromExamples, ...extraCategories]);
+    return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }, [examples, extraCategories]);
+
+  const categoryNames = useMemo(() => {
+    const fromExamples = list.map((e) => e.category?.trim() || "");
+    const set = new Set([...fromExamples, ...extraCategories]);
+    const named = [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const hasEmpty = set.has("") || list.some((e) => !(e.category ?? "").trim());
+    return hasEmpty ? ["", ...named] : named;
+  }, [list, extraCategories]);
+
+  function categoryLabel(cat: string) {
+    return cat || t("examples.uncategorized");
+  }
+
+  function renderMoveModal() {
+    if (moveIds == null) return null;
+    const close = () => setMoveIds(null);
+    return (
+      <div className="modal-backdrop" onClick={close}>
+        <div
+          className="modal confirm-modal examples-move-modal"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="modal-head">
+            <h3>{t("examples.moveModal.title")}</h3>
+          </div>
+          <p className="confirm-message">
+            {t("examples.moveModal.count", { n: moveIds.length })}
+          </p>
+          <label className="field">
+            {t("examples.moveModal.target")}
+            <select
+              value={moveTarget}
+              onChange={(event) => setMoveTarget(event.target.value)}
+            >
+              <option value="">{t("examples.moveModal.choose")}</option>
+              <option value="__none__">{t("examples.uncategorized")}</option>
+              {allCategoryNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+              <option value="__new__">{t("examples.moveModal.new")}</option>
+            </select>
+          </label>
+          {moveTarget === "__new__" ? (
+            <label className="field">
+              {t("examples.categoryName")}
+              <input
+                autoFocus
+                value={moveNewName}
+                onChange={(event) => setMoveNewName(event.target.value)}
+              />
+            </label>
+          ) : null}
+          <div className="modal-actions">
+            <button type="button" className="ghost" onClick={close}>
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              disabled={
+                !moveTarget ||
+                (moveTarget === "__new__" && !moveNewName.trim())
+              }
+              onClick={applyMove}
+            >
+              {t("examples.moveModal.confirm")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCard(example: TextGeneratorExample) {
+    const editing = editingId === example.id;
+    const body = example.body.trim();
+    const selected = selectedIds.includes(example.id);
+    return (
+      <article
+        className={`example-card${editing ? " is-editing" : ""}${
+          selected ? " is-selected" : ""
+        }`}
+        key={example.id}
+      >
+        {editing ? (
+          <>
+            <input
+              className="example-topic-input"
+              value={example.topic}
+              placeholder={t("examples.topicPlaceholder")}
+              autoFocus
+              onChange={(event) =>
+                update(example.id, { topic: event.target.value })
+              }
+            />
+            <textarea
+              rows={12}
+              value={example.body}
+              placeholder={t("examples.bodyPlaceholder")}
+              onChange={(event) =>
+                update(example.id, { body: event.target.value })
+              }
+            />
+            <div className="example-card-actions">
+              <button
+                type="button"
+                className="ghost danger small"
+                onClick={() => remove(example.id)}
+              >
+                {t("common.erase")}
+              </button>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => openMove([example.id])}
+              >
+                {t("examples.move")}
+              </button>
+              <button
+                type="button"
+                className="small"
+                onClick={() => setEditingId(null)}
+              >
+                {t("common.done")}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="example-row">
+            <input
+              className="example-select"
+              type="checkbox"
+              checked={selected}
+              onChange={() => toggleSelect(example.id)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={t("examples.select")}
+            />
+            <button
+              type="button"
+              className="example-row-main example-row-open"
+              onClick={() => setViewingId(example.id)}
+              title={t("examples.view")}
+            >
+              <strong>{example.topic || t("common.noTopic")}</strong>
+              <p className="example-card-body">
+                {body || (
+                  <span className="muted">{t("examples.noTextYet")}</span>
+                )}
+              </p>
+            </button>
+            <span className="example-row-count muted small-note">
+              {t("examples.words", { n: countWords(body) })}
+            </span>
+            <div className="example-row-actions">
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setViewingId(example.id)}
+              >
+                {t("examples.view")}
+              </button>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => openMove([example.id])}
+              >
+                {t("examples.move")}
+              </button>
+              <button
+                type="button"
+                className="small"
+                onClick={() => setEditingId(example.id)}
+              >
+                {t("common.edit")}
+              </button>
+            </div>
+          </div>
+        )}
+      </article>
+    );
+  }
+
+  const viewing = viewingId
+    ? examples.find((example) => example.id === viewingId)
+    : null;
 
   return (
     <section className="list-page examples-page">
@@ -11844,8 +12332,12 @@ function ExampleLibraryPage({
           <p className="page-lead">{t("examples.leadLong")}</p>
         </div>
         <div className="row-actions">
-          <button type="button" className="ghost" onClick={onOpenGenerator}>
-            {t("examples.goGenerator")}
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setAddingCategory((current) => !current)}
+          >
+            {t("examples.addCategory")}
           </button>
           <button
             type="button"
@@ -11853,7 +12345,11 @@ function ExampleLibraryPage({
             disabled={!dirty || saving}
             onClick={() => void persist()}
           >
-            {saving ? t("common.saving") : dirty ? t("examples.saveChanges") : t("examples.allSaved")}
+            {saving
+              ? t("common.saving")
+              : dirty
+                ? t("examples.saveChanges")
+                : t("examples.allSaved")}
           </button>
         </div>
       </div>
@@ -11873,98 +12369,127 @@ function ExampleLibraryPage({
               })
             : t("examples.countTotal", { n: examples.length })}
         </span>
-        <button type="button" onClick={addExample}>
-          {t("examples.add")}
-        </button>
       </div>
+
+      {addingCategory ? (
+        <div className="examples-category-add">
+          <input
+            autoFocus
+            value={newCategory}
+            placeholder={t("examples.categoryName")}
+            onChange={(event) => setNewCategory(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                addCategory();
+              }
+            }}
+          />
+          <button type="button" onClick={addCategory}>
+            {t("common.add")}
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => {
+              setAddingCategory(false);
+              setNewCategory("");
+            }}
+          >
+            {t("common.cancel")}
+          </button>
+        </div>
+      ) : null}
+
+      {selectedIds.length > 0 ? (
+        <div className="examples-selection-bar">
+          <span>
+            {t("examples.moveModal.count", { n: selectedIds.length })}
+          </span>
+          <div className="row-actions">
+            <button
+              type="button"
+              className="ghost small"
+              onClick={() => setSelectedIds([])}
+            >
+              {t("examples.clearSelection")}
+            </button>
+            <button type="button" onClick={() => openMove(selectedIds)}>
+              {t("examples.moveSelected")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {examples.length === 0 ? (
         <div className="empty-state">{t("examples.emptyLong")}</div>
       ) : list.length === 0 ? (
         <p className="muted">{t("examples.noMatch")}</p>
       ) : (
-        <div className="examples-grid">
-          {list.map((example) => {
-            const editing = editingId === example.id;
-            const body = example.body.trim();
-            const open = expandedId === example.id;
+        <div className="examples-categories">
+          {categoryNames.map((cat) => {
+            const key = cat || "__none__";
+            const items = list.filter(
+              (example) => (example.category ?? "").trim() === cat
+            );
+            if (items.length === 0 && !extraCategories.includes(cat)) {
+              return null;
+            }
+            const isCollapsed = collapsed[key] !== false;
+            const label = categoryLabel(cat);
             return (
-              <article
-                className={`example-card${editing ? " is-editing" : ""}`}
-                key={example.id}
-              >
-                {editing ? (
-                  <>
-                    <input
-                      className="example-topic-input"
-                      value={example.topic}
-                      placeholder={t("examples.topicPlaceholder")}
-                      autoFocus
-                      onChange={(event) =>
-                        update(example.id, { topic: event.target.value })
-                      }
-                    />
-                    <textarea
-                      rows={12}
-                      value={example.body}
-                      placeholder={t("examples.bodyPlaceholder")}
-                      onChange={(event) =>
-                        update(example.id, { body: event.target.value })
-                      }
-                    />
-                    <div className="example-card-actions">
-                      <button
-                        type="button"
-                        className="ghost danger small"
-                        onClick={() => remove(example.id)}
-                      >
-                        {t("common.erase")}
-                      </button>
-                      <button
-                        type="button"
-                        className="small"
-                        onClick={() => setEditingId(null)}
-                      >
-                        {t("common.done")}
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="example-card-head">
-                      <strong>{example.topic || t("common.noTopic")}</strong>
-                      <span className="muted small-note">
-                        {t("examples.words", { n: countWords(body) })}
-                      </span>
-                    </div>
-                    <p className={`example-card-body${open ? " is-open" : ""}`}>
-                      {body || (
-                        <span className="muted">{t("examples.noTextYet")}</span>
-                      )}
-                    </p>
-                    <div className="example-card-actions">
-                      {body.length > 260 && (
-                        <button
-                          type="button"
-                          className="ghost small"
-                          onClick={() =>
-                            setExpandedId(open ? null : example.id)
-                          }
-                        >
-                          {open ? t("examples.showLess") : t("examples.showAll")}
-                        </button>
-                      )}
+              <section className="examples-category" key={key}>
+                <button
+                  type="button"
+                  className="examples-category-head"
+                  onClick={() =>
+                    setCollapsed((current) => ({
+                      ...current,
+                      [key]: current[key] === false
+                    }))
+                  }
+                >
+                  <span className="examples-category-caret" aria-hidden>
+                    {isCollapsed ? "▸" : "▾"}
+                  </span>
+                  <span className="examples-category-name">{label}</span>
+                  <span className="count-pill">{items.length}</span>
+                </button>
+                {!isCollapsed ? (
+                  <div className="examples-category-body">
+                    <div className="examples-category-actions">
                       <button
                         type="button"
                         className="ghost small"
-                        onClick={() => setEditingId(example.id)}
+                        onClick={() => addExample(cat)}
                       >
-                        {t("common.edit")}
+                        {t("examples.add")}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost small"
+                        disabled={items.length === 0}
+                        onClick={() =>
+                          setSelectedIds(items.map((item) => item.id))
+                        }
+                      >
+                        {t("examples.selectAllIn")}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost small"
+                        disabled={items.length === 0}
+                        onClick={() => openMove(items.map((item) => item.id))}
+                      >
+                        {t("examples.moveAll")}
                       </button>
                     </div>
-                  </>
-                )}
-              </article>
+                    <div className="examples-list">
+                      {items.map((example) => renderCard(example))}
+                    </div>
+                  </div>
+                ) : null}
+              </section>
             );
           })}
         </div>
@@ -11975,6 +12500,1252 @@ function ExampleLibraryPage({
           {t("examples.dirty")}
         </p>
       )}
+
+      {viewing ? (
+        <div
+          className="modal-backdrop"
+          onClick={() => setViewingId(null)}
+        >
+          <div
+            className="modal confirm-modal examples-view-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{viewing.topic || t("common.noTopic")}</h3>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setViewingId(null)}
+              >
+                {t("common.close")}
+              </button>
+            </div>
+            <p className="examples-view-body">
+              {viewing.body.trim() || (
+                <span className="muted">{t("examples.noTextYet")}</span>
+              )}
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setViewingId(null)}
+              >
+                {t("common.close")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId(viewing.id);
+                  setViewingId(null);
+                }}
+              >
+                {t("common.edit")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {renderMoveModal()}
+    </section>
+  );
+}
+
+const DATE_LOCALES: Record<Lang, string> = {
+  es: "es-ES",
+  en: "en-GB",
+  de: "de-DE"
+};
+
+function shortDate(iso: string, lang: Lang): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return "—";
+  return new Date(time).toLocaleDateString(DATE_LOCALES[lang], {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+function reminderInterval(reminder: ContactReminder): {
+  value: number;
+  unit: ReminderIntervalUnit;
+} {
+  const unitRaw = String(reminder.intervalUnit ?? "").toLowerCase();
+  if (unitRaw === "days" || unitRaw === "day") {
+    const raw = Number(reminder.intervalValue ?? reminder.intervalMonths ?? 1);
+    return {
+      value: Math.max(1, Math.round(Number.isFinite(raw) && raw > 0 ? raw : 1)),
+      unit: "days"
+    };
+  }
+  if (unitRaw === "months" || unitRaw === "month") {
+    const raw = Number(reminder.intervalValue ?? reminder.intervalMonths ?? 1);
+    return {
+      value: Math.max(1, Math.round(Number.isFinite(raw) && raw > 0 ? raw : 1)),
+      unit: "months"
+    };
+  }
+  // Legacy rows only had intervalMonths.
+  const raw = Number(reminder.intervalMonths ?? reminder.intervalValue ?? 1);
+  return {
+    value: Math.max(1, Math.round(Number.isFinite(raw) && raw > 0 ? raw : 1)),
+    unit: "months"
+  };
+}
+
+function reminderDueInfo(
+  reminder: ContactReminder,
+  now = Date.now()
+): { due: boolean; overdue: boolean; daysUntil: number } {
+  // Never completed → stays in the “to contact” panel until the user
+  // actively presses «Ya lo hice». The clock starts only after that.
+  if (!String(reminder.lastDoneAt ?? "").trim()) {
+    return { due: true, overdue: true, daysUntil: 0 };
+  }
+  const { value, unit } = reminderInterval(reminder);
+  const ms =
+    unit === "days"
+      ? value * 24 * 60 * 60 * 1000
+      : value * 30.44 * 24 * 60 * 60 * 1000;
+  const last = Date.parse(reminder.lastDoneAt!);
+  const anchor = Number.isFinite(last) ? last : now;
+  const next = anchor + ms;
+  const daysUntil = Math.ceil((next - now) / (24 * 60 * 60 * 1000));
+  return {
+    due: daysUntil <= 0,
+    overdue: daysUntil < 0,
+    daysUntil
+  };
+}
+
+function reminderIntervalLabel(
+  reminder: ContactReminder,
+  t: Translate
+): string {
+  const { value, unit } = reminderInterval(reminder);
+  return unit === "days"
+    ? t("inbox.everyDays", { n: value })
+    : t("inbox.everyMonths", { n: value });
+}
+
+/** Keep intervalUnit/value intact on the client even if a save round-trip is messy. */
+function hydrateReminderClient(
+  item: Partial<ContactReminder>
+): ContactReminder {
+  const { value, unit } = reminderInterval(item as ContactReminder);
+  const out: ContactReminder = {
+    id: String(item.id ?? ""),
+    contactId: String(item.contactId ?? ""),
+    channel: String(item.channel ?? "call"),
+    intervalValue: value,
+    intervalUnit: unit,
+    note: String(item.note ?? ""),
+    lastDoneAt: String(item.lastDoneAt ?? ""),
+    createdAt: String(item.createdAt ?? new Date().toISOString()),
+    updatedAt: String(item.updatedAt ?? item.createdAt ?? new Date().toISOString())
+  };
+  if (unit === "months") out.intervalMonths = value;
+  return out;
+}
+
+/** Case-insensitive: every word in the query must appear somewhere in the text. */
+function textMatchesKeywords(haystack: string, query: string): boolean {
+  const words = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return true;
+  const hay = haystack.toLowerCase();
+  return words.every((word) => hay.includes(word));
+}
+
+const TODO_MAX_CHARS = 110;
+
+type ReminderDraft = {
+  id?: string;
+  contactId: string;
+  channel: ReminderChannel;
+  intervalValue: number;
+  intervalUnit: ReminderIntervalUnit;
+  note: string;
+};
+
+function InboxPage({
+  inventory,
+  setInventory,
+  onError,
+  onToast,
+  onDirtyChange,
+  saveRef,
+  onOpenContact
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
+  onOpenContact: (contactId: string) => void;
+}) {
+  const { lang, t } = useLanguage();
+  const storedReminders = useMemo(
+    () => inventory.contactReminders ?? [],
+    [inventory.contactReminders]
+  );
+  const storedNotes = useMemo(
+    () => inventory.inboxNotes ?? [],
+    [inventory.inboxNotes]
+  );
+  const storedTodos = useMemo(
+    () => inventory.inboxTodos ?? [],
+    [inventory.inboxTodos]
+  );
+  const [reminders, setReminders] = useState(storedReminders);
+  const [notes, setNotes] = useState(storedNotes);
+  const [todos, setTodos] = useState(storedTodos);
+  const [saving, setSaving] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [draftTodo, setDraftTodo] = useState("");
+  const [noteModalOpen, setNoteModalOpen] = useState(false);
+  const [draftNote, setDraftNote] = useState("");
+  const [noteFindOpen, setNoteFindOpen] = useState(false);
+  const [noteSearch, setNoteSearch] = useState("");
+  const [noteSort, setNoteSort] = useState<
+    "newest" | "oldest" | "longest" | "shortest" | "alpha"
+  >("newest");
+  const [viewingNoteId, setViewingNoteId] = useState<string | null>(null);
+  const [reminderDraft, setReminderDraft] = useState<ReminderDraft | null>(
+    null
+  );
+  const [collapsed, setCollapsed] = useState({
+    todo: true,
+    reminders: true,
+    notes: true
+  });
+  const lastSavedRef = useRef("");
+  const failedSaveRef = useRef("");
+
+  useEffect(() => {
+    setReminders(storedReminders.map((item) => hydrateReminderClient(item)));
+  }, [storedReminders]);
+  useEffect(() => {
+    setNotes(storedNotes);
+  }, [storedNotes]);
+  useEffect(() => {
+    setTodos(storedTodos);
+  }, [storedTodos]);
+
+  const payload = JSON.stringify({ reminders, notes, todos });
+  const storedPayload = JSON.stringify({
+    reminders: storedReminders,
+    notes: storedNotes,
+    todos: storedTodos
+  });
+  const dirty = payload !== storedPayload && payload !== lastSavedRef.current;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    return () => onDirtyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function persist(): Promise<boolean> {
+    const snapshot = JSON.stringify({ reminders, notes, todos });
+    const localReminders = reminders;
+    setSaving(true);
+    try {
+      await requireApi("saveContactReminders", t)(localReminders);
+      await requireApi("saveInboxNotes", t)(notes);
+      const data = await requireApi("saveInboxTodos", t)(todos);
+      // Guard against an outdated main process dropping intervalUnit
+      // (that bug turned “cada 1 día” into “cada 1 mes” ≈ 31 days).
+      const savedReminders = (data.contactReminders ?? []).map((saved) => {
+        const local = localReminders.find((item) => item.id === saved.id);
+        if (!local) return hydrateReminderClient(saved);
+        return hydrateReminderClient({
+          ...saved,
+          intervalValue: local.intervalValue,
+          intervalUnit: local.intervalUnit,
+          lastDoneAt: local.lastDoneAt ?? saved.lastDoneAt,
+          note: local.note ?? saved.note
+        });
+      });
+      lastSavedRef.current = JSON.stringify({
+        reminders: savedReminders,
+        notes,
+        todos
+      });
+      setReminders(savedReminders);
+      setInventory({ ...data, contactReminders: savedReminders });
+      onDirtyChange?.(false);
+      return true;
+    } catch (error) {
+      failedSaveRef.current = snapshot;
+      onError(error instanceof Error ? error.message : t("common.error.save"));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!saveRef) return;
+    saveRef.current = () => persist();
+    return () => {
+      if (saveRef) saveRef.current = null;
+    };
+  });
+
+  useEffect(() => {
+    if (!dirty || saving) return;
+    if (payload === failedSaveRef.current) return;
+    const timer = window.setTimeout(() => void persist(), 400);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty, saving, payload]);
+
+  const contacts = [...inventory.contacts].sort((a, b) =>
+    (a.name || "").localeCompare(b.name || "")
+  );
+
+  function methodLabel(value: ReminderChannel): string {
+    const option = translatedLookupOptions(
+      inventory,
+      "contactMethod",
+      lang
+    ).find((item) => item.value === value);
+    return option?.label ?? value;
+  }
+
+  function contactName(contactId: string): string {
+    return (
+      contacts.find((item) => item.id === contactId)?.name ??
+      t("inbox.pickContact")
+    );
+  }
+
+  function toggleSection(key: keyof typeof collapsed) {
+    setCollapsed((current) => ({ ...current, [key]: !current[key] }));
+  }
+
+  const openTodos = todos
+    .filter((todo) => !todo.doneAt)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const archivedTodos = todos
+    .filter((todo) => Boolean(todo.doneAt))
+    .sort((a, b) => (b.doneAt ?? "").localeCompare(a.doneAt ?? ""));
+  const filteredArchived = archivedTodos.filter((todo) =>
+    textMatchesKeywords(todo.body, historySearch)
+  );
+
+  const todoTooLong = draftTodo.length > TODO_MAX_CHARS;
+
+  function saveTodoInline() {
+    const body = draftTodo.trim();
+    if (!body || todoTooLong) return;
+    setTodos((current) => [
+      {
+        id: `TODO-${Date.now()}`,
+        body,
+        doneAt: "",
+        createdAt: new Date().toISOString()
+      },
+      ...current
+    ]);
+    setDraftTodo("");
+  }
+
+  function completeTodo(id: string) {
+    setTodos((current) =>
+      current.map((todo) =>
+        todo.id === id
+          ? { ...todo, doneAt: new Date().toISOString() }
+          : todo
+      )
+    );
+    onToast(t("inbox.todo.archived"));
+  }
+
+  function restoreTodo(id: string) {
+    setTodos((current) =>
+      current.map((todo) =>
+        todo.id === id ? { ...todo, doneAt: "" } : todo
+      )
+    );
+    setHistoryOpen(false);
+    setCollapsed((current) => ({ ...current, todo: false }));
+    onToast(t("inbox.todo.restored"));
+  }
+
+  function removeTodo(id: string) {
+    setTodos((current) => current.filter((todo) => todo.id !== id));
+  }
+
+  function blankReminderDraft(): ReminderDraft {
+    return {
+      contactId: contacts[0]?.id ?? "",
+      channel: "call",
+      intervalValue: 1,
+      intervalUnit: "days",
+      note: ""
+    };
+  }
+
+  function openNewReminder(preset?: Partial<ReminderDraft>) {
+    setReminderDraft({ ...blankReminderDraft(), ...preset });
+    setCollapsed((current) => ({ ...current, reminders: false }));
+  }
+
+  function openEditReminder(reminder: ContactReminder) {
+    const { value, unit } = reminderInterval(reminder);
+    setReminderDraft({
+      id: reminder.id,
+      contactId: reminder.contactId,
+      channel: reminder.channel,
+      intervalValue: value,
+      intervalUnit: unit,
+      note: reminder.note ?? ""
+    });
+  }
+
+  function startReminder() {
+    if (!reminderDraft) return;
+    if (!reminderDraft.contactId) {
+      onError(t("inbox.pickContact"));
+      return;
+    }
+    const now = new Date().toISOString();
+    const value = Math.max(1, Math.round(Number(reminderDraft.intervalValue) || 1));
+    const unit: ReminderIntervalUnit =
+      reminderDraft.intervalUnit === "days" ? "days" : "months";
+    const existing = reminderDraft.id
+      ? reminders.find((item) => item.id === reminderDraft.id)
+      : undefined;
+    const next = hydrateReminderClient({
+      id: reminderDraft.id ?? `REM-${Date.now()}`,
+      contactId: reminderDraft.contactId,
+      channel: reminderDraft.channel || "call",
+      intervalValue: value,
+      intervalUnit: unit,
+      note: reminderDraft.note.trim(),
+      // New reminders start due until the user presses «Ya lo hice».
+      lastDoneAt: existing?.lastDoneAt ?? "",
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    });
+    setReminders((current) => {
+      if (reminderDraft.id) {
+        return current.map((item) =>
+          item.id === reminderDraft.id ? next : item
+        );
+      }
+      return [next, ...current];
+    });
+    setReminderDraft(null);
+    setCollapsed((current) => ({ ...current, reminders: false }));
+    onToast(
+      reminderDraft.id
+        ? t("inbox.reminder.started")
+        : t("inbox.reminder.startedDue")
+    );
+  }
+
+  function removeReminder(id: string) {
+    setReminders((current) => current.filter((item) => item.id !== id));
+  }
+
+  function markReminderDone(id: string) {
+    const reminder = reminders.find((item) => item.id === id);
+    if (!reminder) return;
+    setReminders((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              lastDoneAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
+          : item
+      )
+    );
+    onToast(
+      t("inbox.markedDone", {
+        interval: reminderIntervalLabel(reminder, t)
+      })
+    );
+  }
+
+  function openNewNote() {
+    setDraftNote("");
+    setNoteModalOpen(true);
+  }
+
+  function saveNoteFromModal() {
+    const body = draftNote.trim();
+    if (!body) return;
+    setNotes((current) => [
+      {
+        id: `NOTE-${Date.now()}`,
+        body,
+        createdAt: new Date().toISOString()
+      },
+      ...current
+    ]);
+    setDraftNote("");
+    setNoteModalOpen(false);
+  }
+
+  function removeNote(id: string) {
+    setNotes((current) => current.filter((item) => item.id !== id));
+    if (viewingNoteId === id) setViewingNoteId(null);
+  }
+
+  const sortedReminders = [...reminders].sort(
+    (a, b) => reminderDueInfo(a).daysUntil - reminderDueInfo(b).daysUntil
+  );
+  const dueReminders = sortedReminders.filter((reminder) =>
+    reminderDueInfo(reminder).due
+  );
+  const visibleNotes = [...notes]
+    .filter((note) => textMatchesKeywords(note.body, noteSearch))
+    .sort((a, b) => {
+      switch (noteSort) {
+        case "oldest":
+          return a.createdAt.localeCompare(b.createdAt);
+        case "longest":
+          return b.body.length - a.body.length;
+        case "shortest":
+          return a.body.length - b.body.length;
+        case "alpha":
+          return a.body.localeCompare(b.body, lang);
+        case "newest":
+        default:
+          return b.createdAt.localeCompare(a.createdAt);
+      }
+    });
+  const viewingNote =
+    viewingNoteId == null
+      ? null
+      : notes.find((note) => note.id === viewingNoteId) ?? null;
+
+  function renderDueCard(reminder: ContactReminder) {
+    return (
+      <li key={reminder.id} className="inbox-due-card">
+        <div className="inbox-due-card-text">
+          <strong>{contactName(reminder.contactId)}</strong>
+          <span>
+            {methodLabel(reminder.channel)}
+            {" · "}
+            {reminderIntervalLabel(reminder, t)}
+            {reminder.note ? ` · ${reminder.note}` : ""}
+          </span>
+          <span className="inbox-due-card-status">
+            {reminder.lastDoneAt
+              ? t("inbox.overdue", {
+                  n: Math.max(1, Math.abs(reminderDueInfo(reminder).daysUntil))
+                })
+              : t("inbox.dueWaiting")}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="inbox-did-it"
+          onClick={() => markReminderDone(reminder.id)}
+        >
+          {t("inbox.markDone")}
+        </button>
+        <button
+          type="button"
+          className="ghost small"
+          onClick={() => openEditReminder(reminder)}
+        >
+          {t("inbox.reminder.edit")}
+        </button>
+      </li>
+    );
+  }
+
+  function renderReminderSummary(reminder: ContactReminder) {
+    const due = reminderDueInfo(reminder);
+    return (
+      <li
+        key={reminder.id}
+        className={`inbox-summary-row${due.due ? " is-due" : ""}`}
+      >
+        <button
+          type="button"
+          className="inbox-summary-main"
+          onClick={() => openEditReminder(reminder)}
+          title={t("inbox.reminder.clickToEdit")}
+        >
+          <strong>{contactName(reminder.contactId)}</strong>
+          <span className="muted small-note">
+            {methodLabel(reminder.channel)}
+            {" · "}
+            {reminderIntervalLabel(reminder, t)}
+            {reminder.note ? ` · ${reminder.note}` : ""}
+          </span>
+          <span className="muted small-note">
+            {due.due
+              ? reminder.lastDoneAt
+                ? t("inbox.overdue", {
+                    n: Math.max(1, Math.abs(due.daysUntil))
+                  })
+                : t("inbox.dueWaiting")
+              : t("inbox.dueIn", { n: due.daysUntil })}
+            {" · "}
+            {reminder.lastDoneAt
+              ? t("inbox.lastDone", {
+                  date: shortDate(reminder.lastDoneAt, lang)
+                })
+              : t("inbox.neverDone")}
+          </span>
+          <span className="inbox-summary-edit-hint">
+            {t("inbox.reminder.clickToEdit")}
+          </span>
+        </button>
+        <div className="inbox-summary-actions">
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => openEditReminder(reminder)}
+          >
+            {t("inbox.reminder.edit")}
+          </button>
+          {due.due ? (
+            <button
+              type="button"
+              className="small inbox-did-it"
+              onClick={() => markReminderDone(reminder.id)}
+            >
+              {t("inbox.markDone")}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ghost danger small"
+            onClick={() => removeReminder(reminder.id)}
+          >
+            {t("common.erase")}
+          </button>
+        </div>
+      </li>
+    );
+  }
+
+  return (
+    <section className="list-page inbox-page">
+      <div className="page-head inbox-page-head">
+        <div>
+          <p className="eyebrow">{t("inbox.eyebrow")}</p>
+          <h2>{t("inbox.title")}</h2>
+          <p className="page-lead">{t("inbox.lead")}</p>
+        </div>
+        <span className="inbox-save-state muted small-note">
+          {saving ? t("common.saving") : t("inbox.autosave")}
+        </span>
+      </div>
+
+      <section
+        className={`inbox-due-panel${
+          dueReminders.length > 0 ? " has-items" : ""
+        }`}
+      >
+        <header className="inbox-due-panel-head">
+          <h3>
+            {t("inbox.duePanel.title")}
+            {dueReminders.length > 0 ? (
+              <span className="inbox-count">{dueReminders.length}</span>
+            ) : null}
+          </h3>
+          <p className="muted small-note">{t("inbox.duePanel.lead")}</p>
+        </header>
+        {dueReminders.length === 0 ? (
+          <p className="inbox-empty">{t("inbox.duePanel.empty")}</p>
+        ) : (
+          <ul className="inbox-due-list">
+            {dueReminders.map((reminder) => renderDueCard(reminder))}
+          </ul>
+        )}
+      </section>
+
+      <div className="inbox-stack">
+        {/* ── To Do ────────────────────────────────────────────── */}
+        <section className="inbox-fold">
+          <button
+            type="button"
+            className="inbox-fold-head"
+            onClick={() => toggleSection("todo")}
+          >
+            <span className="inbox-fold-title">
+              <span className="inbox-fold-caret" aria-hidden>
+                {collapsed.todo ? "▸" : "▾"}
+              </span>
+              {t("inbox.todo.title")}
+              {openTodos.length > 0 ? (
+                <span className="inbox-count soft">{openTodos.length}</span>
+              ) : null}
+            </span>
+          </button>
+          {!collapsed.todo ? (
+            <div className="inbox-fold-body todo-fold-body">
+              <div className="todo-add">
+                <input
+                  type="text"
+                  className="todo-add-input"
+                  placeholder={t("inbox.todo.placeholder")}
+                  value={draftTodo}
+                  maxLength={110}
+                  onChange={(event) => setDraftTodo(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      saveTodoInline();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="todo-add-btn"
+                  disabled={!draftTodo.trim() || todoTooLong}
+                  onClick={saveTodoInline}
+                >
+                  {t("inbox.todo.addShort")}
+                </button>
+              </div>
+              {todoTooLong ? (
+                <p className="inbox-todo-too-long">{t("inbox.todo.tooLong")}</p>
+              ) : null}
+
+              {openTodos.length === 0 ? (
+                <p className="todo-empty">{t("inbox.todo.empty")}</p>
+              ) : (
+                <ul className="todo-list">
+                  {openTodos.map((todo) => (
+                    <li key={todo.id} className="todo-item">
+                      <button
+                        type="button"
+                        className="todo-check"
+                        aria-label={t("inbox.todo.done")}
+                        title={t("inbox.todo.done")}
+                        onClick={() => completeTodo(todo.id)}
+                      />
+                      <span className="todo-item-text">{todo.body}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+        </section>
+
+        {/* ── Recordatorios ────────────────────────────────────── */}
+        <section className="inbox-fold">
+          <button
+            type="button"
+            className="inbox-fold-head"
+            onClick={() => toggleSection("reminders")}
+          >
+            <span className="inbox-fold-title">
+              <span className="inbox-fold-caret" aria-hidden>
+                {collapsed.reminders ? "▸" : "▾"}
+              </span>
+              {t("inbox.reminders")}
+              {dueReminders.length > 0 ? (
+                <span className="inbox-count">{dueReminders.length}</span>
+              ) : null}
+            </span>
+          </button>
+          {!collapsed.reminders ? (
+            <div className="inbox-fold-body">
+              <div className="inbox-section-toolbar">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() =>
+                    openNewReminder({
+                      intervalValue: 1,
+                      intervalUnit: "days"
+                    })
+                  }
+                >
+                  {t("inbox.reminder.everyDay")}
+                </button>
+                <button type="button" onClick={() => openNewReminder()}>
+                  {t("inbox.addReminder")}
+                </button>
+              </div>
+
+              <h4 className="inbox-subhead">{t("inbox.reminders.all")}</h4>
+              {sortedReminders.length === 0 ? (
+                <p className="inbox-empty">{t("inbox.emptyReminders")}</p>
+              ) : (
+                <ul className="inbox-simple-list">
+                  {sortedReminders.map((reminder) =>
+                    renderReminderSummary(reminder)
+                  )}
+                </ul>
+              )}
+            </div>
+          ) : null}
+        </section>
+
+        {/* ── Notas ────────────────────────────────────────────── */}
+        <section className="inbox-fold">
+          <button
+            type="button"
+            className="inbox-fold-head"
+            onClick={() => toggleSection("notes")}
+          >
+            <span className="inbox-fold-title">
+              <span className="inbox-fold-caret" aria-hidden>
+                {collapsed.notes ? "▸" : "▾"}
+              </span>
+              {t("inbox.notes")}
+            </span>
+          </button>
+          {!collapsed.notes ? (
+            <div className="inbox-fold-body">
+              <div className="inbox-section-toolbar">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setNoteFindOpen(true)}
+                >
+                  {t("inbox.notes.find")}
+                </button>
+                <button type="button" onClick={openNewNote}>
+                  {t("inbox.addNote")}
+                </button>
+              </div>
+              {visibleNotes.length === 0 ? (
+                <p className="inbox-empty">
+                  {notes.length === 0
+                    ? t("inbox.emptyNotes")
+                    : t("inbox.notes.noMatch")}
+                </p>
+              ) : (
+                <ul className="inbox-note-list">
+                  {visibleNotes.map((note) => (
+                    <li key={note.id} className="inbox-note-row">
+                      <button
+                        type="button"
+                        className="inbox-note-preview"
+                        onClick={() => setViewingNoteId(note.id)}
+                      >
+                        <span className="inbox-note-preview-text">
+                          {note.body}
+                        </span>
+                        <span className="muted small-note">
+                          {shortDate(note.createdAt, lang)}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost danger small"
+                        onClick={() => removeNote(note.id)}
+                      >
+                        {t("common.erase")}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+        </section>
+      </div>
+
+      {noteFindOpen ? (
+        <div className="modal-backdrop" onClick={() => setNoteFindOpen(false)}>
+          <div
+            className="modal confirm-modal inbox-compose-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{t("inbox.notes.findTitle")}</h3>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setNoteFindOpen(false)}
+              >
+                {t("common.close")}
+              </button>
+            </div>
+            <label className="field">
+              {t("inbox.notes.search")}
+              <input
+                className="search-input"
+                value={noteSearch}
+                autoFocus
+                placeholder={t("inbox.notes.search")}
+                onChange={(event) => setNoteSearch(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              {t("inbox.sort.label")}
+              <select
+                value={noteSort}
+                onChange={(event) =>
+                  setNoteSort(
+                    event.target.value as
+                      | "newest"
+                      | "oldest"
+                      | "longest"
+                      | "shortest"
+                      | "alpha"
+                  )
+                }
+              >
+                <option value="newest">{t("inbox.sort.newest")}</option>
+                <option value="oldest">{t("inbox.sort.oldest")}</option>
+                <option value="longest">{t("inbox.sort.longest")}</option>
+                <option value="shortest">{t("inbox.sort.shortest")}</option>
+                <option value="alpha">{t("inbox.sort.alpha")}</option>
+              </select>
+            </label>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  setNoteSearch("");
+                  setNoteSort("newest");
+                }}
+              >
+                {t("inbox.notes.clearFind")}
+              </button>
+              <button type="button" onClick={() => setNoteFindOpen(false)}>
+                {t("common.done")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {viewingNote ? (
+        <div
+          className="modal-backdrop"
+          onClick={() => setViewingNoteId(null)}
+        >
+          <div
+            className="modal confirm-modal inbox-compose-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{t("inbox.notes.viewTitle")}</h3>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setViewingNoteId(null)}
+              >
+                {t("common.close")}
+              </button>
+            </div>
+            <p className="muted small-note">
+              {shortDate(viewingNote.createdAt, lang)}
+            </p>
+            <p className="inbox-note-full">{viewingNote.body}</p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost danger"
+                onClick={() => removeNote(viewingNote.id)}
+              >
+                {t("common.erase")}
+              </button>
+              <button type="button" onClick={() => setViewingNoteId(null)}>
+                {t("common.close")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {noteModalOpen ? (
+        <div className="modal-backdrop" onClick={() => setNoteModalOpen(false)}>
+          <div
+            className="modal confirm-modal inbox-compose-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{t("inbox.notes.modalTitle")}</h3>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setNoteModalOpen(false)}
+              >
+                {t("common.close")}
+              </button>
+            </div>
+            <label className="field">
+              {t("inbox.notePlaceholder")}
+              <textarea
+                rows={8}
+                className="textgen-resizable"
+                value={draftNote}
+                autoFocus
+                onChange={(event) => setDraftNote(event.target.value)}
+              />
+            </label>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setNoteModalOpen(false)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                disabled={!draftNote.trim()}
+                onClick={saveNoteFromModal}
+              >
+                {t("inbox.addNote")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {reminderDraft ? (
+        <div
+          className="modal-backdrop"
+          onClick={() => setReminderDraft(null)}
+        >
+          <div
+            className="modal confirm-modal inbox-compose-modal inbox-reminder-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>
+                {reminderDraft.id
+                  ? t("inbox.reminder.editTitle")
+                  : t("inbox.reminder.newTitle")}
+              </h3>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setReminderDraft(null)}
+              >
+                {t("common.close")}
+              </button>
+            </div>
+            <p className="confirm-message">{t("inbox.reminder.formLead")}</p>
+            <label className="field">
+              {t("inbox.contact")}
+              <select
+                value={reminderDraft.contactId}
+                onChange={(event) =>
+                  setReminderDraft((current) =>
+                    current
+                      ? { ...current, contactId: event.target.value }
+                      : current
+                  )
+                }
+              >
+                <option value="">{t("inbox.pickContact")}</option>
+                {contacts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <LookupSelect
+              inventory={inventory}
+              setInventory={setInventory}
+              category="contactMethod"
+              label={t("inbox.how")}
+              value={reminderDraft.channel}
+              onChange={(value) =>
+                setReminderDraft((current) =>
+                  current ? { ...current, channel: value } : current
+                )
+              }
+            />
+            <div className="inbox-interval-row">
+              <label className="field">
+                {t("inbox.intervalValue")}
+                <input
+                  type="number"
+                  min={1}
+                  max={reminderDraft.intervalUnit === "days" ? 365 : 60}
+                  value={reminderDraft.intervalValue}
+                  onChange={(event) =>
+                    setReminderDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            intervalValue: Math.max(
+                              1,
+                              Number(event.target.value) || 1
+                            )
+                          }
+                        : current
+                    )
+                  }
+                />
+              </label>
+              <label className="field">
+                {t("inbox.intervalUnit")}
+                <select
+                  value={reminderDraft.intervalUnit}
+                  onChange={(event) =>
+                    setReminderDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            intervalUnit: event.target.value as ReminderIntervalUnit
+                          }
+                        : current
+                    )
+                  }
+                >
+                  <option value="days">{t("inbox.unit.days")}</option>
+                  <option value="months">{t("inbox.unit.months")}</option>
+                </select>
+              </label>
+            </div>
+            <div className="inbox-preset-row">
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() =>
+                  setReminderDraft((current) =>
+                    current
+                      ? { ...current, intervalValue: 1, intervalUnit: "days" }
+                      : current
+                  )
+                }
+              >
+                {t("inbox.reminder.everyDay")}
+              </button>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() =>
+                  setReminderDraft((current) =>
+                    current
+                      ? { ...current, intervalValue: 1, intervalUnit: "months" }
+                      : current
+                  )
+                }
+              >
+                {t("inbox.reminder.everyMonth")}
+              </button>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() =>
+                  setReminderDraft((current) =>
+                    current
+                      ? { ...current, intervalValue: 3, intervalUnit: "months" }
+                      : current
+                  )
+                }
+              >
+                {t("inbox.reminder.every3Months")}
+              </button>
+            </div>
+            <label className="field">
+              {t("inbox.reminderNote")}
+              <input
+                value={reminderDraft.note}
+                onChange={(event) =>
+                  setReminderDraft((current) =>
+                    current
+                      ? { ...current, note: event.target.value }
+                      : current
+                  )
+                }
+              />
+            </label>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setReminderDraft(null)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button type="button" onClick={startReminder}>
+                {reminderDraft.id
+                  ? t("inbox.reminder.save")
+                  : t("inbox.reminder.start")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {historyOpen ? (
+        <div
+          className="modal-backdrop"
+          onClick={() => setHistoryOpen(false)}
+        >
+          <div
+            className="modal confirm-modal inbox-history-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{t("inbox.todo.historyTitle")}</h3>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setHistoryOpen(false)}
+              >
+                {t("common.close")}
+              </button>
+            </div>
+            <input
+              className="search-input"
+              placeholder={t("inbox.todo.historySearch")}
+              value={historySearch}
+              onChange={(event) => setHistorySearch(event.target.value)}
+              autoFocus
+            />
+            {filteredArchived.length === 0 ? (
+              <p className="inbox-empty">{t("inbox.todo.historyEmpty")}</p>
+            ) : (
+              <ul className="inbox-history-list">
+                {filteredArchived.map((todo) => (
+                  <li key={todo.id}>
+                    <div>
+                      <p>{todo.body}</p>
+                      <span className="muted small-note">
+                        {todo.doneAt ? shortDate(todo.doneAt, lang) : "—"}
+                      </span>
+                    </div>
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => restoreTodo(todo.id)}
+                      >
+                        {t("inbox.todo.restore")}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost danger small"
+                        onClick={() => removeTodo(todo.id)}
+                      >
+                        {t("common.erase")}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -12003,7 +13774,7 @@ function TextGeneratorPage({
   );
   const [systemPromptSaving, setSystemPromptSaving] = useState(false);
   const [instruction, setInstruction] = useState(
-    "Escribe un primer borrador claro, profesional y personal (unas 180–250 palabras) para presentar estas obras. No inventes datos. Conserva la voz de la artista y usa los ejemplos solo como referencia de tono."
+    "Escribe un borrador claro y personal (unas 200 palabras) para presentar estas obras. No inventes datos."
   );
   const [freeText, setFreeText] = useState("");
   const [responseLanguage, setResponseLanguage] = useState<"es" | "en" | "de">(
@@ -12025,6 +13796,7 @@ function TextGeneratorPage({
   const [seriesOpen, setSeriesOpen] = useState(false);
   const [showOtherSeries, setShowOtherSeries] = useState(false);
   const [examplePickerOpen, setExamplePickerOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [copying, setCopying] = useState<null | "text" | "images" | "folder">(
     null
   );
@@ -12477,135 +14249,30 @@ function TextGeneratorPage({
   }
 
   return (
-    <section className="list-page text-generator-page">
+    <section className="list-page text-generator-page textgen-simple">
       <div className="page-head">
         <div>
           <p className="eyebrow">{t("textgen.eyebrow")}</p>
           <h2>{t("textgen.title")}</h2>
-          <p className="page-lead">{t("textgen.leadLong")}</p>
+          <p className="page-lead">{t("textgen.leadSimple")}</p>
         </div>
-      </div>
-
-      <div className="textgen-summary">
-        <span className="textgen-chip">
-          {selectedArtworks.length === 1
-            ? t("textgen.chip.worksOne", { n: selectedArtworks.length })
-            : t("textgen.chip.works", { n: selectedArtworks.length })}
-        </span>
-        <span className="textgen-chip">
-          {artworksWithPhoto.length === 1
-            ? t("textgen.chip.photosOne", { n: artworksWithPhoto.length })
-            : t("textgen.chip.photos", { n: artworksWithPhoto.length })}
-        </span>
-        <span className="textgen-chip">
-          {selectedSeriesTextKeys.length === 1
-            ? t("textgen.chip.seriesTextsOne", {
-                n: selectedSeriesTextKeys.length
-              })
-            : t("textgen.chip.seriesTexts", {
-                n: selectedSeriesTextKeys.length
-              })}
-        </span>
-        <span className="textgen-chip">
-          {pickedExamples.length === 1
-            ? t("textgen.chip.examplesOne", { n: pickedExamples.length })
-            : t("textgen.chip.examples", { n: pickedExamples.length })}
-        </span>
-        {missingPhotoCount > 0 && (
-          <span className="textgen-chip warn">
-            {missingPhotoCount === 1
-              ? t("textgen.chip.worksNoPhotoOne", { n: missingPhotoCount })
-              : t("textgen.chip.worksNoPhoto", { n: missingPhotoCount })}
-          </span>
-        )}
       </div>
 
       <div className="textgen-layout">
         <div className="textgen-config">
-          <div className={`textgen-system${systemPromptOpen ? " open" : ""}`}>
-            <button
-              type="button"
-              className="textgen-system-toggle"
-              onClick={() => setSystemPromptOpen((open) => !open)}
-            >
-              <span>{t("textgen.section.system")}</span>
-              <span className="muted">{systemPromptOpen ? "▲" : "▼"}</span>
-            </button>
-            {systemPromptOpen && (
-              <div className="textgen-system-body">
-                <p className="muted small-note">{t("textgen.system.hint")}</p>
-                <textarea
-                  className="textgen-system-input"
-                  rows={5}
-                  value={systemPrompt}
-                  onChange={(event) => setSystemPrompt(event.target.value)}
-                />
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    className="ghost small"
-                    onClick={() =>
-                      setSystemPrompt(DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT)
-                    }
-                  >
-                    {t("textgen.system.restore")}
-                  </button>
-                  <button
-                    type="button"
-                    className="small"
-                    disabled={systemPromptSaving}
-                    onClick={() => void saveSystemPrompt()}
-                  >
-                    {systemPromptSaving ? "…" : t("common.save")}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="pl-block">
+          <div className="pl-block textgen-step-block">
             <div className="pl-block-head">
-              <span className="pl-block-title">{t("textgen.section.works")}</span>
-              <div className="row-actions">
-                {selectedArtworks.length > 1 && (
-                  <button
-                    type="button"
-                    className="ghost small"
-                    onClick={() =>
-                      setSelectedIds((current) =>
-                        sortArtworkIdsBySeries(
-                          current,
-                          inventory,
-                          t("series.noSeriesLabel")
-                        )
-                      )
-                    }
-                  >
-                    {t("textgen.sortBySeries")}
-                  </button>
-                )}
-                <button type="button" onClick={() => setShowPicker(true)}>
-                  {t("textgen.pickWorks")}
-                </button>
-              </div>
+              <span className="pl-block-title">{t("textgen.simple.works")}</span>
+              <button type="button" onClick={() => setShowPicker(true)}>
+                {t("textgen.pickWorks")}
+              </button>
             </div>
             {selectedArtworks.length === 0 ? (
-              <p className="muted small-note">
-                {t("textgen.noWorksSelected")}
-              </p>
+              <p className="muted small-note">{t("textgen.noWorksSelected")}</p>
             ) : (
               <div className="textgen-work-list">
-                {selectedArtworks.map((artwork, index) => (
+                {selectedArtworks.map((artwork) => (
                   <div className="textgen-work" key={artwork.id}>
-                    <OrderButtons
-                      index={index}
-                      total={selectedArtworks.length}
-                      onMove={(direction) =>
-                        setSelectedIds((current) =>
-                          moveIdInList(current, index, direction)
-                        )
-                      }
-                    />
                     <div className="textgen-work-thumb">
                       {photos[artwork.id] ? (
                         <img src={photos[artwork.id].dataUrl} alt="" />
@@ -12642,102 +14309,48 @@ function TextGeneratorPage({
             )}
           </div>
 
-          <div className="pl-block">
+          <div className="pl-block textgen-step-block">
             <div className="pl-block-head">
-              <button
-                type="button"
-                className="textgen-collapse-toggle"
-                onClick={() => setSeriesOpen((open) => !open)}
-              >
-                <span className="pl-block-title">
-                  {t("textgen.section.seriesTexts")}
-                  {selectedSeriesTextKeys.length > 0
-                    ? ` (${selectedSeriesTextKeys.length})`
-                    : ""}
-                </span>
-                <span className="muted">{seriesOpen ? "▲" : "▼"}</span>
-              </button>
+              <span className="pl-block-title">{t("textgen.simple.brief")}</span>
             </div>
-            {!seriesOpen ? (
-              <p className="muted small-note">
-                {t("textgen.series.collapsedHint")}
-              </p>
-            ) : seriesForPrompt.linked.length === 0 &&
-              seriesForPrompt.other.length === 0 ? (
-              <p className="muted small-note">
-                {t("textgen.series.noneHint")}
-              </p>
-            ) : (
-              <div className="textgen-series-list">
-                <p className="muted small-note">
-                  {t("textgen.series.openHint")}
-                </p>
-                {seriesForPrompt.linked.map((series) =>
-                  renderSeriesTextPicker(series, true)
-                )}
-                {selectedSeriesNames
-                  .filter(
-                    (name) =>
-                      !seriesForPrompt.linked.some(
-                        (series) =>
-                          series.name.toLowerCase() === name.toLowerCase()
-                      )
-                  )
-                  .map((name) => (
-                    <div className="textgen-series-block" key={`missing-${name}`}>
-                      <strong>{name}</strong>
-                      <p className="muted small-note">
-                        {t("textgen.series.missingInfo")}
-                      </p>
-                    </div>
-                  ))}
-                {seriesForPrompt.other.length > 0 && (
-                  <>
-                    <button
-                      type="button"
-                      className="ghost small"
-                      onClick={() => setShowOtherSeries((value) => !value)}
-                    >
-                      {showOtherSeries
-                        ? t("textgen.series.hideOthers")
-                        : t("textgen.series.showOthers", {
-                            n: seriesForPrompt.other.length
-                          })}
-                    </button>
-                    {showOtherSeries &&
-                      seriesForPrompt.other.map((series) =>
-                        renderSeriesTextPicker(series, false)
-                      )}
-                  </>
-                )}
-              </div>
-            )}
+            <label className="field">
+              <textarea
+                rows={7}
+                className="textgen-resizable"
+                value={instruction}
+                onChange={(event) => setInstruction(event.target.value)}
+                aria-label={t("textgen.simple.brief")}
+              />
+            </label>
           </div>
 
           <div className="pl-block">
-            <div className="pl-block-head">
-              <span className="pl-block-title">
-                {t("textgen.section.brief")}
-              </span>
-            </div>
-            <div className="textgen-brief-row">
-              <label className="field textgen-brief-main">
-                {t("textgen.field.instruction")}
-                <textarea
-                  rows={4}
-                  value={instruction}
-                  onChange={(event) => setInstruction(event.target.value)}
-                />
-              </label>
-              <div className="textgen-brief-side">
+            <button
+              type="button"
+              className="textgen-more-toggle"
+              onClick={() => setMoreOpen((open) => !open)}
+            >
+              <span>{t("textgen.simple.more")}</span>
+              <span className="muted">{moreOpen ? "▲" : "▼"}</span>
+            </button>
+            {moreOpen ? (
+              <div className="textgen-more-body">
                 <label className="field">
+                  {t("textgen.field.notes")}
+                  <textarea
+                    rows={3}
+                    className="textgen-resizable"
+                    value={freeText}
+                    placeholder={t("textgen.field.notesPlaceholder")}
+                    onChange={(event) => setFreeText(event.target.value)}
+                  />
+                </label>
+                <label className="field" style={{ marginTop: "0.75rem", maxWidth: "14rem" }}>
                   {t("textgen.field.responseLang")}
                   <select
                     value={responseLanguage}
                     onChange={(event) =>
-                      setResponseLanguage(
-                        event.target.value as "es" | "en" | "de"
-                      )
+                      setResponseLanguage(event.target.value as "es" | "en" | "de")
                     }
                   >
                     <option value="es">{t("cert.modal.spanish")}</option>
@@ -12745,231 +14358,169 @@ function TextGeneratorPage({
                     <option value="de">Deutsch</option>
                   </select>
                 </label>
-                <p className="muted small-note">
-                  {t("textgen.responseLangHint")}
-                </p>
-              </div>
-            </div>
-            <div className="pl-block-head" style={{ marginTop: "0.75rem" }}>
-              <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
-                {t("textgen.links.title")}
-              </span>
-              <button
-                type="button"
-                className="ghost small"
-                onClick={addReferenceLink}
-              >
-                {t("textgen.links.add")}
-              </button>
-            </div>
-            <p className="muted small-note">{t("textgen.links.hint")}</p>
-            {referenceLinks.length === 0 ? (
-              <p className="muted small-note">{t("textgen.links.empty")}</p>
-            ) : (
-              <div className="textgen-link-list">
-                {referenceLinks.map((link) => (
-                  <div className="textgen-link-row" key={link.id}>
-                    <input
-                      value={link.url}
-                      placeholder="https://…"
-                      onChange={(event) =>
-                        setReferenceLinks((current) =>
-                          current.map((item) =>
-                            item.id === link.id
-                              ? { ...item, url: event.target.value }
-                              : item
-                          )
-                        )
-                      }
-                    />
-                    <input
-                      value={link.note}
-                      placeholder={t("textgen.links.notePlaceholder")}
-                      onChange={(event) =>
-                        setReferenceLinks((current) =>
-                          current.map((item) =>
-                            item.id === link.id
-                              ? { ...item, note: event.target.value }
-                              : item
-                          )
-                        )
-                      }
-                    />
-                    <button
-                      type="button"
-                      className="ghost danger small"
-                      onClick={() =>
-                        setReferenceLinks((current) =>
-                          current.filter((item) => item.id !== link.id)
-                        )
-                      }
-                    >
-                      {t("common.remove")}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <label className="field" style={{ marginTop: "0.85rem" }}>
-              {t("textgen.field.notes")}
-              <textarea
-                rows={5}
-                value={freeText}
-                placeholder={t("textgen.field.notesPlaceholder")}
-                onChange={(event) => setFreeText(event.target.value)}
-              />
-            </label>
-          </div>
 
-          <div className="pl-block">
-            <div className="pl-block-head">
-              <span className="pl-block-title">
-                {t("textgen.section.examples")}
-                {pickedExamples.length > 0 ? ` (${pickedExamples.length})` : ""}
-              </span>
-              <div className="row-actions">
-                <button
-                  type="button"
-                  className="ghost small"
-                  onClick={onOpenExampleLibrary}
-                >
-                  {t("textgen.openLibrary")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setExamplePickerOpen(true)}
-                >
-                  {t("textgen.pickExamples")}
-                </button>
-              </div>
-            </div>
-            {examples.length === 0 ? (
-              <p className="muted small-note">
-                {t("textgen.examples.emptyLibrary")}
-              </p>
-            ) : pickedExamples.length === 0 ? (
-              <p className="muted small-note">
-                {t("textgen.examples.nonePicked")}
-              </p>
-            ) : (
-              <div className="textgen-example-list">
-                {pickedExamples.map((example) => (
-                  <div className="textgen-example" key={example.id}>
-                    <div className="textgen-example-head">
-                      <strong>{example.topic || t("common.noTopic")}</strong>
-                      <button
-                        type="button"
-                        className="ghost danger small"
-                        onClick={() =>
-                          setSelectedExampleIds((current) =>
-                            current.filter((id) => id !== example.id)
-                          )
-                        }
-                      >
-                        {t("common.remove")}
-                      </button>
-                    </div>
-                    {example.body.trim() && (
-                      <p className="muted small-note textgen-example-preview">
-                        {example.body.trim().slice(0, 110)}
-                        {example.body.trim().length > 110 ? "…" : ""}
-                      </p>
-                    )}
+                <div className="pl-block-head" style={{ marginTop: "0.85rem" }}>
+                  <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
+                    {t("textgen.section.examples")}
+                    {pickedExamples.length > 0 ? ` (${pickedExamples.length})` : ""}
+                  </span>
+                  <button type="button" className="small" onClick={() => setExamplePickerOpen(true)}>
+                    {t("textgen.pickExamples")}
+                  </button>
+                </div>
+                {pickedExamples.length === 0 ? (
+                  <p className="muted small-note">{t("textgen.examples.nonePicked")}</p>
+                ) : (
+                  <div className="textgen-example-list">
+                    {pickedExamples.map((example) => (
+                      <div className="textgen-example" key={example.id}>
+                        <div className="textgen-example-head">
+                          <strong>{example.topic || t("common.noTopic")}</strong>
+                          <button
+                            type="button"
+                            className="ghost danger small"
+                            onClick={() =>
+                              setSelectedExampleIds((current) =>
+                                current.filter((id) => id !== example.id)
+                              )
+                            }
+                          >
+                            {t("common.remove")}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+
+                <div className="pl-block-head" style={{ marginTop: "0.85rem" }}>
+                  <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
+                    {t("textgen.section.seriesTexts")}
+                    {selectedSeriesTextKeys.length > 0
+                      ? ` (${selectedSeriesTextKeys.length})`
+                      : ""}
+                  </span>
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={() => setSeriesOpen((open) => !open)}
+                  >
+                    {seriesOpen ? t("common.close") : t("common.open")}
+                  </button>
+                </div>
+                {seriesOpen ? (
+                  seriesForPrompt.linked.length === 0 &&
+                  seriesForPrompt.other.length === 0 ? (
+                    <p className="muted small-note">{t("textgen.series.noneHint")}</p>
+                  ) : (
+                    <div className="textgen-series-list">
+                      {seriesForPrompt.linked.map((series) =>
+                        renderSeriesTextPicker(series, true)
+                      )}
+                      {seriesForPrompt.other.length > 0 ? (
+                        <>
+                          <button
+                            type="button"
+                            className="ghost small"
+                            onClick={() => setShowOtherSeries((value) => !value)}
+                          >
+                            {showOtherSeries
+                              ? t("textgen.series.hideOthers")
+                              : t("textgen.series.showOthers", {
+                                  n: seriesForPrompt.other.length
+                                })}
+                          </button>
+                          {showOtherSeries
+                            ? seriesForPrompt.other.map((series) =>
+                                renderSeriesTextPicker(series, false)
+                              )
+                            : null}
+                        </>
+                      ) : null}
+                    </div>
+                  )
+                ) : null}
+
+                <div className="pl-block-head" style={{ marginTop: "0.85rem" }}>
+                  <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
+                    {t("textgen.links.title")}
+                  </span>
+                  <button type="button" className="ghost small" onClick={addReferenceLink}>
+                    {t("textgen.links.add")}
+                  </button>
+                </div>
+                {referenceLinks.length === 0 ? (
+                  <p className="muted small-note">{t("textgen.links.empty")}</p>
+                ) : (
+                  <div className="textgen-link-list">
+                    {referenceLinks.map((link) => (
+                      <div className="textgen-link-row" key={link.id}>
+                        <input
+                          value={link.url}
+                          placeholder="https://…"
+                          onChange={(event) =>
+                            setReferenceLinks((current) =>
+                              current.map((item) =>
+                                item.id === link.id
+                                  ? { ...item, url: event.target.value }
+                                  : item
+                              )
+                            )
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="ghost danger small"
+                          onClick={() =>
+                            setReferenceLinks((current) =>
+                              current.filter((item) => item.id !== link.id)
+                            )
+                          }
+                        >
+                          {t("common.remove")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 
         <div className="textgen-preview-pane">
-          <div className="textgen-steps">
-            <div className="textgen-step">
-              <span className="textgen-step-num">1</span>
-              <div className="textgen-step-text">
-                <strong>{t("textgen.step1.title")}</strong>
-                <span className="muted small-note">
-                  {t("textgen.step1.hint")}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="cuentas-primary"
-                disabled={copying !== null}
-                onClick={() => void copyText()}
-              >
-                {copying === "text" ? "…" : t("textgen.copy.text")}
-              </button>
-            </div>
-            <div className="textgen-step">
-              <span className="textgen-step-num">2</span>
-              <div className="textgen-step-text">
-                <strong>{t("textgen.step2.title")}</strong>
-                <span className="muted small-note">
-                  {artworksWithPhoto.length === 0
-                    ? t("textgen.step2.noPhotos")
-                    : artworksWithPhoto.length === 1
-                      ? t("textgen.step2.onePhoto")
-                      : t("textgen.step2.manyPhotos", {
-                          n: artworksWithPhoto.length
-                        })}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="cuentas-primary"
-                disabled={copying !== null || artworksWithPhoto.length === 0}
-                onClick={() => void copyPhotos()}
-              >
-                {copying === "images" ? "…" : t("textgen.copy.photos")}
-              </button>
-            </div>
-            <div className="textgen-steps-note">
-              <p className="muted small-note">{t("textgen.steps.note")}</p>
-              {artworksWithPhoto.length > 1 && (
-                <div className="textgen-fallback">
-                  <p className="muted small-note">
-                    {t("textgen.drag.hint", { n: artworksWithPhoto.length })}
-                  </p>
-                  <div
-                    className="textgen-drag-tile"
-                    draggable
-                    onDragStart={(event) => {
-                      event.preventDefault();
-                      startPhotoDrag();
-                    }}
-                  >
-                    <span aria-hidden>⇧</span>
-                    {t("textgen.drag.tile", { n: artworksWithPhoto.length })}
-                  </div>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    disabled={copying !== null}
-                    onClick={() => void openPhotoFolder()}
-                  >
-                    {copying === "folder"
-                      ? "…"
-                      : t("textgen.openPhotoFolder")}
-                  </button>
-                </div>
-              )}
-            </div>
+          <div className="textgen-simple-actions">
+            <p className="textgen-simple-action-lead">{t("textgen.simple.exportLead")}</p>
+            <button
+              type="button"
+              className="cuentas-primary textgen-big-btn"
+              disabled={copying !== null}
+              onClick={() => void copyText()}
+            >
+              {copying === "text" ? "…" : t("textgen.copy.text")}
+            </button>
+            <button
+              type="button"
+              className="textgen-big-btn"
+              disabled={copying !== null || artworksWithPhoto.length === 0}
+              onClick={() => void copyPhotos()}
+            >
+              {copying === "images" ? "…" : t("textgen.copy.photos")}
+            </button>
+            {artworksWithPhoto.length === 0 && selectedArtworks.length > 0 ? (
+              <p className="muted small-note">{t("textgen.step2.noPhotos")}</p>
+            ) : null}
+            <p className="muted small-note">{t("textgen.simple.exportHint")}</p>
           </div>
-          <div className="textgen-preview-head">
-            <div>
-              <span className="pl-block-title">
-                {t("textgen.preview.title")}
-              </span>
-              <p className="muted small-note">{t("textgen.preview.hint")}</p>
-            </div>
-          </div>
-          <textarea
-            className="textgen-output"
-            readOnly
-            value={generatedText}
-            aria-label={t("textgen.preview.aria")}
-          />
+          <details className="textgen-preview-details">
+            <summary>{t("textgen.preview.title")}</summary>
+            <textarea
+              className="textgen-output"
+              readOnly
+              value={generatedText}
+              aria-label={t("textgen.preview.aria")}
+            />
+          </details>
         </div>
       </div>
 
@@ -15513,15 +17064,19 @@ function SubTab({
 function NavButton({
   active,
   onClick,
-  children
+  children,
+  className = ""
 }: {
   active: boolean;
   onClick: () => void;
   children: ReactNode;
+  className?: string;
 }) {
-  const { lang, t } = useLanguage();
   return (
-    <button className={active ? "nav-button active" : "nav-button"} onClick={onClick}>
+    <button
+      className={`nav-button${active ? " active" : ""}${className ? ` ${className}` : ""}`}
+      onClick={onClick}
+    >
       {children}
     </button>
   );
@@ -15765,6 +17320,13 @@ const DEFAULT_LOOKUP_KEYS = new Set([
   "artworkType:ipad_drawing",
   "artworkType:plexiglass",
   "artworkType:other",
+  "contactMethod:call",
+  "contactMethod:whatsapp",
+  "contactMethod:text",
+  "contactMethod:email",
+  "contactMethod:letter",
+  "contactMethod:visit",
+  "contactMethod:other",
   "status:in_studio",
   "status:sold",
   "status:lost",

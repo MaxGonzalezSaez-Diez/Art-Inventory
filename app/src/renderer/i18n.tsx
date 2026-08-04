@@ -32,6 +32,11 @@ const strings = {
   "brand.title": { es: "Obras de arte", en: "Artworks", de: "Kunstwerke" },
 
   "nav.library": { es: "Lista de obras", en: "Artworks", de: "Werkliste" },
+  "nav.inbox": {
+    es: "Recordatorios",
+    en: "Reminders",
+    de: "Erinnerungen"
+  },
   "nav.series": {
     es: "Series (metadatos)",
     en: "Series (metadata)",
@@ -60,6 +65,11 @@ const strings = {
     es: "Biblioteca de ejemplos",
     en: "Example library",
     de: "Beispielbibliothek"
+  },
+  "nav.floatingBack": {
+    es: "← Volver",
+    en: "← Back",
+    de: "← Zurück"
   },
 
   "sidebar.folder": { es: "Carpeta local", en: "Local folder", de: "Lokaler Ordner" },
@@ -391,6 +401,11 @@ const strings = {
   "artwork.field.height": { es: "Alto", en: "Height", de: "Höhe" },
   "artwork.field.width": { es: "Ancho", en: "Width", de: "Breite" },
   "artwork.field.depth": { es: "Profundidad", en: "Depth", de: "Tiefe" },
+  "artwork.field.depthOptional": {
+    es: "Opcional (bastidor…)",
+    en: "Optional (stretcher…)",
+    de: "Optional (Keilrahmen…)"
+  },
   "artwork.field.unit": { es: "Unidad", en: "Unit", de: "Einheit" },
   "artwork.field.inches": { es: "pulgadas", en: "inches", de: "Zoll" },
   "artwork.field.depth3dOnly": { es: "Solo 3D", en: "3D only", de: "Nur 3D" },
@@ -410,7 +425,36 @@ const strings = {
     de: "Der Status wird nur aus den Bewegungen berechnet."
   },
   "artwork.photo.add": { es: "Añadir foto", en: "Add photo", de: "Foto hinzufügen" },
-  "artwork.photo.change": { es: "Cambiar foto", en: "Change photo", de: "Foto ändern" },
+  "artwork.photo.change": {
+    es: "Cambiar foto (elegir otra)",
+    en: "Change photo (pick another)",
+    de: "Foto ändern (andere wählen)"
+  },
+  "artwork.photo.retouch": {
+    es: "Retocar foto actual",
+    en: "Retouch current photo",
+    de: "Aktuelles Foto nachbearbeiten"
+  },
+  "artwork.photo.retouchSaved": {
+    es: "Foto retocada guardada (la anterior queda en historial).",
+    en: "Retouched photo saved (previous kept in history).",
+    de: "Bearbeitetes Foto gespeichert (Vorversion im Verlauf)."
+  },
+  "artwork.photo.restored": {
+    es: "Versión anterior restaurada.",
+    en: "Previous version restored.",
+    de: "Vorherige Version wiederhergestellt."
+  },
+  "artwork.photo.historyHint": {
+    es: "Versiones anteriores (por si te equivocas al retocar):",
+    en: "Previous versions (if a retouch goes wrong):",
+    de: "Frühere Versionen (falls die Bearbeitung misslingt):"
+  },
+  "artwork.photo.restore": {
+    es: "Restaurar esta",
+    en: "Restore this",
+    de: "Diese wiederherstellen"
+  },
   "artwork.photo.hint.ready": {
     es: "Listo — se guarda con la obra.",
     en: "Ready — saved with the artwork.",
@@ -595,9 +639,9 @@ const strings = {
     de: "Werk löschen…"
   },
   "artwork.detail.saveImage": {
-    es: "Salvar imagen…",
-    en: "Save image…",
-    de: "Bild speichern…"
+    es: "Salvar foto actual en otro tamaño/formato…",
+    en: "Save current photo in another size/format…",
+    de: "Aktuelles Foto in anderer Größe/Format speichern…"
   },
   "artwork.detail.cert": {
     es: "Generar certificado",
@@ -608,9 +652,9 @@ const strings = {
 
   /* ── Image export modal ─────────────────────────────────────────────── */
   "artwork.export.title": {
-    es: "Salvar imagen",
-    en: "Save image",
-    de: "Bild speichern"
+    es: "Salvar foto en otro tamaño/formato",
+    en: "Save photo in another size/format",
+    de: "Foto in anderer Größe/Format speichern"
   },
   "artwork.export.lead": {
     es: "Elige la foto, el uso y la calidad. Se guarda una copia en la carpeta que indiques.",
@@ -2615,6 +2659,91 @@ const strings = {
     en: "+ New example",
     de: "+ Neues Beispiel"
   },
+  "examples.addCategory": {
+    es: "Nueva categoría",
+    en: "New category",
+    de: "Neue Kategorie"
+  },
+  "examples.view": { es: "Ver", en: "View", de: "Ansehen" },
+  "examples.viewHint": {
+    es: "Pulsa para leer el texto",
+    en: "Click to read the text",
+    de: "Tippen, um den Text zu lesen"
+  },
+  "examples.categoryName": {
+    es: "Nombre de la categoría",
+    en: "Category name",
+    de: "Kategoriename"
+  },
+  "examples.uncategorized": {
+    es: "Sin categoría",
+    en: "Uncategorized",
+    de: "Ohne Kategorie"
+  },
+  "examples.categoryPlaceholder": {
+    es: "Categoría (opcional)",
+    en: "Category (optional)",
+    de: "Kategorie (optional)"
+  },
+  "examples.fold": { es: "Plegar", en: "Collapse", de: "Einklappen" },
+  "examples.unfold": { es: "Desplegar", en: "Expand", de: "Ausklappen" },
+  "examples.move": { es: "Mover…", en: "Move…", de: "Verschieben…" },
+  "examples.moveSelected": {
+    es: "Mover seleccionados…",
+    en: "Move selected…",
+    de: "Ausgewählte verschieben…"
+  },
+  "examples.moveModal.title": {
+    es: "Mover textos a otra categoría",
+    en: "Move texts to another category",
+    de: "Texte in andere Kategorie verschieben"
+  },
+  "examples.moveModal.hint": {
+    es: "Elige a dónde van. Puedes crear una categoría nueva.",
+    en: "Choose where they go. You can create a new category.",
+    de: "Ziel wählen. Du kannst eine neue Kategorie anlegen."
+  },
+  "examples.moveModal.choose": {
+    es: "Elige una categoría…",
+    en: "Choose a category…",
+    de: "Kategorie wählen…"
+  },
+  "examples.moveModal.target": {
+    es: "Categoría destino",
+    en: "Destination category",
+    de: "Zielkategorie"
+  },
+  "examples.moveModal.new": {
+    es: "— Nueva categoría —",
+    en: "— New category —",
+    de: "— Neue Kategorie —"
+  },
+  "examples.moveModal.confirm": {
+    es: "Mover aquí",
+    en: "Move here",
+    de: "Hierher verschieben"
+  },
+  "examples.moveModal.count": {
+    es: "{n} texto(s) a mover",
+    en: "{n} text(s) to move",
+    de: "{n} Text(e) verschieben"
+  },
+  "examples.moveAll": {
+    es: "Mover todos…",
+    en: "Move all…",
+    de: "Alle verschieben…"
+  },
+  "examples.select": { es: "Seleccionar", en: "Select", de: "Auswählen" },
+  "examples.selectAllIn": {
+    es: "Seleccionar todos",
+    en: "Select all",
+    de: "Alle auswählen"
+  },
+  "examples.clearSelection": {
+    es: "Quitar selección",
+    en: "Clear selection",
+    de: "Auswahl aufheben"
+  },
   "examples.empty": {
     es: "Aún no hay ejemplos.",
     en: "No examples yet.",
@@ -2631,6 +2760,426 @@ const strings = {
     es: "Tienes cambios sin guardar.",
     en: "You have unsaved changes.",
     de: "Du hast ungespeicherte Änderungen."
+  },
+
+  /* ── Reminders + notes (former "Inbox") ─────────────────────────────── */
+  "inbox.eyebrow": {
+    es: "Contactos y apuntes",
+    en: "Contacts and notes",
+    de: "Kontakte und Notizen"
+  },
+  "inbox.title": {
+    es: "Recordatorios",
+    en: "Reminders",
+    de: "Erinnerungen"
+  },
+  "inbox.lead": {
+    es: "Tres bloques: tareas, contactos pendientes y notas.",
+    en: "Three blocks: tasks, contact reminders, and notes.",
+    de: "Drei Blöcke: Aufgaben, Kontakterinnerungen und Notizen."
+  },
+  "inbox.autosave": {
+    es: "Se guarda solo, no hace falta botón.",
+    en: "Saves by itself, no button needed.",
+    de: "Speichert automatisch, kein Knopf nötig."
+  },
+  "inbox.todo.title": { es: "To Do", en: "To Do", de: "To Do" },
+  "inbox.todo.leadSimple": {
+    es: "Escribe y pulsa Añadir. Marca el círculo cuando esté hecho.",
+    en: "Type and press Add. Tap the circle when it’s done.",
+    de: "Schreiben und Hinzufügen. Kreis antippen, wenn erledigt."
+  },
+  "inbox.todo.addShort": { es: "Añadir", en: "Add", de: "Hinzufügen" },
+  "inbox.todo.lead": {
+    es: "Lista corta. Finalizado → se archiva.",
+    en: "Short list. Finished → archives it.",
+    de: "Kurze Liste. Fertig → archiviert."
+  },
+  "inbox.todo.empty": {
+    es: "Nada pendiente.",
+    en: "Nothing pending.",
+    de: "Nichts offen."
+  },
+  "inbox.todo.placeholder": {
+    es: "Qué hay que hacer…",
+    en: "What needs doing…",
+    de: "Was zu tun ist…"
+  },
+  "inbox.todo.modalTitle": {
+    es: "Nueva tarea",
+    en: "New task",
+    de: "Neue Aufgabe"
+  },
+  "inbox.todo.add": { es: "+ Nueva tarea", en: "+ New task", de: "+ Neue Aufgabe" },
+  "inbox.todo.done": {
+    es: "Hecho",
+    en: "Done",
+    de: "Fertig"
+  },
+  "inbox.todo.archived": {
+    es: "Movido a finalizadas.",
+    en: "Moved to finished.",
+    de: "Zu erledigten verschoben."
+  },
+  "inbox.todo.tooLong": {
+    es: "Demasiado largo: esto es una lista de tareas, no una nota.",
+    en: "Too long: this is a to-do list, not a note.",
+    de: "Zu lang: das ist eine To-do-Liste, keine Notiz."
+  },
+  "inbox.todo.charHint": {
+    es: "{n} caracteres restantes",
+    en: "{n} characters left",
+    de: "{n} Zeichen übrig"
+  },
+  "inbox.todo.history": {
+    es: "Ver finalizadas…",
+    en: "View finished…",
+    de: "Erledigte ansehen…"
+  },
+  "inbox.todo.historyTitle": {
+    es: "Tareas finalizadas",
+    en: "Finished tasks",
+    de: "Erledigte Aufgaben"
+  },
+  "inbox.todo.historySearch": {
+    es: "Buscar entre finalizadas…",
+    en: "Search finished…",
+    de: "Erledigte durchsuchen…"
+  },
+  "inbox.todo.historyEmpty": {
+    es: "Ninguna tarea finalizada aún.",
+    en: "No finished tasks yet.",
+    de: "Noch keine erledigten Aufgaben."
+  },
+  "inbox.todo.restore": {
+    es: "Devolver a la lista",
+    en: "Put back on to-do",
+    de: "Zurück auf die Liste"
+  },
+  "inbox.todo.restored": {
+    es: "Otra vez en Todo.",
+    en: "Back on to-do.",
+    de: "Wieder auf der To-do-Liste."
+  },
+  "inbox.reminders": {
+    es: "Recordatorios",
+    en: "Reminders",
+    de: "Erinnerungen"
+  },
+  "inbox.notes": { es: "Notas", en: "Notes", de: "Notizen" },
+  "inbox.reminders.lead": {
+    es: "Resumen en la lista. Crear o editar en una ventana.",
+    en: "Summaries in the list. Create or edit in a window.",
+    de: "Zusammenfassung in der Liste. Erstellen/Bearbeiten im Fenster."
+  },
+  "inbox.reminders.dueNow": {
+    es: "Toca contactar ahora",
+    en: "Due now",
+    de: "Jetzt fällig"
+  },
+  "inbox.reminders.all": {
+    es: "Próximos",
+    en: "Upcoming",
+    de: "Demnächst"
+  },
+  "inbox.reminders.noneDue": {
+    es: "Ninguno vencido ahora.",
+    en: "None due right now.",
+    de: "Gerade nichts fällig."
+  },
+  "inbox.reminders.noneUpcoming": {
+    es: "Todos están vencidos arriba.",
+    en: "All are listed as due above.",
+    de: "Alle sind oben als fällig."
+  },
+  "inbox.notes.lead": {
+    es: "Solo lectura aquí. Nueva nota = ventana.",
+    en: "View only here. New note = window.",
+    de: "Hier nur lesen. Neue Notiz = Fenster."
+  },
+  "inbox.notes.modalTitle": {
+    es: "Nueva nota",
+    en: "New note",
+    de: "Neue Notiz"
+  },
+  "inbox.notes.viewTitle": {
+    es: "Nota",
+    en: "Note",
+    de: "Notiz"
+  },
+  "inbox.notes.find": {
+    es: "Buscar",
+    en: "Search",
+    de: "Suchen"
+  },
+  "inbox.notes.findTitle": {
+    es: "Buscar y ordenar",
+    en: "Search and sort",
+    de: "Suchen und sortieren"
+  },
+  "inbox.notes.clearFind": {
+    es: "Quitar filtros",
+    en: "Clear filters",
+    de: "Filter löschen"
+  },
+  "inbox.notes.search": {
+    es: "Buscar en las notas…",
+    en: "Search notes…",
+    de: "Notizen suchen…"
+  },
+  "inbox.todo.search": {
+    es: "Buscar en las tareas…",
+    en: "Search tasks…",
+    de: "Aufgaben suchen…"
+  },
+  "inbox.todo.noMatch": {
+    es: "Ninguna tarea coincide.",
+    en: "No tasks match.",
+    de: "Keine passende Aufgabe."
+  },
+  "inbox.search.hint": {
+    es: "Busca por palabras: deben aparecer todas en el texto (sin distinguir mayúsculas).",
+    en: "Keyword search: every word you type must appear in the text (case-insensitive).",
+    de: "Stichwortsuche: jedes Wort muss im Text vorkommen (ohne Groß-/Kleinschreibung)."
+  },
+  "inbox.sort.label": {
+    es: "Ordenar por",
+    en: "Sort by",
+    de: "Sortieren nach"
+  },
+  "inbox.sort.newest": {
+    es: "Más nuevas primero",
+    en: "Newest first",
+    de: "Neueste zuerst"
+  },
+  "inbox.sort.oldest": {
+    es: "Más antiguas primero",
+    en: "Oldest first",
+    de: "Älteste zuerst"
+  },
+  "inbox.sort.longest": {
+    es: "Más largas primero",
+    en: "Longest first",
+    de: "Längste zuerst"
+  },
+  "inbox.sort.shortest": {
+    es: "Más cortas primero",
+    en: "Shortest first",
+    de: "Kürzeste zuerst"
+  },
+  "inbox.sort.alpha": {
+    es: "Alfabético (A→Z)",
+    en: "Alphabetical (A→Z)",
+    de: "Alphabetisch (A→Z)"
+  },
+  "inbox.notes.sort": {
+    es: "Orden",
+    en: "Sort",
+    de: "Sortierung"
+  },
+  "inbox.notes.sortNewest": {
+    es: "Más nuevas primero",
+    en: "Newest first",
+    de: "Neueste zuerst"
+  },
+  "inbox.notes.sortOldest": {
+    es: "Más antiguas primero",
+    en: "Oldest first",
+    de: "Älteste zuerst"
+  },
+  "inbox.notes.noMatch": {
+    es: "Ninguna nota coincide.",
+    en: "No notes match.",
+    de: "Keine passende Notiz."
+  },
+  "inbox.addReminder": {
+    es: "+ Nuevo recordatorio",
+    en: "+ New reminder",
+    de: "+ Neue Erinnerung"
+  },
+  "inbox.addNote": { es: "+ Nueva nota", en: "+ New note", de: "+ Neue Notiz" },
+  "inbox.how": {
+    es: "Cómo contactar",
+    en: "How to reach them",
+    de: "Kontaktweg"
+  },
+  "inbox.everyMonths": {
+    es: "cada {n} meses",
+    en: "every {n} months",
+    de: "alle {n} Monate"
+  },
+  "inbox.everyDays": {
+    es: "cada {n} días",
+    en: "every {n} days",
+    de: "alle {n} Tage"
+  },
+  "inbox.intervalValue": {
+    es: "Cada",
+    en: "Every",
+    de: "Alle"
+  },
+  "inbox.intervalUnit": {
+    es: "Unidad",
+    en: "Unit",
+    de: "Einheit"
+  },
+  "inbox.unit.days": { es: "días", en: "days", de: "Tage" },
+  "inbox.unit.months": { es: "meses", en: "months", de: "Monate" },
+  "inbox.reminder.newTitle": {
+    es: "Nuevo recordatorio",
+    en: "New reminder",
+    de: "Neue Erinnerung"
+  },
+  "inbox.reminder.editTitle": {
+    es: "Editar recordatorio",
+    en: "Edit reminder",
+    de: "Erinnerung bearbeiten"
+  },
+  "inbox.reminder.edit": {
+    es: "Editar",
+    en: "Edit",
+    de: "Bearbeiten"
+  },
+  "inbox.reminder.clickToEdit": {
+    es: "Pulsa para editar",
+    en: "Click to edit",
+    de: "Zum Bearbeiten tippen"
+  },
+  "inbox.reminder.formLead": {
+    es: "Rellena y pulsa Empezar. Luego solo verás un resumen en la lista.",
+    en: "Fill in and press Start. Then you’ll only see a summary in the list.",
+    de: "Ausfüllen und Start drücken. Danach nur eine Zusammenfassung in der Liste."
+  },
+  "inbox.reminder.start": {
+    es: "Empezar",
+    en: "Start",
+    de: "Start"
+  },
+  "inbox.reminder.save": {
+    es: "Guardar cambios",
+    en: "Save changes",
+    de: "Änderungen speichern"
+  },
+  "inbox.reminder.started": {
+    es: "Recordatorio actualizado.",
+    en: "Reminder updated.",
+    de: "Erinnerung aktualisiert."
+  },
+  "inbox.reminder.startedDue": {
+    es: "Añadido a «Toca contactar». Pulsa «Ya lo hice» cuando contactes.",
+    en: "Added to “Time to contact”. Press “Already did it” once you’ve reached out.",
+    de: "Unter „Jetzt kontaktieren“ hinzugefügt. Drücke „Schon erledigt“, wenn du Kontakt hattest."
+  },
+  "inbox.dueWaiting": {
+    es: "Pendiente — aún no has marcado «Ya lo hice»",
+    en: "Waiting — you haven’t pressed “Already did it” yet",
+    de: "Offen — „Schon erledigt“ noch nicht gedrückt"
+  },
+  "inbox.duePanel.title": {
+    es: "Toca contactar",
+    en: "Time to contact",
+    de: "Jetzt kontaktieren"
+  },
+  "inbox.duePanel.lead": {
+    es: "Solo desaparecen cuando pulsas «Ya lo hice». El reloj empieza entonces.",
+    en: "They only leave this list when you press “Already did it”. The timer starts then.",
+    de: "Verschwinden erst mit „Schon erledigt“. Dann startet der Timer."
+  },
+  "inbox.duePanel.empty": {
+    es: "Nadie pendiente. Todo al día.",
+    en: "Nobody waiting. All clear.",
+    de: "Niemand wartet. Alles erledigt."
+  },
+  "inbox.reminder.everyDay": {
+    es: "Cada día",
+    en: "Every day",
+    de: "Jeden Tag"
+  },
+  "inbox.reminder.everyMonth": {
+    es: "Cada mes",
+    en: "Every month",
+    de: "Jeden Monat"
+  },
+  "inbox.reminder.every3Months": {
+    es: "Cada 3 meses",
+    en: "Every 3 months",
+    de: "Alle 3 Monate"
+  },
+  "inbox.contact": {
+    es: "Persona / galería",
+    en: "Person / gallery",
+    de: "Person / Galerie"
+  },
+  "inbox.due": { es: "Toca hoy", en: "Due today", de: "Heute fällig" },
+  "inbox.dueIn": {
+    es: "En {n} días",
+    en: "In {n} days",
+    de: "In {n} Tagen"
+  },
+  "inbox.overdue": {
+    es: "Atrasado {n} días",
+    en: "{n} days late",
+    de: "{n} Tage überfällig"
+  },
+  "inbox.lastDone": {
+    es: "Último contacto: {date}",
+    en: "Last contact: {date}",
+    de: "Letzter Kontakt: {date}"
+  },
+  "inbox.neverDone": {
+    es: "Sin contacto todavía",
+    en: "No contact yet",
+    de: "Noch kein Kontakt"
+  },
+  "inbox.markDone": {
+    es: "Ya lo hice",
+    en: "Already did it",
+    de: "Schon erledigt"
+  },
+  "inbox.markedDone": {
+    es: "Anotado. Siguiente aviso: {interval}.",
+    en: "Noted. Next reminder: {interval}.",
+    de: "Notiert. Nächste Erinnerung: {interval}."
+  },
+  "inbox.openContact": {
+    es: "Ver ficha",
+    en: "Open contact",
+    de: "Kontakt öffnen"
+  },
+  "inbox.notePlaceholder": {
+    es: "Escribe una nota…",
+    en: "Write a note…",
+    de: "Notiz schreiben…"
+  },
+  "inbox.reminderNote": {
+    es: "Nota (opcional)",
+    en: "Note (optional)",
+    de: "Notiz (optional)"
+  },
+  "inbox.saved": {
+    es: "Guardado.",
+    en: "Saved.",
+    de: "Gespeichert."
+  },
+  "inbox.emptyReminders": {
+    es: "Ningún recordatorio aún.",
+    en: "No reminders yet.",
+    de: "Noch keine Erinnerungen."
+  },
+  "inbox.emptyNotes": {
+    es: "Ninguna nota aún.",
+    en: "No notes yet.",
+    de: "Noch keine Notizen."
+  },
+  "inbox.pickContact": {
+    es: "Elige un contacto…",
+    en: "Pick a contact…",
+    de: "Kontakt wählen…"
+  },
+  "inbox.badgeTitle": {
+    es: "{n} pendientes",
+    en: "{n} pending",
+    de: "{n} offen"
   },
   "examples.toast.saved": {
     es: "Biblioteca guardada.",
@@ -2650,9 +3199,49 @@ const strings = {
     de: "Textgenerator"
   },
   "textgen.lead": {
-    es: "Junta obras, notas y ejemplos; copia el prompt a tu chat de IA.",
-    en: "Gather works, notes, and examples; copy the prompt to your AI chat.",
-    de: "Werke, Notizen und Beispiele sammeln; Prompt in den KI-Chat kopieren."
+    es: "Elige obras, escribe qué quieres, copia al chat.",
+    en: "Pick works, write what you want, copy to chat.",
+    de: "Werke wählen, Wunsch schreiben, in den Chat kopieren."
+  },
+  "textgen.leadSimple": {
+    es: "1) Elige obras. 2) Escribe qué quieres. 3) Copia el texto y las fotos a tu chat.",
+    en: "1) Pick works. 2) Write what you want. 3) Copy the text and photos into your chat.",
+    de: "1) Werke wählen. 2) Wunsch schreiben. 3) Text und Fotos in den Chat kopieren."
+  },
+  "textgen.simple.works": {
+    es: "1. Elige las obras",
+    en: "1. Pick the works",
+    de: "1. Werke wählen"
+  },
+  "textgen.simple.brief": {
+    es: "2. Qué quieres escribir",
+    en: "2. What you want written",
+    de: "2. Was geschrieben werden soll"
+  },
+  "textgen.simple.more": {
+    es: "Más opciones",
+    en: "More options",
+    de: "Mehr Optionen"
+  },
+  "textgen.simple.exportLead": {
+    es: "3. Llevar al chat",
+    en: "3. Take it to the chat",
+    de: "3. In den Chat übernehmen"
+  },
+  "textgen.simple.exportHint": {
+    es: "Primero el texto, luego las fotos. Pégalos en ChatGPT u otro chat.",
+    en: "Text first, then photos. Paste them into ChatGPT or another chat.",
+    de: "Zuerst den Text, dann die Fotos. In ChatGPT oder einen anderen Chat einfügen."
+  },
+  "textgen.copy.text": {
+    es: "Copiar el texto",
+    en: "Copy the text",
+    de: "Text kopieren"
+  },
+  "textgen.copy.photos": {
+    es: "Copiar las fotos",
+    en: "Copy the photos",
+    de: "Fotos kopieren"
   },
   "textgen.chip.works": {
     es: "{n} obras",
@@ -2694,6 +3283,11 @@ const strings = {
     en: "3. Brief / notes",
     de: "3. Auftrag / Notizen"
   },
+  "textgen.resizeHint": {
+    es: "Para agrandar el cuadro: arrastra la esquina inferior derecha ↓↘",
+    en: "To enlarge the box: drag the bottom-right corner ↓↘",
+    de: "Feld vergrößern: untere rechte Ecke ziehen ↓↘"
+  },
   "textgen.section.examples": {
     es: "4. Ejemplos de estilo",
     en: "4. Style examples",
@@ -2703,16 +3297,6 @@ const strings = {
     es: "Instrucciones fijas (sistema)",
     en: "Fixed instructions (system)",
     de: "Feste Anweisungen (System)"
-  },
-  "textgen.copy.text": {
-    es: "Copiar texto",
-    en: "Copy text",
-    de: "Text kopieren"
-  },
-  "textgen.copy.photos": {
-    es: "Copiar fotos",
-    en: "Copy photos",
-    de: "Fotos kopieren"
   },
   "textgen.picker.works": {
     es: "Elegir obras para el generador",
@@ -4570,6 +5154,30 @@ export const LOOKUP_LABELS = {
     de: "Zahlung an Galerie"
   },
   "movementType:lost": { es: "Perdida", en: "Lost", de: "Verlust" },
+
+  "contactMethod:call": {
+    es: "Llamar por teléfono",
+    en: "Phone call",
+    de: "Anrufen"
+  },
+  "contactMethod:whatsapp": { es: "WhatsApp", en: "WhatsApp", de: "WhatsApp" },
+  "contactMethod:text": {
+    es: "Mensaje de texto",
+    en: "Text message",
+    de: "SMS / Nachricht"
+  },
+  "contactMethod:email": {
+    es: "Correo electrónico",
+    en: "Email",
+    de: "E-Mail"
+  },
+  "contactMethod:letter": { es: "Carta", en: "Letter", de: "Brief" },
+  "contactMethod:visit": {
+    es: "Visita en persona",
+    en: "Visit in person",
+    de: "Persönlicher Besuch"
+  },
+  "contactMethod:other": { es: "Otro", en: "Other", de: "Sonstiges" },
 
   "exhibitionType:single": {
     es: "Individual",

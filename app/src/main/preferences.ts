@@ -14,7 +14,7 @@ export interface AppPreferences {
 /** Folder created inside the location the user picks during setup. */
 const LIBRARY_FOLDER_NAME = "ArtInventory";
 
-/** Where earlier versions always kept the library, before setup existed. */
+/** Where earlier versions always kept the library, before setup existed. Keep for migration. */
 function legacyLibraryPath(): string {
   return path.join(app.getPath("documents"), "MumArtLibrary");
 }

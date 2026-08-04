@@ -62,7 +62,7 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@vitejs/plugin-react": "latest",
+    "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "latest",
     "cross-env": "latest",
     "electron": "latest",
@@ -70,7 +70,11 @@
     "react": "latest",
     "react-dom": "latest",
     "typescript": "latest",
-    "vite": "latest",
+    "vite": "^6.4.3",
     "wait-on": "latest"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-darwin-arm64": "^4.62.4",
+    "@rollup/rollup-darwin-x64": "^4.62.4"
   }
 }

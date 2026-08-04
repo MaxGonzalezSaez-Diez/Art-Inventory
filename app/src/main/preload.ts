@@ -17,7 +17,10 @@ import type {
   InventoryData,
   LookupInput,
   SeriesInfoInput,
-  TextGeneratorExample
+  TextGeneratorExample,
+  ContactReminder,
+  InboxNote,
+  InboxTodo
 } from "./types/inventory";
 import type { ApplicationPdfPayload } from "./applicationPdf";
 import type { AppLanguage, AppPreferences } from "./preferences";
@@ -93,6 +96,19 @@ const api = {
     examples: TextGeneratorExample[]
   ): Promise<InventoryData> =>
     ipcRenderer.invoke("textGenerator:saveExamples", examples),
+  saveContactReminders: (
+    reminders: ContactReminder[]
+  ): Promise<InventoryData> =>
+    ipcRenderer.invoke("inbox:saveReminders", reminders),
+  saveInboxNotes: (notes: InboxNote[]): Promise<InventoryData> =>
+    ipcRenderer.invoke("inbox:saveNotes", notes),
+  saveInboxTodos: (todos: InboxTodo[]): Promise<InventoryData> =>
+    ipcRenderer.invoke("inbox:saveTodos", todos),
+  restoreArtworkImage: (
+    artworkId: string,
+    imageId: string
+  ): Promise<InventoryData> =>
+    ipcRenderer.invoke("image:restoreArtwork", artworkId, imageId),
   writeClipboardText: (text: string): Promise<boolean> =>
     ipcRenderer.invoke("clipboard:writeText", text),
   writeClipboardImageFiles: (
