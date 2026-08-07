@@ -300,6 +300,11 @@ const strings = {
   },
   "library.count": { es: "{count} obras", en: "{count} artworks", de: "{count} Werke" },
   "library.add": { es: "+ Añadir obra", en: "+ Add artwork", de: "+ Werk hinzufügen" },
+  "library.bulkExport": {
+    es: "Salvar múltiple",
+    en: "Save multiple",
+    de: "Mehrere speichern"
+  },
   "library.col.photo": { es: "Foto", en: "Photo", de: "Foto" },
   "library.col.artwork": { es: "Obra", en: "Artwork", de: "Werk" },
   "library.col.series": { es: "Serie", en: "Series", de: "Serie" },
@@ -436,9 +441,9 @@ const strings = {
     de: "Aktuelles Foto nachbearbeiten"
   },
   "artwork.photo.retouchSaved": {
-    es: "Foto retocada guardada (la anterior queda en historial).",
-    en: "Retouched photo saved (previous kept in history).",
-    de: "Bearbeitetes Foto gespeichert (Vorversion im Verlauf)."
+    es: "Foto guardada.",
+    en: "Photo saved.",
+    de: "Foto gespeichert."
   },
   "artwork.photo.restored": {
     es: "Versión anterior restaurada.",
@@ -612,6 +617,41 @@ const strings = {
     es: "Fotos de prensa, montaje u otros ángulos.",
     en: "Press photos, installation shots, or other angles.",
     de: "Pressefotos, Installationsansichten oder andere Winkel."
+  },
+  "artwork.docs": {
+    es: "Documentos ({count})",
+    en: "Documents ({count})",
+    de: "Dokumente ({count})"
+  },
+  "artwork.docs.add": {
+    es: "Añadir documento",
+    en: "Add document",
+    de: "Dokument hinzufügen"
+  },
+  "artwork.docs.hint": {
+    es: "PDFs, Word, imágenes u otros archivos. Puedes añadir una descripción a cada uno.",
+    en: "PDFs, Word, images, or other files. You can add a description to each.",
+    de: "PDFs, Word, Bilder oder andere Dateien. Du kannst jedem eine Beschreibung geben."
+  },
+  "artwork.docs.empty": {
+    es: "Aún no hay documentos.",
+    en: "No documents yet.",
+    de: "Noch keine Dokumente."
+  },
+  "artwork.docs.pickSave": {
+    es: "¿De cuál quieres salvar una copia?",
+    en: "Which one do you want to save a copy of?",
+    de: "Von welchem möchtest du eine Kopie speichern?"
+  },
+  "artwork.docs.pickRemove": {
+    es: "¿Cuál quieres quitar?",
+    en: "Which one do you want to remove?",
+    de: "Welches möchtest du entfernen?"
+  },
+  "artwork.docs.noImages": {
+    es: "No hay imágenes para salvar copia.",
+    en: "No images to save a copy of.",
+    de: "Keine Bilder zum Speichern einer Kopie."
   },
   "artwork.detail.movementsEmpty": {
     es: "Sin movimientos",
@@ -858,9 +898,9 @@ const strings = {
     de: "PDF — eine Seite"
   },
   "artwork.export.limitToggle": {
-    es: "También me han puesto un límite de peso (MB)",
-    en: "They also gave me a file-size limit (MB)",
-    de: "Mir wurde auch eine Größengrenze (MB) genannt"
+    es: "También me han puesto un límite de peso",
+    en: "They also gave me a file-size limit",
+    de: "Mir wurde auch eine Größengrenze genannt"
   },
   "artwork.export.maxSize": {
     es: "Peso máximo del archivo",
@@ -892,6 +932,162 @@ const strings = {
     es: "Guardada · {details}",
     en: "Saved · {details}",
     de: "Gespeichert · {details}"
+  },
+
+  "artwork.exportBulk.title": {
+    es: "Salvar múltiple",
+    en: "Save multiple",
+    de: "Mehrere speichern"
+  },
+  "artwork.exportBulk.lead": {
+    es: "Elige varias obras. Se usa la foto principal de cada una.",
+    en: "Pick several artworks. Each one’s main photo is used.",
+    de: "Wähle mehrere Werke. Es wird jeweils das Hauptfoto verwendet."
+  },
+  "artwork.exportBulk.stepWorks": {
+    es: "1 · Qué obras",
+    en: "1 · Which artworks",
+    de: "1 · Welche Werke"
+  },
+  "artwork.exportBulk.chooseWorks": {
+    es: "Elegir obras…",
+    en: "Choose artworks…",
+    de: "Werke wählen…"
+  },
+  "artwork.exportBulk.changeWorks": {
+    es: "Cambiar obras ({n})",
+    en: "Change artworks ({n})",
+    de: "Werke ändern ({n})"
+  },
+  "artwork.exportBulk.worksHint": {
+    es: "Solo se exporta la foto principal de cada obra.",
+    en: "Only each artwork’s main photo is exported.",
+    de: "Es wird nur das Hauptfoto jedes Werks exportiert."
+  },
+  "artwork.exportBulk.worksReady": {
+    es: "{ready} de {total} con foto principal",
+    en: "{ready} of {total} with a main photo",
+    de: "{ready} von {total} mit Hauptfoto"
+  },
+  "artwork.exportBulk.worksNoPhoto": {
+    es: "{n} sin foto (se omiten)",
+    en: "{n} without a photo (skipped)",
+    de: "{n} ohne Foto (werden übersprungen)"
+  },
+  "artwork.exportBulk.pickTitle": {
+    es: "Elegir obras para exportar",
+    en: "Choose artworks to export",
+    de: "Werke zum Export wählen"
+  },
+  "artwork.exportBulk.pickNotice": {
+    es: "Se usará la foto principal de cada obra seleccionada.",
+    en: "The main photo of each selected artwork will be used.",
+    de: "Es wird das Hauptfoto jedes ausgewählten Werks verwendet."
+  },
+  "artwork.exportBulk.useArtworkSize": {
+    es: "Usar el tamaño (cm) de cada obra",
+    en: "Use each artwork’s size (cm)",
+    de: "Größe (cm) jedes Werks verwenden"
+  },
+  "artwork.exportBulk.useArtworkSizeHint": {
+    es: "Si una obra no tiene alto y ancho, se omite en modo imprimir.",
+    en: "If an artwork has no height and width, it is skipped in print mode.",
+    de: "Fehlen Höhe und Breite, wird das Werk im Druckmodus übersprungen."
+  },
+  "artwork.exportBulk.printIndividually": {
+    es: "Si es para imprimir a un tamaño concreto, hazlo obra por obra: ahí verás si la foto queda nítida.",
+    en: "If you need to print at a specific size, do it one artwork at a time — there you can see whether the photo is sharp enough.",
+    de: "Für einen konkreten Druckgröße speichere einzeln: dort siehst du, ob das Foto scharf genug ist."
+  },
+  "artwork.exportBulk.stepDest": {
+    es: "4 · Dónde guardar",
+    en: "4 · Where to save",
+    de: "4 · Speicherort"
+  },
+  "artwork.exportBulk.dest.generated": {
+    es: "Carpeta generated",
+    en: "generated folder",
+    de: "Ordner generated"
+  },
+  "artwork.exportBulk.dest.generatedHint": {
+    es: "Las fotos se guardan sueltas (archivos individuales) en generated.",
+    en: "Photos are saved as individual files inside generated.",
+    de: "Fotos werden als einzelne Dateien in generated gespeichert."
+  },
+  "artwork.exportBulk.dest.choose": {
+    es: "Mi propia carpeta",
+    en: "My own folder",
+    de: "Eigener Ordner"
+  },
+  "artwork.exportBulk.dest.chooseHint": {
+    es: "Elige un sitio y se crea una carpeta con el nombre que pongas; todas las fotos van dentro.",
+    en: "Pick a location; a folder with the name you type is created, and all photos go inside.",
+    de: "Ort wählen; es wird ein Ordner mit deinem Namen erstellt, alle Fotos kommen hinein."
+  },
+  "artwork.exportBulk.folderName": {
+    es: "Nombre de la carpeta nueva",
+    en: "New folder name",
+    de: "Name des neuen Ordners"
+  },
+  "artwork.exportBulk.folderNameHint": {
+    es: "Todas las fotos van juntas en esta carpeta nueva.",
+    en: "All photos go together in this new folder.",
+    de: "Alle Fotos landen gemeinsam in diesem neuen Ordner."
+  },
+  "artwork.exportBulk.summary": {
+    es: "{n} fotos · {format}",
+    en: "{n} photos · {format}",
+    de: "{n} Fotos · {format}"
+  },
+  "artwork.exportBulk.save": {
+    es: "Salvar {n} fotos",
+    en: "Save {n} photos",
+    de: "{n} Fotos speichern"
+  },
+  "artwork.exportBulk.progress": {
+    es: "Guardando {n} fotos…",
+    en: "Saving {n} photos…",
+    de: "{n} Fotos werden gespeichert…"
+  },
+  "artwork.exportBulk.doneSaved": {
+    es: "{n} guardadas",
+    en: "{n} saved",
+    de: "{n} gespeichert"
+  },
+  "artwork.exportBulk.doneSkipped": {
+    es: "{n} omitidas",
+    en: "{n} skipped",
+    de: "{n} übersprungen"
+  },
+  "artwork.exportBulk.doneFailed": {
+    es: "{n} con error",
+    en: "{n} failed",
+    de: "{n} fehlgeschlagen"
+  },
+  "artwork.exportBulk.doneFolder": {
+    es: "carpeta «{folder}»",
+    en: "folder «{folder}»",
+    de: "Ordner «{folder}»"
+  },
+  "artwork.exportBulk.error.pickWorks": {
+    es: "Elige al menos una obra.",
+    en: "Choose at least one artwork.",
+    de: "Wähle mindestens ein Werk."
+  },
+  "artwork.exportBulk.error.noPhotos": {
+    es: "Ninguna de las obras elegidas tiene foto principal.",
+    en: "None of the chosen artworks has a main photo.",
+    de: "Keines der gewählten Werke hat ein Hauptfoto."
+  },
+  "artwork.exportBulk.error.folderName": {
+    es: "Escribe un nombre para la carpeta.",
+    en: "Enter a folder name.",
+    de: "Gib einen Ordnernamen ein."
+  },
+  "artwork.exportBulk.error.noPrintSize": {
+    es: "Ninguna obra tiene tamaño en cm. Desactiva «Usar el tamaño de cada obra» y pon ancho y alto, o completa las fichas.",
+    en: "No artwork has a size in cm. Turn off “Use each artwork’s size” and enter width and height, or fill in the artwork records.",
+    de: "Kein Werk hat eine Größe in cm. Deaktiviere «Größe jedes Werks» und gib Breite und Höhe ein, oder ergänze die Werkdaten."
   },
 
   /* ── Movements ──────────────────────────────────────────────────────── */
@@ -2550,6 +2746,11 @@ const strings = {
     en: "Choose a series…",
     de: "Wähle eine Serie…"
   },
+  "series.splitHandle": {
+    es: "Ajustar ancho de la lista",
+    en: "Resize series list",
+    de: "Serienliste vergrößern"
+  },
   "series.texts.title": { es: "Textos", en: "Texts", de: "Texte" },
   "series.texts.add": {
     es: "+ Añadir texto",
@@ -2566,9 +2767,14 @@ const strings = {
   },
   "series.docs.title": { es: "Documentos", en: "Documents", de: "Dokumente" },
   "series.docs.add": {
-    es: "+ Añadir documento",
-    en: "+ Add document",
-    de: "+ Dokument hinzufügen"
+    es: "Añadir documento",
+    en: "Add document",
+    de: "Dokument hinzufügen"
+  },
+  "series.docs.hint": {
+    es: "PDFs, Word, imágenes u otros archivos de la serie. Puedes añadir una descripción corta a cada uno.",
+    en: "PDFs, Word, images, or other series files. You can add a short description to each.",
+    de: "PDFs, Word, Bilder oder andere Seriendateien. Du kannst jedem eine kurze Beschreibung geben."
   },
   "series.docs.empty": {
     es: "Sin documentos todavía.",
@@ -2733,12 +2939,12 @@ const strings = {
     en: "Move all…",
     de: "Alle verschieben…"
   },
-  "examples.select": { es: "Seleccionar", en: "Select", de: "Auswählen" },
-  "examples.selectAllIn": {
-    es: "Seleccionar todos",
-    en: "Select all",
-    de: "Alle auswählen"
+  "examples.deleteAll": {
+    es: "Borrar todos",
+    en: "Delete all",
+    de: "Alle löschen"
   },
+  "examples.select": { es: "Seleccionar", en: "Select", de: "Auswählen" },
   "examples.clearSelection": {
     es: "Quitar selección",
     en: "Clear selection",
@@ -3070,6 +3276,11 @@ const strings = {
     en: "Added to “Time to contact”. Press “Already did it” once you’ve reached out.",
     de: "Unter „Jetzt kontaktieren“ hinzugefügt. Drücke „Schon erledigt“, wenn du Kontakt hattest."
   },
+  "inbox.reminder.startedIn": {
+    es: "Recordatorio creado. Próximo contacto en {n} días.",
+    en: "Reminder created. Next contact in {n} days.",
+    de: "Erinnerung erstellt. Nächster Kontakt in {n} Tagen."
+  },
   "inbox.dueWaiting": {
     es: "Pendiente — aún no has marcado «Ya lo hice»",
     en: "Waiting — you haven’t pressed “Already did it” yet",
@@ -3081,14 +3292,54 @@ const strings = {
     de: "Jetzt kontaktieren"
   },
   "inbox.duePanel.lead": {
-    es: "Solo desaparecen cuando pulsas «Ya lo hice». El reloj empieza entonces.",
-    en: "They only leave this list when you press “Already did it”. The timer starts then.",
-    de: "Verschwinden erst mit „Schon erledigt“. Dann startet der Timer."
+    es: "Entran 3 días antes. Se quedan aquí — también atrasados en rojo — hasta que pulses «Ya lo hice».",
+    en: "They appear 3 days early. They stay here — overdue ones in red — until you press “Already did it”.",
+    de: "Erscheinen 3 Tage vorher. Bleiben hier — Überfällige in Rot — bis du „Schon erledigt“ drückst."
   },
   "inbox.duePanel.empty": {
     es: "Nadie pendiente. Todo al día.",
     en: "Nobody waiting. All clear.",
     de: "Niemand wartet. Alles erledigt."
+  },
+  "inbox.weekPanel.title": {
+    es: "En 4–7 días",
+    en: "In 4–7 days",
+    de: "In 4–7 Tagen"
+  },
+  "inbox.weekPanel.lead": {
+    es: "Lo que llega después (tareas con fecha y contactos un poco más lejos).",
+    en: "What’s coming next (dated tasks and contacts a bit further out).",
+    de: "Was als Nächstes kommt (datierte Aufgaben und Kontakte etwas weiter weg)."
+  },
+  "inbox.weekPanel.empty": {
+    es: "Nada con fecha esta semana.",
+    en: "Nothing dated this week.",
+    de: "Nichts Datierte diese Woche."
+  },
+  "inbox.todo.dueDate": {
+    es: "Fecha",
+    en: "Date",
+    de: "Datum"
+  },
+  "inbox.todo.dueDateClear": {
+    es: "Quitar fecha",
+    en: "Clear date",
+    de: "Datum löschen"
+  },
+  "inbox.todo.dueToday": {
+    es: "Hoy",
+    en: "Today",
+    de: "Heute"
+  },
+  "inbox.todo.dueOverdue": {
+    es: "Atrasada ({n} d)",
+    en: "Overdue ({n} d)",
+    de: "Überfällig ({n} T)"
+  },
+  "inbox.todo.dueInDays": {
+    es: "En {n} d",
+    en: "In {n} d",
+    de: "In {n} T"
   },
   "inbox.reminder.everyDay": {
     es: "Cada día",
@@ -3120,6 +3371,11 @@ const strings = {
     es: "Atrasado {n} días",
     en: "{n} days late",
     de: "{n} Tage überfällig"
+  },
+  "inbox.overdueOne": {
+    es: "Atrasado 1 día",
+    en: "1 day late",
+    de: "1 Tag überfällig"
   },
   "inbox.lastDone": {
     es: "Último contacto: {date}",
@@ -3198,25 +3454,114 @@ const strings = {
     en: "Text generator",
     de: "Textgenerator"
   },
+  "textgen.reset": {
+    es: "Limpiar y reiniciar",
+    en: "Clean and restart",
+    de: "Leeren und neu starten"
+  },
+  "textgen.toast.reset": {
+    es: "Generador reiniciado.",
+    en: "Generator reset.",
+    de: "Generator zurückgesetzt."
+  },
   "textgen.lead": {
     es: "Elige obras, escribe qué quieres, copia al chat.",
     en: "Pick works, write what you want, copy to chat.",
     de: "Werke wählen, Wunsch schreiben, in den Chat kopieren."
   },
   "textgen.leadSimple": {
-    es: "1) Elige obras. 2) Escribe qué quieres. 3) Copia el texto y las fotos a tu chat.",
-    en: "1) Pick works. 2) Write what you want. 3) Copy the text and photos into your chat.",
-    de: "1) Werke wählen. 2) Wunsch schreiben. 3) Text und Fotos in den Chat kopieren."
+    es: "Elige obras, escribe qué quieres y copia el texto al chat. Lo demás está en «Más opciones».",
+    en: "Pick works, write what you want, and copy the text to the chat. Everything else is under «More options».",
+    de: "Werke wählen, Wunsch schreiben und Text in den Chat kopieren. Alles weitere unter «Mehr Optionen»."
   },
   "textgen.simple.works": {
     es: "1. Elige las obras",
     en: "1. Pick the works",
     de: "1. Werke wählen"
   },
+  "textgen.simple.worksHint": {
+    es: "Elige las obras de las que trata este texto.",
+    en: "Choose the works this text is about.",
+    de: "Wähle die Werke, um die es in diesem Text geht."
+  },
   "textgen.simple.brief": {
     es: "2. Qué quieres escribir",
     en: "2. What you want written",
     de: "2. Was geschrieben werden soll"
+  },
+  "textgen.simple.briefPlaceholder": {
+    es: "Pon aquí lo que quieres escribir, pueden ser ideas desordenadas.",
+    en: "Put here what you want written — messy ideas are fine.",
+    de: "Schreib hier, was du willst — unordentliche Ideen sind okay."
+  },
+  "textgen.tone.title": {
+    es: "Tono de la respuesta",
+    en: "Tone of the reply",
+    de: "Ton der Antwort"
+  },
+  "textgen.tone.lead": {
+    es: "Elige 1, 2 o 3 en cada barra.",
+    en: "Pick 1, 2 or 3 on each bar.",
+    de: "Wähle 1, 2 oder 3 auf jeder Leiste."
+  },
+  "textgen.tone.formality": {
+    es: "Formalidad",
+    en: "Formality",
+    de: "Förmlichkeit"
+  },
+  "textgen.tone.formality.1": { es: "Informal", en: "Informal", de: "Locker" },
+  "textgen.tone.formality.2": {
+    es: "Equilibrada",
+    en: "Balanced",
+    de: "Ausgewogen"
+  },
+  "textgen.tone.formality.3": { es: "Formal", en: "Formal", de: "Formell" },
+  "textgen.tone.firmness": {
+    es: "Firmeza",
+    en: "Firmness",
+    de: "Bestimmtheit"
+  },
+  "textgen.tone.firmness.1": { es: "Suave", en: "Soft", de: "Sanft" },
+  "textgen.tone.firmness.2": { es: "Clara", en: "Clear", de: "Klar" },
+  "textgen.tone.firmness.3": { es: "Firme", en: "Firm", de: "Bestimmt" },
+  "textgen.tone.warmth": { es: "Calidez", en: "Warmth", de: "Wärme" },
+  "textgen.tone.warmth.1": { es: "Fría", en: "Cool", de: "Kühl" },
+  "textgen.tone.warmth.2": { es: "Cordial", en: "Cordial", de: "Freundlich" },
+  "textgen.tone.warmth.3": { es: "Cálida", en: "Warm", de: "Warm" },
+  "textgen.email.add": {
+    es: "+ Pegar historial de email",
+    en: "+ Paste email history",
+    de: "+ E-Mail-Verlauf einfügen"
+  },
+  "textgen.email.addShort": {
+    es: "Añadir",
+    en: "Add",
+    de: "Hinzufügen"
+  },
+  "textgen.email.title": {
+    es: "Historial de email",
+    en: "Email history",
+    de: "E-Mail-Verlauf"
+  },
+  "textgen.email.lead": {
+    es: "Copia el hilo del correo y pégalo aquí. El borrador contestará en esa conversación.",
+    en: "Copy the email thread and paste it here. The draft will reply in that conversation.",
+    de: "Kopiere den E-Mail-Verlauf und füge ihn hier ein. Der Entwurf antwortet in diesem Gespräch."
+  },
+  "textgen.email.placeholder": {
+    es: "Pega aquí el correo (de:, para:, mensajes anteriores…)",
+    en: "Paste the email here (from:, to:, earlier messages…)",
+    de: "E-Mail hier einfügen (von:, an:, frühere Nachrichten…)"
+  },
+  "textgen.email.remove": {
+    es: "Quitar",
+    en: "Remove",
+    de: "Entfernen"
+  },
+  "textgen.email.closedHint": {
+    es: "Si vas a contestar un correo, añade aquí el hilo.",
+    en: "If you are answering an email, add the thread here.",
+    de: "Wenn du eine E-Mail beantwortest, füge hier den Verlauf ein."
   },
   "textgen.simple.more": {
     es: "Más opciones",
@@ -3274,9 +3619,14 @@ const strings = {
     de: "1. Werke"
   },
   "textgen.section.seriesTexts": {
-    es: "2. Textos de serie",
-    en: "2. Series texts",
-    de: "2. Serientexte"
+    es: "Textos de serie",
+    en: "Series texts",
+    de: "Serientexte"
+  },
+  "textgen.section.seriesTextsHint": {
+    es: "Textos guardados en Series (metadatos) sobre cada colección.",
+    en: "Texts saved under Series (metadata) about each collection.",
+    de: "Texte aus Serien (Metadaten) zu jeder Sammlung."
   },
   "textgen.section.brief": {
     es: "3. Encargo / notas",
@@ -3289,9 +3639,14 @@ const strings = {
     de: "Feld vergrößern: untere rechte Ecke ziehen ↓↘"
   },
   "textgen.section.examples": {
-    es: "4. Ejemplos de estilo",
-    en: "4. Style examples",
-    de: "4. Stilbeispiele"
+    es: "Ejemplos de estilo",
+    en: "Style examples",
+    de: "Stilbeispiele"
+  },
+  "textgen.section.examplesHint": {
+    es: "Modelos de cómo escribe la artista (biblioteca de ejemplos).",
+    en: "Models of how the artist writes (example library).",
+    de: "Vorbilder, wie die Künstlerin schreibt (Beispielbibliothek)."
   },
   "textgen.section.system": {
     es: "Instrucciones fijas (sistema)",
@@ -3307,6 +3662,16 @@ const strings = {
     es: "Elegir ejemplos de estilo",
     en: "Choose style examples",
     de: "Stilbeispiele wählen"
+  },
+  "textgen.picker.showFlat": {
+    es: "Ver todos sin sección",
+    en: "Show all without sections",
+    de: "Alle ohne Abschnitte zeigen"
+  },
+  "textgen.picker.showGrouped": {
+    es: "Agrupar por sección",
+    en: "Group by section",
+    de: "Nach Abschnitt gruppieren"
   },
   "textgen.picker.useExamples": {
     es: "Usar {n} ejemplo(s)",
@@ -3454,9 +3819,71 @@ const strings = {
   /* ── Price list / folleto ───────────────────────────────────────────── */
   "pricelist.eyebrow": { es: "Documentos", en: "Documents", de: "Dokumente" },
   "pricelist.title": {
-    es: "Generar folleto de obras",
-    en: "Generate artwork booklet",
-    de: "Werkbroschüre erstellen"
+    es: "Folleto de obras",
+    en: "Works brochure",
+    de: "Werkkatalog"
+  },
+  "pricelist.lead": {
+    es: "Guarda cada folleto y vuelve a abrirlo cuando quieras.",
+    en: "Save each brochure and open it again whenever you like.",
+    de: "Speichere jeden Katalog und öffne ihn später wieder."
+  },
+  "pricelist.add": {
+    es: "+ Nuevo folleto",
+    en: "+ New brochure",
+    de: "+ Neuer Katalog"
+  },
+  "pricelist.search": {
+    es: "Buscar folleto…",
+    en: "Search brochure…",
+    de: "Katalog suchen…"
+  },
+  "pricelist.empty": {
+    es: "Todavía no hay folletos guardados.",
+    en: "No saved brochures yet.",
+    de: "Noch keine gespeicherten Kataloge."
+  },
+  "pricelist.createFirst": {
+    es: "Crear el primero",
+    en: "Create the first one",
+    de: "Ersten erstellen"
+  },
+  "pricelist.noMatch": {
+    es: "Ningún folleto coincide con la búsqueda.",
+    en: "No brochure matches the search.",
+    de: "Kein Katalog passt zur Suche."
+  },
+  "pricelist.untitled": {
+    es: "Folleto sin título",
+    en: "Untitled brochure",
+    de: "Katalog ohne Titel"
+  },
+  "pricelist.back": {
+    es: "Todos los folletos",
+    en: "All brochures",
+    de: "Alle Kataloge"
+  },
+  "pricelist.col.name": { es: "Nombre", en: "Name", de: "Name" },
+  "pricelist.col.mode": {
+    es: "Origen",
+    en: "Source",
+    de: "Herkunft"
+  },
+  "pricelist.col.works": { es: "Obras", en: "Works", de: "Werke" },
+  "pricelist.col.updated": {
+    es: "Actualizado",
+    en: "Updated",
+    de: "Aktualisiert"
+  },
+  "pricelist.toast.saved": {
+    es: "Folleto guardado.",
+    en: "Brochure saved.",
+    de: "Katalog gespeichert."
+  },
+  "pricelist.error.needTitle": {
+    es: "Pon un encabezado o elige alguna obra antes de guardar.",
+    en: "Add a header or choose some works before saving.",
+    de: "Gib eine Überschrift ein oder wähle Werke vor dem Speichern."
   },
   "pricelist.generatePdf": {
     es: "Generar PDF",
@@ -3472,6 +3899,151 @@ const strings = {
     es: "De una exposición",
     en: "From an exhibition",
     de: "Aus einer Ausstellung"
+  },
+  "pricelist.mode.series": {
+    es: "De una serie",
+    en: "From a series",
+    de: "Aus einer Serie"
+  },
+  "pricelist.series.select": {
+    es: "Serie",
+    en: "Series",
+    de: "Serie"
+  },
+  "pricelist.series.pickHint": {
+    es: "Elige una serie para incluir todas sus obras.",
+    en: "Choose a series to include all its works.",
+    de: "Wähle eine Serie, um alle ihre Werke einzuschließen."
+  },
+  "pricelist.series.empty": {
+    es: "Esa serie no tiene obras todavía.",
+    en: "That series has no works yet.",
+    de: "Diese Serie hat noch keine Werke."
+  },
+  "pricelist.price.set": {
+    es: "Poner precio",
+    en: "Set price",
+    de: "Preis setzen"
+  },
+  "pricelist.price.setAll": {
+    es: "Poner precios",
+    en: "Set prices",
+    de: "Preise setzen"
+  },
+  "pricelist.price.change": {
+    es: "Cambiar precio",
+    en: "Change price",
+    de: "Preis ändern"
+  },
+  "pricelist.price.modalTitle": {
+    es: "Precio de la obra",
+    en: "Work price",
+    de: "Werkpreis"
+  },
+  "pricelist.price.bulkTitle": {
+    es: "Poner precios",
+    en: "Set prices",
+    de: "Preise setzen"
+  },
+  "pricelist.price.modeFree": {
+    es: "Libre",
+    en: "Free",
+    de: "Frei"
+  },
+  "pricelist.price.modeFreeLong": {
+    es: "Precio libre",
+    en: "Free price",
+    de: "Freier Preis"
+  },
+  "pricelist.price.modeFactors": {
+    es: "Según factores",
+    en: "By factors",
+    de: "Nach Faktoren"
+  },
+  "pricelist.price.modeFactorsLong": {
+    es: "Precio por factores",
+    en: "Price by factors",
+    de: "Preis nach Faktoren"
+  },
+  "pricelist.price.freeHint": {
+    es: "Escribe el precio en euros (solo para este folleto).",
+    en: "Enter the price in euros (for this brochure only).",
+    de: "Preis in Euro eingeben (nur für diesen Katalog)."
+  },
+  "pricelist.price.bulkFreeHint": {
+    es: "Escribe un precio por obra, o el mismo para todas. Solo afecta a este folleto.",
+    en: "Enter a price per work, or the same for all. Only affects this brochure.",
+    de: "Gib einen Preis pro Werk ein, oder denselben für alle. Betrifft nur diesen Katalog."
+  },
+  "pricelist.price.bulkFactorsHint": {
+    es: "Calcula el precio con tus factores (o precio fijo de técnica) a la fecha elegida. Luego puedes ajustar cada obra.",
+    en: "Calculates the price from your factors (or fixed technique price) on the chosen date. You can still adjust each work.",
+    de: "Berechnet den Preis aus deinen Faktoren (oder Festpreis der Technik) zum gewählten Datum. Du kannst jedes Werk danach anpassen."
+  },
+  "pricelist.price.factorDate": {
+    es: "Fecha de los factores",
+    en: "Factor date",
+    de: "Faktor-Datum"
+  },
+  "pricelist.price.fillAll": {
+    es: "Mismo precio para todas",
+    en: "Same price for all",
+    de: "Gleicher Preis für alle"
+  },
+  "pricelist.price.fillAllApply": {
+    es: "Rellenar",
+    en: "Fill",
+    de: "Ausfüllen"
+  },
+  "pricelist.price.freePlaceholder": {
+    es: "ej. 1200",
+    en: "e.g. 1200",
+    de: "z. B. 1200"
+  },
+  "pricelist.price.factorsHint": {
+    es: "Calculado con tus factores de precio (o precio fijo de técnica).",
+    en: "Calculated from your price factors (or fixed technique price).",
+    de: "Berechnet aus deinen Preisfaktoren (oder Festpreis der Technik)."
+  },
+  "pricelist.price.factorsNone": {
+    es: "No se puede calcular: falta tamaño o factores.",
+    en: "Cannot calculate: size or factors missing.",
+    de: "Nicht berechenbar: Größe oder Faktoren fehlen."
+  },
+  "pricelist.price.factorsNoneShort": {
+    es: "Sin cálculo",
+    en: "N/A",
+    de: "k. A."
+  },
+  "pricelist.price.factorsResult": {
+    es: "Precio sugerido: {price}",
+    en: "Suggested price: {price}",
+    de: "Vorgeschlagener Preis: {price}"
+  },
+  "pricelist.price.apply": {
+    es: "Usar este precio",
+    en: "Use this price",
+    de: "Diesen Preis verwenden"
+  },
+  "pricelist.price.applyAll": {
+    es: "Aplicar precios",
+    en: "Apply prices",
+    de: "Preise übernehmen"
+  },
+  "pricelist.price.clear": {
+    es: "Quitar precio",
+    en: "Clear price",
+    de: "Preis löschen"
+  },
+  "pricelist.price.none": {
+    es: "Sin precio",
+    en: "No price",
+    de: "Kein Preis"
+  },
+  "pricelist.mode.exhibitionShort": {
+    es: "Exposición",
+    en: "Exhibition",
+    de: "Ausstellung"
   },
   "pricelist.field.header": {
     es: "Encabezado",
@@ -3631,14 +4203,14 @@ const strings = {
     de: "Nutze «Werke hinzufügen», um sie in einem Fenster mit Suche zu wählen."
   },
   "pricelist.rowsTitle": {
-    es: "Imagen y orden de cada obra",
-    en: "Image and order of each artwork",
-    de: "Bild und Reihenfolge jedes Werks"
+    es: "Imagen, Precio y orden de cada obra",
+    en: "Image, price and order of each artwork",
+    de: "Bild, Preis und Reihenfolge jedes Werks"
   },
   "pricelist.rowsHint": {
-    es: "Usa ↑ ↓ para elegir el orden del folleto. Los precios se toman de la exposición (o del precio de venta si no hay exposición); cámbialos allí si hace falta.",
-    en: "Use ↑ ↓ to set the booklet order. Prices come from the exhibition (or from the sale price if there is no exhibition); change them there if needed.",
-    de: "Mit ↑ ↓ legst du die Reihenfolge der Broschüre fest. Preise stammen aus der Ausstellung (oder aus dem Verkaufspreis, wenn es keine gibt); ändere sie dort, falls nötig."
+    es: "Usa «Poner precios» para calcularlos todos a la vez. Luego puedes ajustar cada precio a mano y ordenar con ↑ ↓.",
+    en: "Use «Set prices» to calculate them all at once. Then you can tweak each price by hand and reorder with ↑ ↓.",
+    de: "Mit «Preise setzen» berechnest du alle auf einmal. Danach kannst du jeden Preis manuell anpassen und mit ↑ ↓ sortieren."
   },
   "pricelist.changeImage": {
     es: "Cambiar imagen",
@@ -3650,15 +4222,40 @@ const strings = {
     en: "Another image",
     de: "Anderes Bild"
   },
+  "pricelist.imageShort": {
+    es: "Imagen",
+    en: "Image",
+    de: "Bild"
+  },
+  "pricelist.preview.label": {
+    es: "Vista previa del PDF ({n} obras)",
+    en: "PDF preview ({n} works)",
+    de: "PDF-Vorschau ({n} Werke)"
+  },
   "pricelist.preview.lead": {
     es: "Vista previa · así saldrá el PDF ({count} obras)",
     en: "Preview · this is how the PDF will look ({count} artworks)",
     de: "Vorschau · so wird das PDF aussehen ({count} Werke)"
   },
+  "pricelist.preview.resizeAria": {
+    es: "Cambiar tamaño de la vista previa",
+    en: "Resize the preview",
+    de: "Vorschaugröße ändern"
+  },
+  "pricelist.preview.resizeTitle": {
+    es: "Arrastra para dar más o menos espacio a la vista previa",
+    en: "Drag to give the preview more or less space",
+    de: "Ziehen, um der Vorschau mehr oder weniger Platz zu geben"
+  },
   "pricelist.preview.pickExhibition": {
     es: "Selecciona una exposición con obras.",
     en: "Select an exhibition that has artworks.",
     de: "Wähle eine Ausstellung mit Werken."
+  },
+  "pricelist.preview.pickSeries": {
+    es: "Selecciona una serie con obras.",
+    en: "Select a series that has artworks.",
+    de: "Wähle eine Serie mit Werken."
   },
   "pricelist.preview.addWorks": {
     es: "Añade obras para verlas aquí.",
@@ -3785,6 +4382,16 @@ const strings = {
     en: "You are about to delete the artwork «{title}» and all its associated movements.",
     de: "Du bist dabei, das Werk «{title}» und alle zugehörigen Bewegungen zu löschen."
   },
+  "confirm.examplesBulk.title": {
+    es: "Borrar ejemplos",
+    en: "Delete examples",
+    de: "Beispiele löschen"
+  },
+  "confirm.examplesBulk.message": {
+    es: "Se borrarán {n} ejemplo(s) de «{section}». No se puede deshacer.",
+    en: "{n} example(s) in «{section}» will be deleted. This cannot be undone.",
+    de: "{n} Beispiel(e) in «{section}» werden gelöscht. Das lässt sich nicht rückgängig machen."
+  },
   "confirm.contact.title": {
     es: "Eliminar {kind}",
     en: "Delete {kind}",
@@ -3892,6 +4499,21 @@ const strings = {
     en: "Add {n} selected artwork(s)",
     de: "{n} ausgewählte(s) Werk(e) hinzufügen"
   },
+  "picker.selectVisible": {
+    es: "Seleccionar visibles ({n})",
+    en: "Select visible ({n})",
+    de: "Sichtbare wählen ({n})"
+  },
+  "picker.clearSelection": {
+    es: "Quitar selección",
+    en: "Clear selection",
+    de: "Auswahl leeren"
+  },
+  "picker.selectedCount": {
+    es: "{n} seleccionadas",
+    en: "{n} selected",
+    de: "{n} ausgewählt"
+  },
   "picker.sort.size": { es: "Tamaño", en: "Size", de: "Größe" },
   "media.addImage": {
     es: "+ Añadir imagen",
@@ -3917,6 +4539,26 @@ const strings = {
     es: "Descripción o comentario…",
     en: "Description or comment…",
     de: "Beschreibung oder Kommentar…"
+  },
+  "media.desc.label": {
+    es: "Descripción",
+    en: "Description",
+    de: "Beschreibung"
+  },
+  "media.desc.editTitle": {
+    es: "Descripción del documento",
+    en: "Document description",
+    de: "Dokumentbeschreibung"
+  },
+  "media.desc.viewTitle": {
+    es: "Descripción",
+    en: "Description",
+    de: "Beschreibung"
+  },
+  "media.desc.empty": {
+    es: "Sin descripción todavía.",
+    en: "No description yet.",
+    de: "Noch keine Beschreibung."
   },
   "media.imagesEmpty": {
     es: "Aún no hay imágenes adicionales.",
@@ -4200,9 +4842,14 @@ const strings = {
     de: "Noch keine Serien mit Metadaten. Lege sie im Tab Serien an."
   },
   "textgen.series.openHint": {
-    es: "Pulsa una serie para abrirla. Ahí puedes leer el texto entero antes de marcarlo.",
-    en: "Click a series to open it. There you can read the whole text before ticking it.",
-    de: "Klicke eine Serie an, um sie zu öffnen. Dort kannst du den ganzen Text lesen, bevor du ihn markierst."
+    es: "Pulsa Abrir para elegir textos de las series.",
+    en: "Press Open to pick texts from the series.",
+    de: "Öffnen tippen, um Serientexte auszuwählen."
+  },
+  "textgen.series.selectedCount": {
+    es: "{n} texto(s) de serie marcados.",
+    en: "{n} series text(s) selected.",
+    de: "{n} Serientext(e) ausgewählt."
   },
   "textgen.series.missingInfo": {
     es: "No hay ficha de serie. Créala en Series para añadir textos.",

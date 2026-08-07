@@ -30,6 +30,8 @@ export interface CertificatePayload {
   copyLabel?: string;
   artistName?: string;
   language?: CertificateLang;
+  /** Optional main photo as a data URL (data:image/...;base64,...). */
+  imageDataUrl?: string;
 }
 
 type Copy = {
@@ -194,6 +196,15 @@ function buildHtml(payload: CertificatePayload): string {
     ? t.artistNamed(escapeHtml(artist))
     : t.artistAnon;
 
+  const imageRaw = String(payload.imageDataUrl ?? "").trim();
+  const imageSrc =
+    /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+$/.test(imageRaw)
+      ? imageRaw.replace(/\s+/g, "")
+      : "";
+  const imageBlock = imageSrc
+    ? `          <div class="work-image-wrap"><img class="work-image" src="${imageSrc}" alt="" /></div>`
+    : "";
+
   return `<!DOCTYPE html>
 <html lang="${t.langAttr}">
 <head>
@@ -242,12 +253,13 @@ function buildHtml(payload: CertificatePayload): string {
       display: flex;
       flex: 1 1 auto;
       flex-direction: column;
-      padding: 15mm 17mm 13mm;
+      padding: 13mm 17mm 12mm;
       text-align: left;
     }
     .letterhead {
       border-bottom: 0.5pt solid #cdc5b6;
       flex: 0 0 auto;
+      min-height: 6mm;
       padding-bottom: 4mm;
     }
     .letterhead .who {
@@ -261,22 +273,35 @@ function buildHtml(payload: CertificatePayload): string {
       flex: 1 1 auto;
       flex-direction: column;
       justify-content: center;
-      padding: 11mm 0;
+      padding: 8mm 0;
     }
     h1 {
-      font-size: 23pt;
+      font-size: 22pt;
       font-weight: 400;
       letter-spacing: 0.22em;
       line-height: 1.28;
-      margin: 0 0 4mm;
+      margin: 0 0 3.5mm;
       text-transform: uppercase;
     }
     .rule {
       border: 0;
       border-top: 1.2pt solid #1d1a15;
       height: 0;
-      margin: 0 0 11mm;
+      margin: 0 0 8mm;
       width: 30mm;
+    }
+    .work-image-wrap {
+      align-items: center;
+      display: flex;
+      justify-content: flex-start;
+      margin: 0 0 7mm;
+      max-width: 138mm;
+    }
+    .work-image {
+      display: block;
+      max-height: 58mm;
+      max-width: 100%;
+      object-fit: contain;
     }
     .lede {
       font-size: 11.5pt;
@@ -289,16 +314,16 @@ function buildHtml(payload: CertificatePayload): string {
       font-style: italic;
       font-weight: 400;
       line-height: 1.32;
-      margin: 6mm 0 9mm;
+      margin: 5mm 0 7mm;
       overflow-wrap: anywhere;
     }
     .details {
       border-left: 0.5pt solid #cdc5b6;
       display: grid;
-      gap: 3.4mm 7mm;
+      gap: 3mm 7mm;
       /* Wide enough for the longest label in any language, e.g. AÑO DE PRODUCCIÓN. */
       grid-template-columns: 50mm minmax(0, 1fr);
-      margin: 0 0 10mm;
+      margin: 0 0 8mm;
       padding-left: 7mm;
     }
     .detail-label {
@@ -317,7 +342,7 @@ function buildHtml(payload: CertificatePayload): string {
     .closing {
       font-size: 11.5pt;
       line-height: 1.75;
-      margin: 0 0 4mm;
+      margin: 0 0 3.5mm;
       max-width: 138mm;
     }
     .closing strong { font-weight: 600; }
@@ -339,7 +364,7 @@ function buildHtml(payload: CertificatePayload): string {
     /* Equal writing band so both underlines sit on the same baseline. */
     .field-line {
       border-bottom: 0.7pt solid #1d1a15;
-      height: 18mm;
+      height: 16mm;
       margin: 0;
       width: 100%;
     }
@@ -362,13 +387,16 @@ function buildHtml(payload: CertificatePayload): string {
     <div class="frame">
       <div class="frame-inner">
         <div class="letterhead">
-          <div class="who display">${
-            artist ? escapeHtml(artist) : escapeHtml(t.title)
-          }</div>
+          ${
+            artist
+              ? `<div class="who display">${escapeHtml(artist)}</div>`
+              : `<div class="who display">&nbsp;</div>`
+          }
         </div>
         <div class="main">
           <h1 class="display">${escapeHtml(t.title)}</h1>
           <hr class="rule" />
+${imageBlock}
           <p class="lede">${escapeHtml(t.certify)}</p>
           <p class="work-title display">${escapeHtml(t.openQuote)}${escapeHtml(
             title

@@ -14,6 +14,7 @@ import {
   type ReactNode,
   type SetStateAction
 } from "react";
+import { flushSync } from "react-dom";
 import type { ImageEditSaveResult } from "./imageEditTypes";
 
 const ImageEditModal = lazy(async () => {
@@ -58,7 +59,9 @@ import type {
   ReminderChannel,
   ReminderIntervalUnit,
   InboxNote,
-  InboxTodo
+  InboxTodo,
+  PriceListDoc,
+  PriceListDocInput
 } from "../main/types/inventory";
 import { DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT, DEFAULT_FIXED_TYPE_PRICES } from "../main/types/inventory";
 import { buildArtworkIdBase } from "../main/artworkId";
@@ -198,6 +201,7 @@ export function App() {
   const [selectedContactId, setSelectedContactId] = useState("");
   const [exhibitionToOpen, setExhibitionToOpen] = useState<string | null>(null);
   const [pricelistPreset, setPricelistPreset] = useState<PriceListPreset | null>(null);
+  const [pricelistResetToken, setPricelistResetToken] = useState(0);
   const [history, setHistory] = useState<
     Array<{ page: Page; artworkId: string; contactId: string }>
   >([]);
@@ -323,7 +327,7 @@ export function App() {
     (contact) => contact.id === selectedContactId
   );
   const dueReminderCount = (inventory?.contactReminders ?? []).filter(
-    (reminder) => reminderDueInfo(reminder).due
+    (reminder) => reminderDueInfo(reminder).daysUntil <= 3
   ).length;
   const openTodoCount = (inventory?.inboxTodos ?? []).filter(
     (todo) => !todo.doneAt
@@ -407,7 +411,15 @@ export function App() {
           >
             <span className="nav-dot dot-exh" /> {t("nav.exhibitions")}
           </NavButton>
-          <NavButton active={page === "pricelist"} onClick={() => guarded(() => openPriceList(null))}>
+          <NavButton
+            active={page === "pricelist"}
+            onClick={() =>
+              guarded(() => {
+                setPricelistResetToken((token) => token + 1);
+                openPriceList(null);
+              })
+            }
+          >
             <span className="nav-dot dot-price" /> {t("nav.pricelist")}
           </NavButton>
           <NavButton active={page === "pricing"} onClick={() => guarded(() => goTo("pricing"))}>
@@ -591,9 +603,15 @@ export function App() {
         ) : page === "pricelist" ? (
           <PriceListPage
             inventory={inventory}
+            setInventory={setInventory}
             preset={pricelistPreset}
+            onPresetConsumed={() => setPricelistPreset(null)}
             onError={setMessage}
             onToast={setToast}
+            onDirtyChange={setDirty}
+            saveRef={saveRef}
+            guard={guarded}
+            resetToken={pricelistResetToken}
           />
         ) : page === "pricing" ? (
           <PricingSettingsPage
@@ -915,6 +933,7 @@ function LibraryPage({
   const [heightRange, setHeightRange] = useState<Range>(null);
   const [widthRange, setWidthRange] = useState<Range>(null);
   const [priceRange, setPriceRange] = useState<Range>(null);
+  const [bulkExportOpen, setBulkExportOpen] = useState(false);
 
   const yearBounds = bounds(inventory.artworks.map((a) => parseNum(a.yearMade)));
   const heightBounds = bounds(inventory.artworks.map((a) => parseNum(a.height)));
@@ -1089,6 +1108,13 @@ function LibraryPage({
               </select>
             </label>
             <span className="count-pill">{t("library.count", { count: artworks.length })}</span>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setBulkExportOpen(true)}
+            >
+              {t("library.bulkExport")}
+            </button>
             <button onClick={onAdd}>{t("library.add")}</button>
           </div>
         </div>
@@ -1118,6 +1144,12 @@ function LibraryPage({
           </div>
         </div>
       </div>
+      {bulkExportOpen ? (
+        <BulkImageExportModal
+          inventory={inventory}
+          onClose={() => setBulkExportOpen(false)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -2647,9 +2679,9 @@ function ExhibitionSelect({
  * ------------------------------------------------------------------------- */
 
 function formatBytes(bytes: number): string {
-  return bytes >= 1024 * 1024
-    ? `${(bytes / 1024 / 1024).toFixed(2)} MB`
-    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return bytes >= 1000 * 1000
+    ? `${(bytes / 1000 / 1000).toFixed(2)} MB`
+    : `${Math.max(1, Math.round(bytes / 1000))} KB`;
 }
 
 function cmFromPixels(px: number, dpi: number): number {
@@ -2723,7 +2755,7 @@ function ImageExportModal({
     (artwork.unit === "cm" || !artwork.unit) && artworkCmW > 0 && artworkCmH > 0;
 
   const [selectedId, setSelectedId] = useState(ordered[0]?.id ?? "");
-  const [intent, setIntent] = useState<ExportIntent>("print");
+  const [intent, setIntent] = useState<ExportIntent>("simple");
   const [format, setFormat] = useState<"jpg" | "png" | "pdf">("jpg");
   const [dpiPreset, setDpiPreset] = useState<"150" | "300" | "600" | "custom">(
     "300"
@@ -2814,10 +2846,11 @@ function ImageExportModal({
 
   const sizeNum = parseFloat(sizeValue.replace(",", "."));
   const limitActive = intent === "simple" || wantsLimit;
+  // Decimal KB/MB so "500 KB" means ≤ 500,000 bytes (strict, Finder-style).
   const targetKB =
     limitActive && Number.isFinite(sizeNum) && sizeNum > 0
       ? sizeUnit === "mb"
-        ? sizeNum * 1024
+        ? sizeNum * 1000
         : sizeNum
       : undefined;
 
@@ -2941,28 +2974,6 @@ function ImageExportModal({
                 <div className="export-intent-list">
                   <button
                     type="button"
-                    className={`export-intent${intent === "print" ? " active" : ""}`}
-                    onClick={() => {
-                      setIntent("print");
-                      clearFeedback();
-                    }}
-                  >
-                    <strong>{t("artwork.export.intent.print")}</strong>
-                    <span>{t("artwork.export.intent.printHint")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`export-intent${intent === "metadata" ? " active" : ""}`}
-                    onClick={() => {
-                      setIntent("metadata");
-                      clearFeedback();
-                    }}
-                  >
-                    <strong>{t("artwork.export.intent.dpi")}</strong>
-                    <span>{t("artwork.export.intent.dpiHint")}</span>
-                  </button>
-                  <button
-                    type="button"
                     className={`export-intent${intent === "simple" ? " active" : ""}`}
                     onClick={() => {
                       setIntent("simple");
@@ -2971,6 +2982,30 @@ function ImageExportModal({
                   >
                     <strong>{t("artwork.export.intent.web")}</strong>
                     <span>{t("artwork.export.intent.webHint")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`export-intent${intent === "metadata" ? " active" : ""}`}
+                    onClick={() => {
+                      setIntent("metadata");
+                      setWantsLimit(false);
+                      clearFeedback();
+                    }}
+                  >
+                    <strong>{t("artwork.export.intent.dpi")}</strong>
+                    <span>{t("artwork.export.intent.dpiHint")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`export-intent${intent === "print" ? " active" : ""}`}
+                    onClick={() => {
+                      setIntent("print");
+                      setWantsLimit(false);
+                      clearFeedback();
+                    }}
+                  >
+                    <strong>{t("artwork.export.intent.print")}</strong>
+                    <span>{t("artwork.export.intent.printHint")}</span>
                   </button>
                 </div>
               </div>
@@ -3264,6 +3299,469 @@ function ImageExportModal({
   );
 }
 
+function defaultBulkFolderName(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `fotos-${y}-${m}-${day}`;
+}
+
+function BulkImageExportModal({
+  inventory,
+  onClose
+}: {
+  inventory: InventoryData;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const [pickedIds, setPickedIds] = useState<string[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [intent, setIntent] = useState<"simple" | "metadata">("simple");
+  const [format, setFormat] = useState<"jpg" | "png" | "pdf">("jpg");
+  const [dpiPreset, setDpiPreset] = useState<"150" | "300" | "600" | "custom">(
+    "300"
+  );
+  const [customDpi, setCustomDpi] = useState("");
+  const [sizeValue, setSizeValue] = useState("500");
+  const [sizeUnit, setSizeUnit] = useState<"kb" | "mb">("kb");
+  const [wantsLimit, setWantsLimit] = useState(false);
+  const [destination, setDestination] = useState<"generated" | "chooseFolder">(
+    "generated"
+  );
+  const [newFolderName, setNewFolderName] = useState(defaultBulkFolderName);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [progress, setProgress] = useState("");
+
+  const picked = pickedIds
+    .map((id) => inventory.artworks.find((artwork) => artwork.id === id))
+    .filter((artwork): artwork is Artwork => Boolean(artwork));
+  const withMain = picked.filter((a) => mainImageFor(a, inventory)?.absolutePath);
+  const withoutMain = picked.length - withMain.length;
+
+  const dpiNum =
+    dpiPreset === "custom"
+      ? Number(customDpi.replace(",", ".")) || 0
+      : Number(dpiPreset) || 0;
+
+  const sizeNum = parseFloat(sizeValue.replace(",", "."));
+  const limitActive = intent === "simple" || wantsLimit;
+  const targetKB =
+    limitActive && Number.isFinite(sizeNum) && sizeNum > 0
+      ? sizeUnit === "mb"
+        ? sizeNum * 1000
+        : sizeNum
+      : undefined;
+
+  function clearFeedback() {
+    setError("");
+    setDone(null);
+    setProgress("");
+  }
+
+  function validate(): string | null {
+    if (pickedIds.length === 0) return t("artwork.exportBulk.error.pickWorks");
+    if (withMain.length === 0) return t("artwork.exportBulk.error.noPhotos");
+    if (intent === "metadata") {
+      if (!(dpiNum >= 36 && dpiNum <= 2400)) {
+        return t("artwork.export.error.quality");
+      }
+    }
+    if (destination === "chooseFolder" && !newFolderName.trim()) {
+      return t("artwork.exportBulk.error.folderName");
+    }
+    return null;
+  }
+
+  async function run() {
+    const problem = validate();
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setDone(null);
+    setProgress(t("artwork.exportBulk.progress", { n: withMain.length }));
+    try {
+      const exportFn = window.inventoryApi?.exportImagesBulk;
+      if (typeof exportFn !== "function") {
+        throw new Error(t("app.restart.images"));
+      }
+      const items = withMain.map((artwork) => {
+        const image = mainImageFor(artwork, inventory)!;
+        return {
+          sourcePath: image.absolutePath!,
+          suggestedName: artwork.title || artwork.id,
+          artworkId: artwork.id
+        };
+      });
+
+      const res = await exportFn({
+        items,
+        format,
+        targetKB,
+        dpiMode: intent === "metadata" ? "metadata" : "none",
+        dpi: intent === "simple" ? undefined : dpiNum,
+        destination,
+        newFolderName:
+          destination === "chooseFolder" ? newFolderName.trim() : undefined
+      });
+      if (!res) {
+        setProgress("");
+        return;
+      }
+      const parts = [
+        t("artwork.exportBulk.doneSaved", { n: res.saved.length }),
+        res.skipped.length > 0
+          ? t("artwork.exportBulk.doneSkipped", { n: res.skipped.length })
+          : null,
+        res.failed.length > 0
+          ? t("artwork.exportBulk.doneFailed", { n: res.failed.length })
+          : null
+      ].filter(Boolean);
+      if (res.failed.length > 0) {
+        setError(
+          res.failed
+            .slice(0, 3)
+            .map((item) => `${item.suggestedName}: ${item.error}`)
+            .join(" · ")
+        );
+      }
+      setDone(parts.join(" · "));
+      setProgress("");
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : t("artwork.export.error.save")
+      );
+      setProgress("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canSave = !busy && validate() === null;
+
+  return (
+    <>
+      {picking ? (
+        <ArtworkPickerModal
+          inventory={inventory}
+          initialIds={pickedIds}
+          title={t("artwork.exportBulk.pickTitle")}
+          notice={t("artwork.exportBulk.pickNotice")}
+          onConfirm={(ids) => {
+            setPickedIds(ids);
+            setPicking(false);
+            clearFeedback();
+          }}
+          onClose={() => setPicking(false)}
+        />
+      ) : (
+        <div className="modal-backdrop" onClick={onClose}>
+          <div
+            className="modal export-image-modal bulk-export-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <div>
+                <h3>{t("artwork.exportBulk.title")}</h3>
+                <p className="muted small-note export-modal-lead">
+                  {t("artwork.exportBulk.lead")}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button ghost"
+                onClick={onClose}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body export-modal-body">
+              <div className="export-step">
+                <p className="export-step-title">
+                  {t("artwork.exportBulk.stepWorks")}
+                </p>
+                <div className="bulk-export-works">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => setPicking(true)}
+                  >
+                    {pickedIds.length === 0
+                      ? t("artwork.exportBulk.chooseWorks")
+                      : t("artwork.exportBulk.changeWorks", {
+                          n: pickedIds.length
+                        })}
+                  </button>
+                  {pickedIds.length > 0 ? (
+                    <p className="muted small-note">
+                      {t("artwork.exportBulk.worksReady", {
+                        ready: withMain.length,
+                        total: pickedIds.length
+                      })}
+                      {withoutMain > 0
+                        ? ` · ${t("artwork.exportBulk.worksNoPhoto", {
+                            n: withoutMain
+                          })}`
+                        : ""}
+                    </p>
+                  ) : (
+                    <p className="muted small-note">
+                      {t("artwork.exportBulk.worksHint")}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="export-step">
+                <p className="export-step-title">{t("artwork.export.step2")}</p>
+                <div className="export-intent-list">
+                  <button
+                    type="button"
+                    className={`export-intent${intent === "simple" ? " active" : ""}`}
+                    onClick={() => {
+                      setIntent("simple");
+                      clearFeedback();
+                    }}
+                  >
+                    <strong>{t("artwork.export.intent.web")}</strong>
+                    <span>{t("artwork.export.intent.webHint")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`export-intent${
+                      intent === "metadata" ? " active" : ""
+                    }`}
+                    onClick={() => {
+                      setIntent("metadata");
+                      setWantsLimit(false);
+                      clearFeedback();
+                    }}
+                  >
+                    <strong>{t("artwork.export.intent.dpi")}</strong>
+                    <span>{t("artwork.export.intent.dpiHint")}</span>
+                  </button>
+                </div>
+                <p className="export-bulk-print-note">
+                  {t("artwork.exportBulk.printIndividually")}
+                </p>
+              </div>
+
+              {intent === "metadata" ? (
+                <div className="export-step">
+                  <p className="export-step-title">{t("artwork.export.stepDpi")}</p>
+                  <div className="export-quality-row">
+                    {EXPORT_QUALITY_PRESETS.map((preset) => (
+                      <button
+                        key={preset.value}
+                        type="button"
+                        className={`export-quality${
+                          dpiPreset === preset.value ? " active" : ""
+                        }`}
+                        onClick={() => {
+                          setDpiPreset(preset.value);
+                          clearFeedback();
+                        }}
+                      >
+                        <strong>{t(preset.labelKey)}</strong>
+                        <span>{preset.hint}</span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className={`export-quality${
+                        dpiPreset === "custom" ? " active" : ""
+                      }`}
+                      onClick={() => {
+                        setDpiPreset("custom");
+                        clearFeedback();
+                      }}
+                    >
+                      <strong>{t("artwork.export.quality.other")}</strong>
+                      <span>{t("artwork.export.quality.otherHint")}</span>
+                    </button>
+                  </div>
+                  {dpiPreset === "custom" ? (
+                    <label className="field">
+                      {t("artwork.export.customDpiLabel")}
+                      <input
+                        inputMode="numeric"
+                        placeholder={t("artwork.export.customDpiPlaceholder")}
+                        value={customDpi}
+                        onChange={(event) => {
+                          setCustomDpi(
+                            event.target.value.replace(/[^0-9]/g, "")
+                          );
+                          clearFeedback();
+                        }}
+                      />
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="export-step export-file-box">
+                <p className="export-step-title">
+                  {t("artwork.export.stepFile", {
+                    n: intent === "metadata" ? 3 : 2
+                  })}
+                </p>
+                <label className="field">
+                  {t("artwork.export.fileType")}
+                  <select
+                    value={format}
+                    onChange={(event) => {
+                      setFormat(event.target.value as "jpg" | "png" | "pdf");
+                      clearFeedback();
+                    }}
+                  >
+                    <option value="jpg">{t("artwork.export.format.jpg")}</option>
+                    <option value="png">{t("artwork.export.format.png")}</option>
+                    <option value="pdf">{t("artwork.export.format.pdf")}</option>
+                  </select>
+                </label>
+
+                {intent !== "simple" && (
+                  <label className="export-limit-toggle">
+                    <input
+                      type="checkbox"
+                      checked={wantsLimit}
+                      onChange={(event) => {
+                        setWantsLimit(event.target.checked);
+                        clearFeedback();
+                      }}
+                    />
+                    {t("artwork.export.limitToggle")}
+                  </label>
+                )}
+
+                {limitActive && (
+                  <>
+                    <label className="field">
+                      {t("artwork.export.maxSize")}
+                      <div className="export-max-size">
+                        <input
+                          inputMode="decimal"
+                          placeholder={t("artwork.export.sizePlaceholder", {
+                            n: intent === "simple" ? 500 : 8
+                          })}
+                          value={sizeValue}
+                          onChange={(event) => {
+                            setSizeValue(
+                              event.target.value.replace(/[^0-9.,]/g, "")
+                            );
+                            clearFeedback();
+                          }}
+                        />
+                        <select
+                          value={sizeUnit}
+                          onChange={(event) =>
+                            setSizeUnit(event.target.value as "kb" | "mb")
+                          }
+                        >
+                          <option value="mb">MB</option>
+                          <option value="kb">KB</option>
+                        </select>
+                      </div>
+                    </label>
+                    <p className="muted small-note">
+                      {targetKB
+                        ? t("artwork.export.compressWarning")
+                        : t("artwork.export.noSizeLimit")}
+                    </p>
+                  </>
+                )}
+              </div>
+
+              <div className="export-step">
+                <p className="export-step-title">
+                  {t("artwork.exportBulk.stepDest")}
+                </p>
+                <div className="bulk-export-dest">
+                  <button
+                    type="button"
+                    className={`bulk-dest-option${
+                      destination === "generated" ? " active" : ""
+                    }`}
+                    onClick={() => {
+                      setDestination("generated");
+                      clearFeedback();
+                    }}
+                  >
+                    <strong>{t("artwork.exportBulk.dest.generated")}</strong>
+                    <span>{t("artwork.exportBulk.dest.generatedHint")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`bulk-dest-option${
+                      destination === "chooseFolder" ? " active" : ""
+                    }`}
+                    onClick={() => {
+                      setDestination("chooseFolder");
+                      clearFeedback();
+                    }}
+                  >
+                    <strong>{t("artwork.exportBulk.dest.choose")}</strong>
+                    <span>{t("artwork.exportBulk.dest.chooseHint")}</span>
+                  </button>
+                </div>
+                {destination === "chooseFolder" ? (
+                  <label className="field">
+                    {t("artwork.exportBulk.folderName")}
+                    <input
+                      value={newFolderName}
+                      placeholder={defaultBulkFolderName()}
+                      onChange={(event) => {
+                        setNewFolderName(event.target.value);
+                        clearFeedback();
+                      }}
+                    />
+                  </label>
+                ) : null}
+              </div>
+
+              <div className="export-summary soft">
+                <p>
+                  <strong>{t("artwork.export.summary")}</strong>{" "}
+                  {t("artwork.exportBulk.summary", {
+                    n: withMain.length,
+                    format: format.toUpperCase()
+                  })}
+                  {targetKB
+                    ? ` · ${t("artwork.export.maxAbbrev")} ${
+                        sizeUnit === "mb" ? `${sizeNum} MB` : `${sizeNum} KB`
+                      }`
+                    : ""}
+                  {intent !== "simple" && dpiNum > 0 ? ` · ${dpiNum} DPI` : ""}
+                </p>
+              </div>
+
+              {progress && <p className="muted small-note">{progress}</p>}
+              {error && <div className="error-banner">{error}</div>}
+              {done && <div className="success-banner">{done}</div>}
+            </div>
+            <div className="modal-actions">
+              <button disabled={!canSave} onClick={() => void run()}>
+                {busy
+                  ? t("common.saving")
+                  : t("artwork.exportBulk.save", { n: withMain.length })}
+              </button>
+              <button className="ghost" onClick={onClose}>
+                {t("common.close")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function ArtworkDetail({
   artwork,
   inventory,
@@ -3301,14 +3799,6 @@ function ArtworkDetail({
   const [imageBusy, setImageBusy] = useState(false);
   const image = mainImageFor(artwork, inventory);
   const imageUrl = useImageDataUrl(image?.absolutePath);
-  const historyImages = inventory.images
-    .filter(
-      (item) =>
-        item.targetType === "artwork" &&
-        item.targetId === artwork.id &&
-        item.category === "history"
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const editions = inventory.editions.filter((item) => item.artworkId === artwork.id);
   const movements = sortMovementsDesc(
     inventory.movements.filter((item) => item.artworkId === artwork.id)
@@ -3329,29 +3819,12 @@ function ArtworkDetail({
     if (!image?.absolutePath) return;
     setImageBusy(true);
     try {
+      // Retouch from the current primary image; original stays in extras.
       const dataUrl = await window.inventoryApi.imageToDataUrl(image.absolutePath);
       if (dataUrl) {
         setImageEditorMode("retouch");
         setImageEditorSrc(dataUrl);
       }
-    } catch (error) {
-      onError(
-        error instanceof Error ? error.message : t("artwork.error.addPhoto")
-      );
-    } finally {
-      setImageBusy(false);
-    }
-  }
-
-  async function restoreHistoryImage(imageId: string) {
-    setImageBusy(true);
-    try {
-      const data = await window.inventoryApi.restoreArtworkImage(
-        artwork.id,
-        imageId
-      );
-      setInventory(data);
-      onToast(t("artwork.photo.restored"));
     } catch (error) {
       onError(
         error instanceof Error ? error.message : t("artwork.error.addPhoto")
@@ -3435,6 +3908,17 @@ function ArtworkDetail({
           copyLabel = undefined;
         }
       }
+      let imageDataUrl: string | undefined;
+      if (image?.absolutePath) {
+        try {
+          const dataUrl = await window.inventoryApi.imageToDataUrl(
+            image.absolutePath
+          );
+          if (dataUrl) imageDataUrl = dataUrl;
+        } catch {
+          /* certificate still works without the photo */
+        }
+      }
       const path = await requireApi("generateCertificateOfAuthenticity", t)({
         title: artwork.title,
         year: String(artwork.yearMade ?? "").trim() || undefined,
@@ -3452,7 +3936,8 @@ function ArtworkDetail({
         copyNumber: isMultiple && !editionOverride ? copyNumber : undefined,
         copyLabel,
         artistName: artistName || undefined,
-        language: certLang
+        language: certLang,
+        imageDataUrl
       });
       setCertLangOpen(false);
       if (path) onToast(t("cert.toast.done"));
@@ -3505,28 +3990,6 @@ function ArtworkDetail({
             {t("artwork.detail.saveImage")}
           </button>
         </div>
-        {historyImages.length > 0 ? (
-          <div className="photo-history">
-            <p className="muted small-note">{t("artwork.photo.historyHint")}</p>
-            <ul className="photo-history-list">
-              {historyImages.slice(0, 6).map((item) => (
-                <li key={item.id}>
-                  <span className="muted small-note">
-                    {item.createdAt.slice(0, 10)}
-                  </span>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    disabled={imageBusy}
-                    onClick={() => void restoreHistoryImage(item.id)}
-                  >
-                    {t("artwork.photo.restore")}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
       </div>
       {imageEditorSrc ? (
         <Suspense fallback={null}>
@@ -3760,13 +4223,10 @@ function ArtworkDetail({
         )}
 
         {tab === "info" && (
-          <ExtraImages
+          <ArtworkDocuments
             inventory={inventory}
             setInventory={setInventory}
-            targetType="artwork"
-            targetId={artwork.id}
-            label={t("artwork.detail.extraImages")}
-            hint={t("artwork.detail.extraImages.hint")}
+            artworkId={artwork.id}
           />
         )}
 
@@ -5141,6 +5601,32 @@ function ArtworkPickerModal({
           </label>
         </div>
         {notice && <p className="muted small-note picker-notice">{notice}</p>}
+        <div className="modal-toolbar picker-select-bar">
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() =>
+              setPicked((current) => {
+                const next = new Set(current);
+                for (const artwork of list) next.add(artwork.id);
+                return Array.from(next);
+              })
+            }
+          >
+            {t("picker.selectVisible", { n: list.length })}
+          </button>
+          <button
+            type="button"
+            className="ghost small"
+            disabled={picked.length === 0}
+            onClick={() => setPicked([])}
+          >
+            {t("picker.clearSelection")}
+          </button>
+          <span className="muted small-note">
+            {t("picker.selectedCount", { n: picked.length })}
+          </span>
+        </div>
         <div className="modal-body modal-pick-list">
           {list.length === 0 ? (
             <p className="muted">{t("library.empty")}</p>
@@ -5187,107 +5673,6 @@ function ArtworkPickerModal({
   );
 }
 
-function ExtraImageThumb({
-  image,
-  onDelete
-}: {
-  image: ArtworkImage;
-  onDelete: () => void;
-}) {
-  const t = useT();
-  const url = useImageDataUrl(image.absolutePath);
-
-  async function saveCopy() {
-    if (!image.absolutePath) return;
-    await window.inventoryApi.saveImageCopy(image.absolutePath, image.caption);
-  }
-
-  return (
-    <div className="extra-image">
-      {url ? <img src={url} alt={image.caption ?? ""} /> : <span className="muted">…</span>}
-      {image.caption ? (
-        <span className="extra-image-caption">{image.caption}</span>
-      ) : null}
-      <button type="button" className="extra-image-remove" onClick={onDelete}>
-        ✕
-      </button>
-      <button
-        type="button"
-        className="extra-image-save"
-        title={t("media.saveCopyElsewhere")}
-        onClick={saveCopy}
-      >
-        {t("media.saveCopy")}
-      </button>
-    </div>
-  );
-}
-
-function ExtraImages({
-  inventory,
-  setInventory,
-  targetType,
-  targetId,
-  label,
-  hint
-}: {
-  inventory: InventoryData;
-  setInventory: (data: InventoryData) => void;
-  targetType: "artwork" | "exhibition";
-  targetId: string;
-  label: string;
-  hint: string;
-}) {
-  const t = useT();
-  const [busy, setBusy] = useState(false);
-  const images = inventory.images.filter(
-    (image) =>
-      image.targetType === targetType &&
-      image.targetId === targetId &&
-      image.category === "extra"
-  );
-
-  async function add() {
-    setBusy(true);
-    try {
-      const result = await window.inventoryApi.importImage(targetType, targetId, "extra");
-      if (result) setInventory(result.inventory);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(imageId: string) {
-    const data = await window.inventoryApi.deleteImage(imageId);
-    setInventory(data);
-  }
-
-  return (
-    <div className="form-section extra-images-section">
-      <div className="related-head">
-        <h3>{label}</h3>
-        <button type="button" className="ghost" disabled={busy} onClick={add}>
-          {t("media.addImage")}
-        </button>
-      </div>
-      <p className="muted small-note">{hint}</p>
-      {images.length === 0 ? (
-        <p className="muted small-note">{t("media.imagesEmpty")}</p>
-      ) : (
-        <div className="extra-image-grid">
-          {images.map((image) => (
-            <ExtraImageThumb
-              key={image.id}
-              image={image}
-              onDelete={() => void remove(image.id)}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 const IMAGE_EXTENSIONS = [
   "jpg",
   "jpeg",
@@ -5305,58 +5690,408 @@ function isImageFile(name?: string): boolean {
   return IMAGE_EXTENSIONS.includes(ext);
 }
 
+function documentDisplayName(image: ArtworkImage, fallback: string): string {
+  return (
+    image.originalName ||
+    image.relativePath.split("/").pop() ||
+    fallback
+  );
+}
+
+function DocumentDescriptionModal({
+  image,
+  mode,
+  setInventory,
+  onClose,
+  onEdit
+}: {
+  image: ArtworkImage;
+  mode: "edit" | "view";
+  setInventory: (data: InventoryData) => void;
+  onClose: () => void;
+  onEdit?: () => void;
+}) {
+  const t = useT();
+  const name = documentDisplayName(image, t("common.documentOne"));
+  const [caption, setCaption] = useState(image.caption ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setCaption(image.caption ?? "");
+  }, [image.id, image.caption]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      if ((image.caption ?? "") !== caption) {
+        const data = await window.inventoryApi.setDocumentCaption(
+          image.id,
+          caption
+        );
+        setInventory(data);
+      }
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const body = String(image.caption ?? "").trim();
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal doc-desc-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <div>
+            <h3>
+              {mode === "edit"
+                ? t("media.desc.editTitle")
+                : t("media.desc.viewTitle")}
+            </h3>
+            <p className="muted small-note export-modal-lead">{name}</p>
+          </div>
+          <button type="button" className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          {mode === "edit" ? (
+            <label className="field">
+              {t("media.desc.label")}
+              <textarea
+                className="doc-desc-textarea"
+                rows={8}
+                autoFocus
+                placeholder={t("media.descPlaceholder")}
+                value={caption}
+                onChange={(event) => setCaption(event.target.value)}
+              />
+            </label>
+          ) : body ? (
+            <p className="doc-desc-full">{body}</p>
+          ) : (
+            <p className="muted small-note">{t("media.desc.empty")}</p>
+          )}
+        </div>
+        <div className="modal-actions">
+          {mode === "edit" ? (
+            <>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void save()}
+              >
+                {saving ? t("common.saving") : t("common.save")}
+              </button>
+              <button type="button" className="ghost" onClick={onClose}>
+                {t("common.cancel")}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => (onEdit ? onEdit() : undefined)}
+              >
+                {t("common.edit")}
+              </button>
+              <button type="button" className="ghost" onClick={onClose}>
+                {t("common.close")}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DocumentRow({
   image,
   setInventory,
-  onDelete
+  autoEdit = false,
+  onAutoEditHandled
 }: {
   image: ArtworkImage;
   setInventory: (data: InventoryData) => void;
-  onDelete: () => void;
+  autoEdit?: boolean;
+  onAutoEditHandled?: () => void;
 }) {
   const t = useT();
-  const name =
-    image.originalName ||
-    image.relativePath.split("/").pop() ||
-    t("common.documentOne");
+  const name = documentDisplayName(image, t("common.documentOne"));
   const isImage = isImageFile(name);
   const url = useImageDataUrl(isImage ? image.absolutePath : undefined);
-  const [caption, setCaption] = useState(image.caption ?? "");
+  const caption = String(image.caption ?? "").trim();
+  const [modal, setModal] = useState<null | "edit" | "view">(null);
 
-  async function saveCaption() {
-    if ((image.caption ?? "") === caption) return;
-    const data = await window.inventoryApi.setDocumentCaption(image.id, caption);
-    setInventory(data);
-  }
+  useEffect(() => {
+    if (!autoEdit) return;
+    setModal("edit");
+    onAutoEditHandled?.();
+    // Only react when autoEdit flips on for this row.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoEdit, image.id]);
 
   async function open() {
     if (image.absolutePath) await window.inventoryApi.openDocument(image.absolutePath);
   }
 
+  const preview =
+    caption.length > 72 ? `${caption.slice(0, 72).trimEnd()}…` : caption;
+
   return (
-    <div className="doc-row">
-      <button type="button" className="doc-preview" onClick={open} title={t("common.open")}>
-        {isImage && url ? (
-          <img src={url} alt={name} />
-        ) : (
-          <span className="doc-icon">{name.split(".").pop()?.toUpperCase() || "DOC"}</span>
-        )}
-      </button>
-      <div className="doc-body">
-        <button type="button" className="doc-name" onClick={open} title={t("media.openDocument")}>
+    <>
+      <div className="doc-row">
+        <button
+          type="button"
+          className="doc-preview"
+          onClick={open}
+          title={t("common.open")}
+        >
+          {isImage && url ? (
+            <img src={url} alt={name} />
+          ) : (
+            <span className="doc-icon">
+              {name.split(".").pop()?.toUpperCase() || "DOC"}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          className="doc-name"
+          onClick={open}
+          title={t("media.openDocument")}
+        >
           {name}
         </button>
-        <input
-          className="doc-caption"
-          placeholder={t("media.descPlaceholder")}
-          value={caption}
-          onChange={(event) => setCaption(event.target.value)}
-          onBlur={saveCaption}
-        />
+        <button
+          type="button"
+          className={`doc-desc-preview${caption ? "" : " is-empty"}`}
+          onClick={() => setModal(caption ? "view" : "edit")}
+          title={caption || t("media.descPlaceholder")}
+        >
+          {preview || t("media.descPlaceholder")}
+        </button>
+        <button
+          type="button"
+          className="ghost small doc-desc-edit"
+          onClick={() => setModal("edit")}
+        >
+          {t("common.edit")}
+        </button>
       </div>
-      <button type="button" className="ghost danger small" onClick={onDelete}>
-        {t("common.remove")}
+      {modal ? (
+        <DocumentDescriptionModal
+          image={image}
+          mode={modal}
+          setInventory={setInventory}
+          onClose={() => setModal(null)}
+          onEdit={() => setModal("edit")}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function DocumentPickModal({
+  documents,
+  title,
+  emptyLabel,
+  onPick,
+  onClose
+}: {
+  documents: ArtworkImage[];
+  title: string;
+  emptyLabel: string;
+  onPick: (image: ArtworkImage) => void;
+  onClose: () => void;
+}) {
+  const t = useT();
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal confirm-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h3>{title}</h3>
+          <button type="button" className="icon-button ghost" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          {documents.length === 0 ? (
+            <p className="muted small-note">{emptyLabel}</p>
+          ) : (
+            <div className="doc-pick-list">
+              {documents.map((image) => {
+                const name = documentDisplayName(image, t("common.documentOne"));
+                const caption = String(image.caption ?? "").trim();
+                return (
+                  <button
+                    key={image.id}
+                    type="button"
+                    className="doc-pick-row"
+                    onClick={() => onPick(image)}
+                  >
+                    <strong>{name}</strong>
+                    {caption ? (
+                      <span className="muted small-note">{caption}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArtworkDocuments({
+  inventory,
+  setInventory,
+  artworkId
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  artworkId: string;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [pickMode, setPickMode] = useState<null | "save" | "remove">(null);
+  const [describeId, setDescribeId] = useState<string | null>(null);
+  const documents = inventory.images.filter(
+    (image) =>
+      image.targetType === "artwork" &&
+      image.targetId === artworkId &&
+      (image.category === "document" || image.category === "extra")
+  );
+  const imageDocs = documents.filter((image) =>
+    isImageFile(documentDisplayName(image, ""))
+  );
+
+  async function add() {
+    setBusy(true);
+    try {
+      const result = await window.inventoryApi.importDocument("artwork", artworkId);
+      if (result) {
+        setInventory(result.inventory);
+        setOpen(true);
+        const imported = result.image as ArtworkImage | undefined;
+        if (imported?.id) setDescribeId(imported.id);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveCopyOf(image: ArtworkImage) {
+    setPickMode(null);
+    if (!image.absolutePath) return;
+    await window.inventoryApi.saveImageCopy(
+      image.absolutePath,
+      image.caption || documentDisplayName(image, t("common.documentOne"))
+    );
+  }
+
+  async function removeOf(image: ArtworkImage) {
+    setPickMode(null);
+    const data = await window.inventoryApi.deleteImage(image.id);
+    setInventory(data);
+  }
+
+  return (
+    <div className={`artwork-docs${open ? " open" : ""}`}>
+      <button
+        type="button"
+        className="series-works-toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span>{t("artwork.docs", { count: documents.length })}</span>
+        <span className="series-works-chevron" aria-hidden>
+          {open ? "▾" : "▸"}
+        </span>
       </button>
+      {open ? (
+        <div className="artwork-docs-body">
+          <div className="artwork-docs-toolbar">
+            <p className="muted small-note">{t("artwork.docs.hint")}</p>
+            <div className="artwork-docs-actions">
+              <button
+                type="button"
+                className="ghost small doc-action-add"
+                disabled={busy}
+                onClick={() => void add()}
+              >
+                {busy ? "…" : t("artwork.docs.add")}
+              </button>
+              <button
+                type="button"
+                className="ghost small doc-action-save"
+                disabled={imageDocs.length === 0}
+                title={t("media.saveCopyElsewhere")}
+                onClick={() => setPickMode("save")}
+              >
+                {t("media.saveCopy")}
+              </button>
+              <button
+                type="button"
+                className="ghost small doc-action-remove"
+                disabled={documents.length === 0}
+                onClick={() => setPickMode("remove")}
+              >
+                {t("common.remove")}
+              </button>
+            </div>
+          </div>
+          {documents.length === 0 ? (
+            <p className="muted small-note">{t("artwork.docs.empty")}</p>
+          ) : (
+            <div className="doc-list">
+              {documents.map((image) => (
+                <DocumentRow
+                  key={image.id}
+                  image={image}
+                  setInventory={setInventory}
+                  autoEdit={describeId === image.id}
+                  onAutoEditHandled={() => setDescribeId(null)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {pickMode === "save" ? (
+        <DocumentPickModal
+          documents={imageDocs}
+          title={t("artwork.docs.pickSave")}
+          emptyLabel={t("artwork.docs.noImages")}
+          onPick={(image) => void saveCopyOf(image)}
+          onClose={() => setPickMode(null)}
+        />
+      ) : null}
+      {pickMode === "remove" ? (
+        <DocumentPickModal
+          documents={documents}
+          title={t("artwork.docs.pickRemove")}
+          emptyLabel={t("artwork.docs.empty")}
+          onPick={(image) => void removeOf(image)}
+          onClose={() => setPickMode(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -5372,25 +6107,44 @@ function ExhibitionDocuments({
 }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
+  const [pickMode, setPickMode] = useState<null | "save" | "remove">(null);
+  const [describeId, setDescribeId] = useState<string | null>(null);
   const documents = inventory.images.filter(
     (image) =>
       image.targetType === "exhibition" &&
       image.targetId === exhibitionId &&
       (image.category === "document" || image.category === "extra")
   );
+  const imageDocs = documents.filter((image) =>
+    isImageFile(documentDisplayName(image, ""))
+  );
 
   async function add() {
     setBusy(true);
     try {
       const result = await window.inventoryApi.importDocument("exhibition", exhibitionId);
-      if (result) setInventory(result.inventory);
+      if (result) {
+        setInventory(result.inventory);
+        const imported = result.image as ArtworkImage | undefined;
+        if (imported?.id) setDescribeId(imported.id);
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(imageId: string) {
-    const data = await window.inventoryApi.deleteImage(imageId);
+  async function saveCopyOf(image: ArtworkImage) {
+    setPickMode(null);
+    if (!image.absolutePath) return;
+    await window.inventoryApi.saveImageCopy(
+      image.absolutePath,
+      image.caption || documentDisplayName(image, t("common.documentOne"))
+    );
+  }
+
+  async function removeOf(image: ArtworkImage) {
+    setPickMode(null);
+    const data = await window.inventoryApi.deleteImage(image.id);
     setInventory(data);
   }
 
@@ -5398,11 +6152,34 @@ function ExhibitionDocuments({
     <div className="form-section extra-images-section">
       <div className="related-head">
         <h3>{t("exhibition.docs.title")}</h3>
-        <button type="button" className="ghost" disabled={busy} onClick={add}>
-          {t("exhibition.docs.add")}
-        </button>
       </div>
       <p className="muted small-note">{t("exhibition.docs.hint")}</p>
+      <div className="artwork-docs-actions">
+        <button
+          type="button"
+          className="ghost small doc-action-add"
+          disabled={busy}
+          onClick={add}
+        >
+          {t("exhibition.docs.add")}
+        </button>
+        <button
+          type="button"
+          className="ghost small doc-action-save"
+          disabled={imageDocs.length === 0}
+          onClick={() => setPickMode("save")}
+        >
+          {t("media.saveCopy")}
+        </button>
+        <button
+          type="button"
+          className="ghost small doc-action-remove"
+          disabled={documents.length === 0}
+          onClick={() => setPickMode("remove")}
+        >
+          {t("common.remove")}
+        </button>
+      </div>
       {documents.length === 0 ? (
         <p className="muted small-note">{t("media.docsEmpty")}</p>
       ) : (
@@ -5412,11 +6189,30 @@ function ExhibitionDocuments({
               key={image.id}
               image={image}
               setInventory={setInventory}
-              onDelete={() => void remove(image.id)}
+              autoEdit={describeId === image.id}
+              onAutoEditHandled={() => setDescribeId(null)}
             />
           ))}
         </div>
       )}
+      {pickMode === "save" ? (
+        <DocumentPickModal
+          documents={imageDocs}
+          title={t("artwork.docs.pickSave")}
+          emptyLabel={t("artwork.docs.noImages")}
+          onPick={(image) => void saveCopyOf(image)}
+          onClose={() => setPickMode(null)}
+        />
+      ) : null}
+      {pickMode === "remove" ? (
+        <DocumentPickModal
+          documents={documents}
+          title={t("artwork.docs.pickRemove")}
+          emptyLabel={t("media.docsEmpty")}
+          onPick={(image) => void removeOf(image)}
+          onClose={() => setPickMode(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -7607,6 +8403,32 @@ function basePriceAt(
   const factor = factorForDate(settings, sizeSumCm(artwork), dateMs);
   if (factor == null) return null;
   return sizeSumCm(artwork) * factor;
+}
+
+/** Compact formula shown next to brochure price drafts (e.g. 20×20 cm → (20+20)×23 = 920). */
+function priceCalcHint(
+  artwork: Artwork,
+  settings: AppSettings,
+  dateMs: number
+): string | null {
+  const fixed = fixedPriceForType(settings, artwork.type, dateMs);
+  if (fixed != null) {
+    return `fijo → ${Math.round(fixed)}`;
+  }
+  const h = toCm(artwork.height, artwork.unit);
+  const w = toCm(artwork.width, artwork.unit);
+  if (h == null || h <= 0 || w == null || w <= 0) return null;
+  const sum = h + w;
+  const factor = factorForDate(settings, sum, dateMs);
+  if (factor == null) return null;
+  const hStr = formatCm(h);
+  const wStr = formatCm(w);
+  const factorStr =
+    Number.isInteger(factor) || Math.abs(factor - Math.round(factor)) < 1e-9
+      ? String(Math.round(factor))
+      : String(Math.round(factor * 100) / 100);
+  const total = Math.round(sum * factor);
+  return `${wStr}×${hStr} cm → (${wStr}+${hStr})×${factorStr} = ${total}`;
 }
 
 /** Why the «pago a galerista» value could not be calculated. */
@@ -10003,6 +10825,154 @@ function seriesTextKey(seriesId: string, textId: string): string {
   return `${seriesId}::${textId}`;
 }
 
+const TEXTGEN_DRAFT_KEY = "textgen-draft-v1";
+const DEFAULT_TEXTGEN_INSTRUCTION = "";
+/** Legacy default — treat as empty so the hint placeholder can show. */
+const LEGACY_TEXTGEN_INSTRUCTION =
+  "Escribe un borrador claro y personal (unas 200 palabras) para presentar estas obras. No inventes datos.";
+
+type TextgenDraft = {
+  selectedIds: string[];
+  instruction: string;
+  freeText: string;
+  emailHistory: string;
+  emailHistoryOpen: boolean;
+  toneFormality: 1 | 2 | 3;
+  toneFirmness: 1 | 2 | 3;
+  toneWarmth: 1 | 2 | 3;
+  responseLanguage: "es" | "en" | "de";
+  referenceLinks: Array<{ id: string; url: string; note: string }>;
+  selectedExampleIds: string[];
+  selectedSeriesTextKeys: string[];
+  autoSeriesTextKeys: string[];
+  /** Series texts the user checked under «otras series» (kept without matching works). */
+  manualOtherSeriesTextKeys: string[];
+  seriesOpen: boolean;
+  showOtherSeries: boolean;
+  moreOpen: boolean;
+};
+
+function defaultTextgenDraft(): TextgenDraft {
+  return {
+    selectedIds: [],
+    instruction: DEFAULT_TEXTGEN_INSTRUCTION,
+    freeText: "",
+    emailHistory: "",
+    emailHistoryOpen: false,
+    toneFormality: 2,
+    toneFirmness: 2,
+    toneWarmth: 2,
+    responseLanguage: "es",
+    referenceLinks: [],
+    selectedExampleIds: [],
+    selectedSeriesTextKeys: [],
+    autoSeriesTextKeys: [],
+    manualOtherSeriesTextKeys: [],
+    seriesOpen: false,
+    showOtherSeries: false,
+    moreOpen: false
+  };
+}
+
+function asToneLevel(value: unknown): 1 | 2 | 3 {
+  return value === 1 || value === 3 ? value : 2;
+}
+
+function loadTextgenDraft(): TextgenDraft {
+  const defaults = defaultTextgenDraft();
+  try {
+    const raw = localStorage.getItem(TEXTGEN_DRAFT_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<TextgenDraft>;
+    const links = Array.isArray(parsed.referenceLinks)
+      ? parsed.referenceLinks
+          .map((link) => ({
+            id: String(link?.id ?? ""),
+            url: String(link?.url ?? ""),
+            note: String(link?.note ?? "")
+          }))
+          .filter((link) => link.id)
+      : [];
+    const lang = parsed.responseLanguage;
+    return {
+      ...defaults,
+      selectedIds: Array.isArray(parsed.selectedIds)
+        ? parsed.selectedIds.map(String)
+        : defaults.selectedIds,
+      instruction:
+        typeof parsed.instruction === "string"
+          ? parsed.instruction === LEGACY_TEXTGEN_INSTRUCTION
+            ? defaults.instruction
+            : parsed.instruction
+          : defaults.instruction,
+      freeText:
+        typeof parsed.freeText === "string" ? parsed.freeText : defaults.freeText,
+      emailHistory:
+        typeof parsed.emailHistory === "string"
+          ? parsed.emailHistory
+          : defaults.emailHistory,
+      emailHistoryOpen: Boolean(parsed.emailHistoryOpen),
+      toneFormality: asToneLevel(parsed.toneFormality),
+      toneFirmness: asToneLevel(parsed.toneFirmness),
+      toneWarmth: asToneLevel(parsed.toneWarmth),
+      responseLanguage:
+        lang === "en" || lang === "de" || lang === "es"
+          ? lang
+          : defaults.responseLanguage,
+      referenceLinks: links,
+      selectedExampleIds: Array.isArray(parsed.selectedExampleIds)
+        ? parsed.selectedExampleIds.map(String)
+        : defaults.selectedExampleIds,
+      selectedSeriesTextKeys: Array.isArray(parsed.selectedSeriesTextKeys)
+        ? parsed.selectedSeriesTextKeys.map(String)
+        : defaults.selectedSeriesTextKeys,
+      autoSeriesTextKeys: Array.isArray(parsed.autoSeriesTextKeys)
+        ? parsed.autoSeriesTextKeys.map(String)
+        : defaults.autoSeriesTextKeys,
+      manualOtherSeriesTextKeys: Array.isArray(parsed.manualOtherSeriesTextKeys)
+        ? parsed.manualOtherSeriesTextKeys.map(String)
+        : defaults.manualOtherSeriesTextKeys,
+      seriesOpen: Boolean(parsed.seriesOpen),
+      showOtherSeries: Boolean(parsed.showOtherSeries),
+      moreOpen: Boolean(parsed.moreOpen)
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveTextgenDraft(draft: TextgenDraft): void {
+  try {
+    localStorage.setItem(TEXTGEN_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/** Keep a clicked control fixed on screen while content expands below it. */
+function expandDownFrom(
+  anchor: HTMLElement,
+  update: () => void
+): void {
+  const before = anchor.getBoundingClientRect().top;
+  flushSync(update);
+  const delta = anchor.getBoundingClientRect().top - before;
+  if (Math.abs(delta) < 1) return;
+  let node: HTMLElement | null = anchor.parentElement;
+  while (node && node !== document.body) {
+    const { overflowY } = getComputedStyle(node);
+    if (
+      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+      node.scrollHeight > node.clientHeight + 1
+    ) {
+      node.scrollTop += delta;
+      return;
+    }
+    node = node.parentElement;
+  }
+  window.scrollBy(0, delta);
+}
+
 function expenseCategoryLabel(
   category: ExpenseCategory,
   t: Translate
@@ -11656,6 +12626,16 @@ function SeriesPage({
   const [selectedName, setSelectedName] = useState<string | null>(
     names[0] ?? null
   );
+  const [sidebarSplitPct, setSidebarSplitPct] = useState(() => {
+    try {
+      const raw = Number(localStorage.getItem("series-sidebar-split"));
+      if (Number.isFinite(raw) && raw >= 18 && raw <= 55) return raw;
+    } catch {
+      /* ignore */
+    }
+    return 28;
+  });
+  const splitDragging = useRef(false);
 
   useEffect(() => {
     setSelectedName((current) =>
@@ -11673,6 +12653,36 @@ function SeriesPage({
     (a) => (a.series ?? "").toLowerCase() === (selectedName ?? "").toLowerCase()
   );
 
+  function onSplitPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const layout = handle.parentElement;
+    if (!layout) return;
+    splitDragging.current = true;
+    handle.setPointerCapture(event.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      if (!splitDragging.current) return;
+      const rect = layout.getBoundingClientRect();
+      if (rect.width < 80) return;
+      const fromLeft = ev.clientX - rect.left;
+      const pct = Math.round((fromLeft / rect.width) * 100);
+      const next = Math.min(55, Math.max(18, pct));
+      setSidebarSplitPct(next);
+      try {
+        localStorage.setItem("series-sidebar-split", String(next));
+      } catch {
+        /* ignore */
+      }
+    };
+    const onUp = () => {
+      splitDragging.current = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   return (
     <section className="list-page series-page">
       <div className="page-head">
@@ -11683,7 +12693,12 @@ function SeriesPage({
         </div>
       </div>
 
-      <div className="series-layout">
+      <div
+        className="series-layout"
+        style={{
+          gridTemplateColumns: `minmax(160px, ${sidebarSplitPct}fr) 8px minmax(280px, ${100 - sidebarSplitPct}fr)`
+        }}
+      >
         <aside className="series-sidebar">
           <div className="series-name-list">
             {names.length === 0 ? (
@@ -11698,7 +12713,7 @@ function SeriesPage({
                   }`}
                   onClick={() => setSelectedName(name)}
                 >
-                  {name}
+                  <span>{name}</span>
                   <span className="muted">
                     {
                       inventory.artworks.filter(
@@ -11711,6 +12726,14 @@ function SeriesPage({
             )}
           </div>
         </aside>
+
+        <div
+          className="app-split-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("series.splitHandle")}
+          onPointerDown={onSplitPointerDown}
+        />
 
         <div className="series-detail">
           {!selectedName ? (
@@ -11757,16 +12780,33 @@ function SeriesDetailPanel({
   const t = useT();
   const [texts, setTexts] = useState<SeriesText[]>(info?.texts ?? []);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [worksOpen, setWorksOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [docsBusy, setDocsBusy] = useState(false);
+  const [docsPickMode, setDocsPickMode] = useState<null | "save" | "remove">(
+    null
+  );
+  const [docsDescribeId, setDocsDescribeId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const docs = inventory.images.filter(
+    (image) =>
+      image.targetType === "series" &&
+      image.targetId === info?.id &&
+      (image.category === "document" || image.category === "extra")
+  );
+  const imageDocs = docs.filter((image) =>
+    isImageFile(documentDisplayName(image, ""))
+  );
 
   useEffect(() => {
     setTexts(info?.texts ?? []);
     setOpenId(null);
+    setWorksOpen(false);
+    setDocsOpen(false);
+    setDocsPickMode(null);
+    setDocsDescribeId(null);
   }, [info?.id, name]);
-
-  const docs = inventory.images.filter(
-    (image) => image.targetType === "series" && image.targetId === info?.id
-  );
 
   async function save(nextTexts = texts) {
     setSaving(true);
@@ -11803,27 +12843,58 @@ function SeriesDetailPanel({
     if (openId === id) setOpenId(null);
   }
 
-  async function addDocument() {
-    let seriesId = info?.id;
+  async function ensureSeriesId(): Promise<string | null> {
+    if (info?.id) return info.id;
+    const data = await requireApi("saveSeriesInfo", t)({
+      name,
+      texts,
+      notes: info?.notes ?? ""
+    });
+    setInventory(data);
+    const seriesId = data.seriesInfo.find(
+      (s) => s.name.toLowerCase() === name.toLowerCase()
+    )?.id;
     if (!seriesId) {
-      const data = await requireApi("saveSeriesInfo", t)({
-        name,
-        texts,
-        notes: info?.notes ?? ""
-      });
-      setInventory(data);
-      seriesId = data.seriesInfo.find(
-        (s) => s.name.toLowerCase() === name.toLowerCase()
-      )?.id;
-      if (!seriesId) {
-        onError(t("series.error.create"));
-        return;
-      }
+      onError(t("series.error.create"));
+      return null;
     }
-    const result = await requireApi("importImage", t)("series", seriesId, "document");
-    if (!result) return;
-    setInventory(result.inventory);
-    onToast(t("series.toast.docAdded"));
+    return seriesId;
+  }
+
+  async function addDocument() {
+    setDocsBusy(true);
+    try {
+      const seriesId = await ensureSeriesId();
+      if (!seriesId) return;
+      const result = await window.inventoryApi.importDocument("series", seriesId);
+      if (!result) return;
+      setInventory(result.inventory);
+      setDocsOpen(true);
+      const imported = result.image as ArtworkImage | undefined;
+      if (imported?.id) setDocsDescribeId(imported.id);
+      onToast(t("series.toast.docAdded"));
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : t("common.error.save")
+      );
+    } finally {
+      setDocsBusy(false);
+    }
+  }
+
+  async function saveCopyOf(image: ArtworkImage) {
+    setDocsPickMode(null);
+    if (!image.absolutePath) return;
+    await window.inventoryApi.saveImageCopy(
+      image.absolutePath,
+      image.caption || documentDisplayName(image, t("common.documentOne"))
+    );
+  }
+
+  async function removeOf(image: ArtworkImage) {
+    setDocsPickMode(null);
+    const data = await window.inventoryApi.deleteImage(image.id);
+    setInventory(data);
   }
 
   return (
@@ -11908,54 +12979,123 @@ function SeriesDetailPanel({
         </div>
       )}
 
-      <div className="series-docs">
-        <div className="related-head">
-          <h4>{t("series.docs.title")}</h4>
-          <button type="button" className="ghost" onClick={addDocument}>
-            {t("series.docs.add")}
-          </button>
-        </div>
-        {docs.length === 0 ? (
-          <p className="muted small-note">{t("series.docs.empty")}</p>
-        ) : (
-          <ul className="doc-list">
-            {docs.map((doc) => (
-              <li key={doc.id}>
+      <div className={`artwork-docs${docsOpen ? " open" : ""}`}>
+        <button
+          type="button"
+          className="series-works-toggle"
+          onClick={() => setDocsOpen((value) => !value)}
+          aria-expanded={docsOpen}
+        >
+          <span>{t("artwork.docs", { count: docs.length })}</span>
+          <span className="series-works-chevron" aria-hidden>
+            {docsOpen ? "▾" : "▸"}
+          </span>
+        </button>
+        {docsOpen ? (
+          <div className="artwork-docs-body">
+            <div className="artwork-docs-toolbar">
+              <p className="muted small-note">{t("series.docs.hint")}</p>
+              <div className="artwork-docs-actions">
                 <button
                   type="button"
-                  className="link-button"
-                  onClick={() =>
-                    doc.absolutePath &&
-                    void window.inventoryApi.openDocument(doc.absolutePath)
-                  }
+                  className="ghost small doc-action-add"
+                  disabled={docsBusy}
+                  onClick={() => void addDocument()}
                 >
-                  {doc.originalName || doc.caption || t("common.documentOne")}
+                  {docsBusy ? "…" : t("artwork.docs.add")}
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
+                <button
+                  type="button"
+                  className="ghost small doc-action-save"
+                  disabled={imageDocs.length === 0}
+                  title={t("media.saveCopyElsewhere")}
+                  onClick={() => setDocsPickMode("save")}
+                >
+                  {t("media.saveCopy")}
+                </button>
+                <button
+                  type="button"
+                  className="ghost small doc-action-remove"
+                  disabled={docs.length === 0}
+                  onClick={() => setDocsPickMode("remove")}
+                >
+                  {t("common.remove")}
+                </button>
+              </div>
+            </div>
+            {docs.length === 0 ? (
+              <p className="muted small-note">{t("series.docs.empty")}</p>
+            ) : (
+              <div className="doc-list">
+                {docs.map((image) => (
+                  <DocumentRow
+                    key={image.id}
+                    image={image}
+                    setInventory={setInventory}
+                    autoEdit={docsDescribeId === image.id}
+                    onAutoEditHandled={() => setDocsDescribeId(null)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+        {docsPickMode === "save" ? (
+          <DocumentPickModal
+            documents={imageDocs}
+            title={t("artwork.docs.pickSave")}
+            emptyLabel={t("artwork.docs.noImages")}
+            onPick={(image) => void saveCopyOf(image)}
+            onClose={() => setDocsPickMode(null)}
+          />
+        ) : null}
+        {docsPickMode === "remove" ? (
+          <DocumentPickModal
+            documents={docs}
+            title={t("artwork.docs.pickRemove")}
+            emptyLabel={t("series.docs.empty")}
+            onPick={(image) => void removeOf(image)}
+            onClose={() => setDocsPickMode(null)}
+          />
+        ) : null}
       </div>
 
-      <div className="series-works">
-        <h4>{t("series.works", { count: works.length })}</h4>
-        {works.length === 0 ? (
-          <p className="muted small-note">{t("series.works.empty")}</p>
-        ) : (
-          <div className="expense-list">
-            {works.map((art) => (
-              <button
-                key={art.id}
-                type="button"
-                className="series-work-row"
-                onClick={() => onOpenArtwork(art.id)}
-              >
-                <strong>{art.title}</strong>
-                <span className="muted">{art.yearMade || ""}</span>
-              </button>
-            ))}
-          </div>
-        )}
+      <div className={`series-works${worksOpen ? " open" : ""}`}>
+        <button
+          type="button"
+          className="series-works-toggle"
+          onClick={() => setWorksOpen((open) => !open)}
+          aria-expanded={worksOpen}
+        >
+          <span>
+            {t("series.works", { count: works.length })}
+          </span>
+          <span className="series-works-chevron" aria-hidden>
+            {worksOpen ? "▾" : "▸"}
+          </span>
+        </button>
+        {worksOpen ? (
+          works.length === 0 ? (
+            <p className="muted small-note">{t("series.works.empty")}</p>
+          ) : (
+            <ul className="series-work-list">
+              {works.map((art) => (
+                <li key={art.id}>
+                  <button
+                    type="button"
+                    className="series-work-row"
+                    onClick={() => onOpenArtwork(art.id)}
+                  >
+                    <span className="series-work-title">{art.title}</span>
+                    {art.yearMade ? (
+                      <span className="series-work-year">{art.yearMade}</span>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )
+        ) : null}
       </div>
     </div>
   );
@@ -11994,6 +13134,10 @@ function ExampleLibraryPage({
   const [moveTarget, setMoveTarget] = useState("");
   const [moveNewName, setMoveNewName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleteBulk, setDeleteBulk] = useState<{
+    ids: string[];
+    section: string;
+  } | null>(null);
 
   useEffect(() => {
     setExamples(stored);
@@ -12076,6 +13220,16 @@ function ExampleLibraryPage({
     setExamples((current) => current.filter((example) => example.id !== id));
     setSelectedIds((current) => current.filter((item) => item !== id));
     if (editingId === id) setEditingId(null);
+  }
+
+  function removeMany(ids: string[]) {
+    const removeSet = new Set(ids);
+    setExamples((current) =>
+      current.filter((example) => !removeSet.has(example.id))
+    );
+    setSelectedIds((current) => current.filter((item) => !removeSet.has(item)));
+    if (editingId && removeSet.has(editingId)) setEditingId(null);
+    if (viewingId && removeSet.has(viewingId)) setViewingId(null);
   }
 
   function toggleSelect(id: string) {
@@ -12465,24 +13619,29 @@ function ExampleLibraryPage({
                       >
                         {t("examples.add")}
                       </button>
-                      <button
-                        type="button"
-                        className="ghost small"
-                        disabled={items.length === 0}
-                        onClick={() =>
-                          setSelectedIds(items.map((item) => item.id))
-                        }
-                      >
-                        {t("examples.selectAllIn")}
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost small"
-                        disabled={items.length === 0}
-                        onClick={() => openMove(items.map((item) => item.id))}
-                      >
-                        {t("examples.moveAll")}
-                      </button>
+                      <div className="examples-category-actions-end">
+                        <button
+                          type="button"
+                          className="ghost small"
+                          disabled={items.length === 0}
+                          onClick={() => openMove(items.map((item) => item.id))}
+                        >
+                          {t("examples.moveAll")}
+                        </button>
+                        <button
+                          type="button"
+                          className="danger-solid small"
+                          disabled={items.length === 0}
+                          onClick={() =>
+                            setDeleteBulk({
+                              ids: items.map((item) => item.id),
+                              section: label
+                            })
+                          }
+                        >
+                          {t("examples.deleteAll")}
+                        </button>
+                      </div>
                     </div>
                     <div className="examples-list">
                       {items.map((example) => renderCard(example))}
@@ -12548,6 +13707,22 @@ function ExampleLibraryPage({
       ) : null}
 
       {renderMoveModal()}
+
+      {deleteBulk ? (
+        <ConfirmDialog
+          title={t("confirm.examplesBulk.title")}
+          message={t("confirm.examplesBulk.message", {
+            n: deleteBulk.ids.length,
+            section: deleteBulk.section
+          })}
+          confirmLabel={t("common.deleteForever")}
+          onConfirm={() => {
+            removeMany(deleteBulk.ids);
+            setDeleteBulk(null);
+          }}
+          onCancel={() => setDeleteBulk(null)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -12599,18 +13774,17 @@ function reminderDueInfo(
   reminder: ContactReminder,
   now = Date.now()
 ): { due: boolean; overdue: boolean; daysUntil: number } {
-  // Never completed → stays in the “to contact” panel until the user
-  // actively presses «Ya lo hice». The clock starts only after that.
-  if (!String(reminder.lastDoneAt ?? "").trim()) {
-    return { due: true, overdue: true, daysUntil: 0 };
-  }
   const { value, unit } = reminderInterval(reminder);
   const ms =
     unit === "days"
       ? value * 24 * 60 * 60 * 1000
       : value * 30.44 * 24 * 60 * 60 * 1000;
-  const last = Date.parse(reminder.lastDoneAt!);
-  const anchor = Number.isFinite(last) ? last : now;
+  // Countdown starts at creation; after «Ya lo hice» it restarts from lastDoneAt.
+  const anchorRaw =
+    String(reminder.lastDoneAt ?? "").trim() ||
+    String(reminder.createdAt ?? "").trim();
+  const parsed = Date.parse(anchorRaw);
+  const anchor = Number.isFinite(parsed) ? parsed : now;
   const next = anchor + ms;
   const daysUntil = Math.ceil((next - now) / (24 * 60 * 60 * 1000));
   return {
@@ -12618,6 +13792,22 @@ function reminderDueInfo(
     overdue: daysUntil < 0,
     daysUntil
   };
+}
+
+/** Days until a DD-MM-YYYY due date (negative = overdue). NaN if unset/invalid. */
+function todoDueDaysUntil(dueDate: string | undefined, now = Date.now()): number {
+  const ms = dateToMs(dueDate);
+  if (!Number.isFinite(ms)) return NaN;
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const due = new Date(ms);
+  due.setHours(0, 0, 0, 0);
+  return Math.round((due.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function todoDueWithinWeek(dueDate: string | undefined, now = Date.now()): boolean {
+  const days = todoDueDaysUntil(dueDate, now);
+  return Number.isFinite(days) && days <= 7;
 }
 
 function reminderIntervalLabel(
@@ -12735,9 +13925,6 @@ function InboxPage({
   useEffect(() => {
     setNotes(storedNotes);
   }, [storedNotes]);
-  useEffect(() => {
-    setTodos(storedTodos);
-  }, [storedTodos]);
 
   const payload = JSON.stringify({ reminders, notes, todos });
   const storedPayload = JSON.stringify({
@@ -12746,6 +13933,12 @@ function InboxPage({
     todos: storedTodos
   });
   const dirty = payload !== storedPayload && payload !== lastSavedRef.current;
+
+  useEffect(() => {
+    // Don't clobber in-progress edits while dirty (date picker / typing).
+    if (dirty) return;
+    setTodos(storedTodos);
+  }, [storedTodos, dirty]);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -12758,11 +13951,12 @@ function InboxPage({
   async function persist(): Promise<boolean> {
     const snapshot = JSON.stringify({ reminders, notes, todos });
     const localReminders = reminders;
+    const localTodos = todos;
     setSaving(true);
     try {
       await requireApi("saveContactReminders", t)(localReminders);
       await requireApi("saveInboxNotes", t)(notes);
-      const data = await requireApi("saveInboxTodos", t)(todos);
+      const data = await requireApi("saveInboxTodos", t)(localTodos);
       // Guard against an outdated main process dropping intervalUnit
       // (that bug turned “cada 1 día” into “cada 1 mes” ≈ 31 days).
       const savedReminders = (data.contactReminders ?? []).map((saved) => {
@@ -12776,13 +13970,27 @@ function InboxPage({
           note: local.note ?? saved.note
         });
       });
+      // Keep dueDate even if an older main process drops the field.
+      const savedTodos = (data.inboxTodos ?? localTodos).map((saved, index) => {
+        const local =
+          localTodos.find((item) => item.id === saved.id) ?? localTodos[index];
+        return {
+          ...saved,
+          dueDate: local?.dueDate ?? saved.dueDate ?? ""
+        };
+      });
       lastSavedRef.current = JSON.stringify({
         reminders: savedReminders,
         notes,
-        todos
+        todos: savedTodos
       });
       setReminders(savedReminders);
-      setInventory({ ...data, contactReminders: savedReminders });
+      setTodos(savedTodos);
+      setInventory({
+        ...data,
+        contactReminders: savedReminders,
+        inboxTodos: savedTodos
+      });
       onDirtyChange?.(false);
       return true;
     } catch (error) {
@@ -12854,11 +14062,28 @@ function InboxPage({
         id: `TODO-${Date.now()}`,
         body,
         doneAt: "",
+        dueDate: "",
         createdAt: new Date().toISOString()
       },
       ...current
     ]);
     setDraftTodo("");
+  }
+
+  function setTodoDueDate(id: string, dueDate: string) {
+    setTodos((current) =>
+      current.map((todo) =>
+        todo.id === id ? { ...todo, dueDate: dueDate || "" } : todo
+      )
+    );
+  }
+
+  function todoDueLabel(dueDate: string | undefined): string {
+    const days = todoDueDaysUntil(dueDate);
+    if (!Number.isFinite(days)) return "";
+    if (days < 0) return t("inbox.todo.dueOverdue", { n: Math.abs(days) });
+    if (days === 0) return t("inbox.todo.dueToday");
+    return t("inbox.todo.dueInDays", { n: days });
   }
 
   function completeTodo(id: string) {
@@ -12934,7 +14159,6 @@ function InboxPage({
       intervalValue: value,
       intervalUnit: unit,
       note: reminderDraft.note.trim(),
-      // New reminders start due until the user presses «Ya lo hice».
       lastDoneAt: existing?.lastDoneAt ?? "",
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
@@ -12949,10 +14173,13 @@ function InboxPage({
     });
     setReminderDraft(null);
     setCollapsed((current) => ({ ...current, reminders: false }));
+    const days = reminderDueInfo(next).daysUntil;
     onToast(
       reminderDraft.id
         ? t("inbox.reminder.started")
-        : t("inbox.reminder.startedDue")
+        : days > 0
+          ? t("inbox.reminder.startedIn", { n: days })
+          : t("inbox.reminder.startedDue")
     );
   }
 
@@ -13009,9 +14236,23 @@ function InboxPage({
   const sortedReminders = [...reminders].sort(
     (a, b) => reminderDueInfo(a).daysUntil - reminderDueInfo(b).daysUntil
   );
-  const dueReminders = sortedReminders.filter((reminder) =>
-    reminderDueInfo(reminder).due
+  // Show in «Toca contactar» from 3 days out; stay there until «Ya lo hice».
+  const dueReminders = sortedReminders.filter(
+    (reminder) => reminderDueInfo(reminder).daysUntil <= 3
   );
+  const weekReminders = sortedReminders.filter((reminder) => {
+    const days = reminderDueInfo(reminder).daysUntil;
+    return days >= 4 && days <= 7;
+  });
+  const weekTodos = openTodos
+    .filter((todo) => todoDueWithinWeek(todo.dueDate))
+    .sort((a, b) => {
+      const aDays = todoDueDaysUntil(a.dueDate);
+      const bDays = todoDueDaysUntil(b.dueDate);
+      if (aDays !== bDays) return aDays - bDays;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+  const weekItemCount = weekReminders.length + weekTodos.length;
   const visibleNotes = [...notes]
     .filter((note) => textMatchesKeywords(note.body, noteSearch))
     .sort((a, b) => {
@@ -13035,8 +14276,20 @@ function InboxPage({
       : notes.find((note) => note.id === viewingNoteId) ?? null;
 
   function renderDueCard(reminder: ContactReminder) {
+    const due = reminderDueInfo(reminder);
+    const late = due.daysUntil < 0;
+    const status = late
+      ? due.daysUntil === -1
+        ? t("inbox.overdueOne")
+        : t("inbox.overdue", { n: Math.abs(due.daysUntil) })
+      : due.daysUntil === 0
+        ? t("inbox.due")
+        : t("inbox.dueIn", { n: due.daysUntil });
     return (
-      <li key={reminder.id} className="inbox-due-card">
+      <li
+        key={reminder.id}
+        className={`inbox-due-card${late ? " is-late" : ""}`}
+      >
         <div className="inbox-due-card-text">
           <strong>{contactName(reminder.contactId)}</strong>
           <span>
@@ -13045,12 +14298,10 @@ function InboxPage({
             {reminderIntervalLabel(reminder, t)}
             {reminder.note ? ` · ${reminder.note}` : ""}
           </span>
-          <span className="inbox-due-card-status">
-            {reminder.lastDoneAt
-              ? t("inbox.overdue", {
-                  n: Math.max(1, Math.abs(reminderDueInfo(reminder).daysUntil))
-                })
-              : t("inbox.dueWaiting")}
+          <span
+            className={`inbox-due-card-status${late ? " is-late" : ""}`}
+          >
+            {status}
           </span>
         </div>
         <button
@@ -13071,12 +14322,82 @@ function InboxPage({
     );
   }
 
+  function renderWeekReminderCard(reminder: ContactReminder) {
+    const due = reminderDueInfo(reminder);
+    return (
+      <li key={reminder.id} className="inbox-due-card inbox-week-card">
+        <div className="inbox-due-card-text">
+          <strong>{contactName(reminder.contactId)}</strong>
+          <span>
+            {methodLabel(reminder.channel)}
+            {" · "}
+            {reminderIntervalLabel(reminder, t)}
+            {reminder.note ? ` · ${reminder.note}` : ""}
+          </span>
+          <span className="inbox-week-card-status">
+            {t("inbox.dueIn", { n: due.daysUntil })}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="ghost small"
+          onClick={() => openEditReminder(reminder)}
+        >
+          {t("inbox.reminder.edit")}
+        </button>
+      </li>
+    );
+  }
+
+  function renderWeekTodoCard(todo: InboxTodo) {
+    return (
+      <li key={todo.id} className="inbox-due-card inbox-week-card">
+        <div className="inbox-due-card-text">
+          <strong>{todo.body}</strong>
+          <span className="inbox-week-card-status">
+            {todoDueLabel(todo.dueDate)}
+            {todo.dueDate ? ` · ${todo.dueDate}` : ""}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="inbox-did-it"
+          onClick={() => completeTodo(todo.id)}
+        >
+          {t("inbox.todo.done")}
+        </button>
+      </li>
+    );
+  }
+
   function renderReminderSummary(reminder: ContactReminder) {
     const due = reminderDueInfo(reminder);
+    const inContactPanel = due.daysUntil <= 3;
+    const late = due.daysUntil < 0;
+    const timing = late
+      ? due.daysUntil === -1
+        ? t("inbox.overdueOne")
+        : t("inbox.overdue", { n: Math.abs(due.daysUntil) })
+      : due.daysUntil === 0
+        ? t("inbox.due")
+        : t("inbox.dueIn", { n: due.daysUntil });
+    const meta = [
+      methodLabel(reminder.channel),
+      reminderIntervalLabel(reminder, t),
+      reminder.note?.trim() || "",
+      timing,
+      reminder.lastDoneAt
+        ? t("inbox.lastDone", { date: shortDate(reminder.lastDoneAt, lang) })
+        : t("inbox.neverDone")
+    ]
+      .filter(Boolean)
+      .join(" · ");
     return (
       <li
         key={reminder.id}
-        className={`inbox-summary-row${due.due ? " is-due" : ""}`}
+        className={`inbox-summary-row${inContactPanel ? " is-due" : ""}${
+          late ? " is-late" : ""
+        }`}
       >
         <button
           type="button"
@@ -13085,40 +14406,14 @@ function InboxPage({
           title={t("inbox.reminder.clickToEdit")}
         >
           <strong>{contactName(reminder.contactId)}</strong>
-          <span className="muted small-note">
-            {methodLabel(reminder.channel)}
-            {" · "}
-            {reminderIntervalLabel(reminder, t)}
-            {reminder.note ? ` · ${reminder.note}` : ""}
-          </span>
-          <span className="muted small-note">
-            {due.due
-              ? reminder.lastDoneAt
-                ? t("inbox.overdue", {
-                    n: Math.max(1, Math.abs(due.daysUntil))
-                  })
-                : t("inbox.dueWaiting")
-              : t("inbox.dueIn", { n: due.daysUntil })}
-            {" · "}
-            {reminder.lastDoneAt
-              ? t("inbox.lastDone", {
-                  date: shortDate(reminder.lastDoneAt, lang)
-                })
-              : t("inbox.neverDone")}
-          </span>
-          <span className="inbox-summary-edit-hint">
-            {t("inbox.reminder.clickToEdit")}
+          <span
+            className={`inbox-summary-meta${late ? " inbox-late-label" : ""}`}
+          >
+            {meta}
           </span>
         </button>
         <div className="inbox-summary-actions">
-          <button
-            type="button"
-            className="ghost small"
-            onClick={() => openEditReminder(reminder)}
-          >
-            {t("inbox.reminder.edit")}
-          </button>
-          {due.due ? (
+          {inContactPanel ? (
             <button
               type="button"
               className="small inbox-did-it"
@@ -13129,7 +14424,7 @@ function InboxPage({
           ) : null}
           <button
             type="button"
-            className="ghost danger small"
+            className="ghost small"
             onClick={() => removeReminder(reminder.id)}
           >
             {t("common.erase")}
@@ -13152,28 +14447,56 @@ function InboxPage({
         </span>
       </div>
 
-      <section
-        className={`inbox-due-panel${
-          dueReminders.length > 0 ? " has-items" : ""
-        }`}
-      >
-        <header className="inbox-due-panel-head">
-          <h3>
-            {t("inbox.duePanel.title")}
-            {dueReminders.length > 0 ? (
-              <span className="inbox-count">{dueReminders.length}</span>
-            ) : null}
-          </h3>
-          <p className="muted small-note">{t("inbox.duePanel.lead")}</p>
-        </header>
-        {dueReminders.length === 0 ? (
-          <p className="inbox-empty">{t("inbox.duePanel.empty")}</p>
-        ) : (
-          <ul className="inbox-due-list">
-            {dueReminders.map((reminder) => renderDueCard(reminder))}
-          </ul>
-        )}
-      </section>
+      <div className="inbox-alert-split">
+        <section
+          className={`inbox-due-panel inbox-week-panel${
+            weekItemCount > 0 ? " has-items" : ""
+          }`}
+        >
+          <header className="inbox-due-panel-head">
+            <h3>
+              {t("inbox.weekPanel.title")}
+              {weekItemCount > 0 ? (
+                <span className="inbox-count">{weekItemCount}</span>
+              ) : null}
+            </h3>
+            <p className="muted small-note">{t("inbox.weekPanel.lead")}</p>
+          </header>
+          {weekItemCount === 0 ? (
+            <p className="inbox-empty">{t("inbox.weekPanel.empty")}</p>
+          ) : (
+            <ul className="inbox-due-list">
+              {weekReminders.map((reminder) =>
+                renderWeekReminderCard(reminder)
+              )}
+              {weekTodos.map((todo) => renderWeekTodoCard(todo))}
+            </ul>
+          )}
+        </section>
+
+        <section
+          className={`inbox-due-panel${
+            dueReminders.length > 0 ? " has-items" : ""
+          }`}
+        >
+          <header className="inbox-due-panel-head">
+            <h3>
+              {t("inbox.duePanel.title")}
+              {dueReminders.length > 0 ? (
+                <span className="inbox-count">{dueReminders.length}</span>
+              ) : null}
+            </h3>
+            <p className="muted small-note">{t("inbox.duePanel.lead")}</p>
+          </header>
+          {dueReminders.length === 0 ? (
+            <p className="inbox-empty">{t("inbox.duePanel.empty")}</p>
+          ) : (
+            <ul className="inbox-due-list">
+              {dueReminders.map((reminder) => renderDueCard(reminder))}
+            </ul>
+          )}
+        </section>
+      </div>
 
       <div className="inbox-stack">
         {/* ── To Do ────────────────────────────────────────────── */}
@@ -13227,18 +14550,60 @@ function InboxPage({
                 <p className="todo-empty">{t("inbox.todo.empty")}</p>
               ) : (
                 <ul className="todo-list">
-                  {openTodos.map((todo) => (
-                    <li key={todo.id} className="todo-item">
-                      <button
-                        type="button"
-                        className="todo-check"
-                        aria-label={t("inbox.todo.done")}
-                        title={t("inbox.todo.done")}
-                        onClick={() => completeTodo(todo.id)}
-                      />
-                      <span className="todo-item-text">{todo.body}</span>
-                    </li>
-                  ))}
+                  {openTodos.map((todo) => {
+                    const days = todoDueDaysUntil(todo.dueDate);
+                    const hasDue = Boolean(todo.dueDate);
+                    return (
+                      <li key={todo.id} className="todo-item">
+                        <button
+                          type="button"
+                          className="todo-check"
+                          aria-label={t("inbox.todo.done")}
+                          title={t("inbox.todo.done")}
+                          onClick={() => completeTodo(todo.id)}
+                        />
+                        <span className="todo-item-text">{todo.body}</span>
+                        <div className="todo-item-due">
+                          {hasDue ? (
+                            <span
+                              className={`todo-due-chip${
+                                days < 0
+                                  ? " is-overdue"
+                                  : todoDueWithinWeek(todo.dueDate)
+                                    ? " is-soon"
+                                    : ""
+                              }`}
+                            >
+                              {todoDueLabel(todo.dueDate)}
+                            </span>
+                          ) : null}
+                          <input
+                            type="date"
+                            className="todo-due-input"
+                            aria-label={t("inbox.todo.dueDate")}
+                            value={toIsoDate(todo.dueDate || "")}
+                            onChange={(event) => {
+                              const iso = event.target.value;
+                              // Ignore empty flicker from the native picker.
+                              if (!iso) return;
+                              setTodoDueDate(todo.id, fromIsoDate(iso));
+                            }}
+                          />
+                          {hasDue ? (
+                            <button
+                              type="button"
+                              className="todo-due-clear"
+                              title={t("inbox.todo.dueDateClear")}
+                              aria-label={t("inbox.todo.dueDateClear")}
+                              onClick={() => setTodoDueDate(todo.id, "")}
+                            >
+                              ×
+                            </button>
+                          ) : null}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -13750,6 +15115,38 @@ function InboxPage({
   );
 }
 
+function TextgenToneScale({
+  label,
+  value,
+  onChange,
+  labels
+}: {
+  label: string;
+  value: 1 | 2 | 3;
+  onChange: (value: 1 | 2 | 3) => void;
+  labels: [string, string, string];
+}) {
+  return (
+    <div className="textgen-tone-row">
+      <span className="textgen-tone-label">{label}</span>
+      <div className="segmented small textgen-tone-seg" role="group" aria-label={label}>
+        {([1, 2, 3] as const).map((level) => (
+          <button
+            key={level}
+            type="button"
+            className={`seg${value === level ? " active" : ""}`}
+            onClick={() => onChange(level)}
+            title={labels[level - 1]}
+          >
+            <span className="textgen-tone-num">{level}</span>
+            <span className="textgen-tone-caption">{labels[level - 1]}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TextGeneratorPage({
   inventory,
   setInventory,
@@ -13764,7 +15161,10 @@ function TextGeneratorPage({
   onOpenExampleLibrary: () => void;
 }) {
   const { lang, t } = useLanguage();
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const initialDraft = useMemo(() => loadTextgenDraft(), []);
+  const [selectedIds, setSelectedIds] = useState<string[]>(
+    () => initialDraft.selectedIds
+  );
   const [showPicker, setShowPicker] = useState(false);
   const [systemPromptOpen, setSystemPromptOpen] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState(
@@ -13774,36 +15174,134 @@ function TextGeneratorPage({
   );
   const [systemPromptSaving, setSystemPromptSaving] = useState(false);
   const [instruction, setInstruction] = useState(
-    "Escribe un borrador claro y personal (unas 200 palabras) para presentar estas obras. No inventes datos."
+    () => initialDraft.instruction
   );
-  const [freeText, setFreeText] = useState("");
+  const [freeText, setFreeText] = useState(() => initialDraft.freeText);
+  const [emailHistory, setEmailHistory] = useState(
+    () => initialDraft.emailHistory
+  );
+  const [emailHistoryOpen, setEmailHistoryOpen] = useState(
+    () => initialDraft.emailHistoryOpen
+  );
+  const [toneFormality, setToneFormality] = useState<1 | 2 | 3>(
+    () => initialDraft.toneFormality
+  );
+  const [toneFirmness, setToneFirmness] = useState<1 | 2 | 3>(
+    () => initialDraft.toneFirmness
+  );
+  const [toneWarmth, setToneWarmth] = useState<1 | 2 | 3>(
+    () => initialDraft.toneWarmth
+  );
   const [responseLanguage, setResponseLanguage] = useState<"es" | "en" | "de">(
-    "es"
+    () => initialDraft.responseLanguage
   );
   const [referenceLinks, setReferenceLinks] = useState<
     Array<{ id: string; url: string; note: string }>
-  >([]);
+  >(() => initialDraft.referenceLinks);
   const examples = useMemo(
     () => (inventory.textGeneratorExamples ?? []).map(normalizeTextExample),
     [inventory.textGeneratorExamples]
   );
-  const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>([]);
+  const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>(
+    () => initialDraft.selectedExampleIds
+  );
   const [selectedSeriesTextKeys, setSelectedSeriesTextKeys] = useState<string[]>(
-    []
+    () => initialDraft.selectedSeriesTextKeys
   );
   const [expandedSeriesId, setExpandedSeriesId] = useState<string | null>(null);
   const [expandedTextKey, setExpandedTextKey] = useState<string | null>(null);
-  const [seriesOpen, setSeriesOpen] = useState(false);
-  const [showOtherSeries, setShowOtherSeries] = useState(false);
+  const [seriesOpen, setSeriesOpen] = useState(() => initialDraft.seriesOpen);
+  const [showOtherSeries, setShowOtherSeries] = useState(
+    () => initialDraft.showOtherSeries
+  );
   const [examplePickerOpen, setExamplePickerOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(() => initialDraft.moreOpen);
   const [copying, setCopying] = useState<null | "text" | "images" | "folder">(
     null
   );
   const [photos, setPhotos] = useState<
     Record<string, { dataUrl: string; sourcePath: string }>
   >({});
-  const autoSeriesKeysRef = useRef<Set<string>>(new Set());
+  const autoSeriesKeysRef = useRef<Set<string>>(
+    new Set(initialDraft.autoSeriesTextKeys)
+  );
+  const manualOtherSeriesKeysRef = useRef<Set<string>>(
+    new Set(initialDraft.manualOtherSeriesTextKeys)
+  );
+
+  useEffect(() => {
+    setSelectedIds((current) =>
+      current.filter((id) => inventory.artworks.some((art) => art.id === id))
+    );
+  }, [inventory.artworks]);
+
+  useEffect(() => {
+    saveTextgenDraft({
+      selectedIds,
+      instruction,
+      freeText,
+      emailHistory,
+      emailHistoryOpen,
+      toneFormality,
+      toneFirmness,
+      toneWarmth,
+      responseLanguage,
+      referenceLinks,
+      selectedExampleIds,
+      selectedSeriesTextKeys,
+      autoSeriesTextKeys: [...autoSeriesKeysRef.current],
+      manualOtherSeriesTextKeys: [...manualOtherSeriesKeysRef.current],
+      seriesOpen,
+      showOtherSeries,
+      moreOpen
+    });
+  }, [
+    selectedIds,
+    instruction,
+    freeText,
+    emailHistory,
+    emailHistoryOpen,
+    toneFormality,
+    toneFirmness,
+    toneWarmth,
+    responseLanguage,
+    referenceLinks,
+    selectedExampleIds,
+    selectedSeriesTextKeys,
+    seriesOpen,
+    showOtherSeries,
+    moreOpen
+  ]);
+
+  function resetTextgenDraft() {
+    const defaults = defaultTextgenDraft();
+    setSelectedIds(defaults.selectedIds);
+    setShowPicker(false);
+    setSystemPromptOpen(false);
+    setInstruction(defaults.instruction);
+    setFreeText(defaults.freeText);
+    setEmailHistory(defaults.emailHistory);
+    setEmailHistoryOpen(defaults.emailHistoryOpen);
+    setToneFormality(defaults.toneFormality);
+    setToneFirmness(defaults.toneFirmness);
+    setToneWarmth(defaults.toneWarmth);
+    setResponseLanguage(defaults.responseLanguage);
+    setReferenceLinks(defaults.referenceLinks);
+    setSelectedExampleIds(defaults.selectedExampleIds);
+    setSelectedSeriesTextKeys(defaults.selectedSeriesTextKeys);
+    setExpandedSeriesId(null);
+    setExpandedTextKey(null);
+    setSeriesOpen(defaults.seriesOpen);
+    setShowOtherSeries(defaults.showOtherSeries);
+    setExamplePickerOpen(false);
+    setMoreOpen(defaults.moreOpen);
+    setCopying(null);
+    setPhotos({});
+    autoSeriesKeysRef.current = new Set();
+    manualOtherSeriesKeysRef.current = new Set();
+    saveTextgenDraft(defaults);
+    onToast(t("textgen.toast.reset"));
+  }
 
   // Drop picks that no longer exist in the library.
   useEffect(() => {
@@ -13877,19 +15375,35 @@ function TextGeneratorPage({
   }, [inventory.seriesInfo, selectedSeriesNames]);
 
   // Auto-include newly linked series texts once; never re-force after the user unchecks.
+  // When works are removed, drop those auto-linked texts — do not keep them just because
+  // the series still exists under «otras series».
   useEffect(() => {
     const linkedKeys = seriesForPrompt.linked.flatMap((series) =>
       (series.texts ?? []).map((text) => seriesTextKey(series.id, text.id))
     );
-    const available = new Set(
-      [...seriesForPrompt.linked, ...seriesForPrompt.other].flatMap((series) =>
+    const linkedKeySet = new Set(linkedKeys);
+    const otherKeySet = new Set(
+      seriesForPrompt.other.flatMap((series) =>
         (series.texts ?? []).map((text) => seriesTextKey(series.id, text.id))
       )
     );
+    const available = new Set([...linkedKeySet, ...otherKeySet]);
     const fresh = linkedKeys.filter((key) => !autoSeriesKeysRef.current.has(key));
+    for (const key of [...autoSeriesKeysRef.current]) {
+      if (!linkedKeySet.has(key)) autoSeriesKeysRef.current.delete(key);
+    }
     for (const key of linkedKeys) autoSeriesKeysRef.current.add(key);
+    for (const key of [...manualOtherSeriesKeysRef.current]) {
+      if (!otherKeySet.has(key) || linkedKeySet.has(key)) {
+        manualOtherSeriesKeysRef.current.delete(key);
+      }
+    }
     setSelectedSeriesTextKeys((current) => {
-      const kept = current.filter((key) => available.has(key));
+      const kept = current.filter((key) => {
+        if (!available.has(key)) return false;
+        if (linkedKeySet.has(key)) return true;
+        return manualOtherSeriesKeysRef.current.has(key);
+      });
       if (fresh.length === 0) return kept;
       return [...new Set([...kept, ...fresh])];
     });
@@ -13902,6 +15416,34 @@ function TextGeneratorPage({
         ? "Schreibe den gesamten Entwurf auf Deutsch."
         : "Escribe el borrador íntegramente en español.";
 
+  const toneBlock = useMemo(() => {
+    const formalityLine =
+      toneFormality === 1
+        ? "1/3 informal y cercano (tú / lenguaje cotidiano)."
+        : toneFormality === 3
+          ? "3/3 formal y profesional (usted si encaja; sin coloquialismos)."
+          : "2/3 equilibrado: correcto pero natural.";
+    const firmnessLine =
+      toneFirmness === 1
+        ? "1/3 suave y conciliador; evita confrontación."
+        : toneFirmness === 3
+          ? "3/3 firme y directo; deja clara la postura sin insultar."
+          : "2/3 claro y seguro, sin agredir.";
+    const warmthLine =
+      toneWarmth === 1
+        ? "1/3 frío y sobrio; poco afecto."
+        : toneWarmth === 3
+          ? "3/3 cálido y humano; cercano sin ser empalagoso."
+          : "2/3 cordial y educado.";
+    return [
+      "TONO DE LA RESPUESTA",
+      `Formalidad: ${formalityLine}`,
+      `Firmeza: ${firmnessLine}`,
+      `Calidez: ${warmthLine}`,
+      "Ajusta el borrador a estas tres escalas a la vez."
+    ].join("\n");
+  }, [toneFormality, toneFirmness, toneWarmth]);
+
   const generatedText = useMemo(() => {
     const blocks: string[] = [
       "SYSTEM",
@@ -13910,9 +15452,19 @@ function TextGeneratorPage({
       instruction.trim() || "Redacta un primer borrador usando solo estos datos."
     ];
 
+    if (emailHistory.trim()) {
+      blocks.push(
+        "HISTORIAL DEL CORREO",
+        "La artista quiere responder a este hilo. Usa el historial solo como contexto: no inventes mensajes que no estén aquí, y redacta una respuesta que encaje en la conversación.",
+        emailHistory.trim()
+      );
+    }
+
     if (freeText.trim()) {
       blocks.push("NOTAS LIBRES DE LA ARTISTA", freeText.trim());
     }
+
+    blocks.push(toneBlock);
 
     if (selectedArtworks.length > 0) {
       blocks.push(
@@ -14004,7 +15556,9 @@ function TextGeneratorPage({
   }, [
     systemPrompt,
     instruction,
+    emailHistory,
     freeText,
+    toneBlock,
     selectedArtworks,
     selectedSeriesTextKeys,
     pickedExamples,
@@ -14020,12 +15574,16 @@ function TextGeneratorPage({
     ]);
   }
 
-  function toggleSeriesText(key: string) {
-    setSelectedSeriesTextKeys((current) =>
-      current.includes(key)
-        ? current.filter((item) => item !== key)
-        : [...current, key]
-    );
+  function toggleSeriesText(key: string, fromOther: boolean) {
+    setSelectedSeriesTextKeys((current) => {
+      if (current.includes(key)) {
+        manualOtherSeriesKeysRef.current.delete(key);
+        return current.filter((item) => item !== key);
+      }
+      if (fromOther) manualOtherSeriesKeysRef.current.add(key);
+      else manualOtherSeriesKeysRef.current.delete(key);
+      return [...current, key];
+    });
   }
 
   async function saveSystemPrompt() {
@@ -14057,6 +15615,8 @@ function TextGeneratorPage({
   async function copyText() {
     const hasSomething =
       selectedArtworks.length > 0 ||
+      instruction.trim() ||
+      emailHistory.trim() ||
       freeText.trim() ||
       selectedExampleIds.length > 0 ||
       selectedSeriesTextKeys.length > 0 ||
@@ -14155,9 +15715,12 @@ function TextGeneratorPage({
         <button
           type="button"
           className="textgen-series-toggle"
-          onClick={() =>
-            setExpandedSeriesId(expanded ? null : series.id)
-          }
+          onClick={(event) => {
+            const next = expanded ? null : series.id;
+            expandDownFrom(event.currentTarget, () =>
+              setExpandedSeriesId(next)
+            );
+          }}
         >
           <span className="textgen-series-toggle-main">
             <strong>{series.name}</strong>
@@ -14206,7 +15769,7 @@ function TextGeneratorPage({
                           <input
                             type="checkbox"
                             checked={checked}
-                            onChange={() => toggleSeriesText(key)}
+                            onChange={() => toggleSeriesText(key, !linked)}
                           />
                           <span>
                             <strong>{text.topic || t("common.noTopic")}</strong>
@@ -14256,13 +15819,25 @@ function TextGeneratorPage({
           <h2>{t("textgen.title")}</h2>
           <p className="page-lead">{t("textgen.leadSimple")}</p>
         </div>
+        <div className="row-actions">
+          <button
+            type="button"
+            className="ghost"
+            onClick={resetTextgenDraft}
+          >
+            {t("textgen.reset")}
+          </button>
+        </div>
       </div>
 
       <div className="textgen-layout">
         <div className="textgen-config">
           <div className="pl-block textgen-step-block">
             <div className="pl-block-head">
-              <span className="pl-block-title">{t("textgen.simple.works")}</span>
+              <div className="textgen-step-head-copy">
+                <span className="pl-block-title">{t("textgen.simple.works")}</span>
+                <p className="textgen-step-hint">{t("textgen.simple.worksHint")}</p>
+              </div>
               <button type="button" onClick={() => setShowPicker(true)}>
                 {t("textgen.pickWorks")}
               </button>
@@ -14316,9 +15891,10 @@ function TextGeneratorPage({
             <label className="field">
               <textarea
                 rows={7}
-                className="textgen-resizable"
+                className="textgen-resizable textgen-brief-input"
                 value={instruction}
                 onChange={(event) => setInstruction(event.target.value)}
+                placeholder={t("textgen.simple.briefPlaceholder")}
                 aria-label={t("textgen.simple.brief")}
               />
             </label>
@@ -14335,17 +15911,7 @@ function TextGeneratorPage({
             </button>
             {moreOpen ? (
               <div className="textgen-more-body">
-                <label className="field">
-                  {t("textgen.field.notes")}
-                  <textarea
-                    rows={3}
-                    className="textgen-resizable"
-                    value={freeText}
-                    placeholder={t("textgen.field.notesPlaceholder")}
-                    onChange={(event) => setFreeText(event.target.value)}
-                  />
-                </label>
-                <label className="field" style={{ marginTop: "0.75rem", maxWidth: "14rem" }}>
+                <label className="field textgen-more-lang">
                   {t("textgen.field.responseLang")}
                   <select
                     value={responseLanguage}
@@ -14359,130 +15925,317 @@ function TextGeneratorPage({
                   </select>
                 </label>
 
-                <div className="pl-block-head" style={{ marginTop: "0.85rem" }}>
-                  <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
-                    {t("textgen.section.examples")}
-                    {pickedExamples.length > 0 ? ` (${pickedExamples.length})` : ""}
+                <div className="textgen-more-section">
+                  <span className="textgen-more-section-title">
+                    {t("textgen.tone.title")}
                   </span>
-                  <button type="button" className="small" onClick={() => setExamplePickerOpen(true)}>
-                    {t("textgen.pickExamples")}
-                  </button>
+                  <p className="muted small-note">{t("textgen.tone.lead")}</p>
+                  <div className="textgen-tone-list">
+                    <TextgenToneScale
+                      label={t("textgen.tone.formality")}
+                      value={toneFormality}
+                      onChange={setToneFormality}
+                      labels={[
+                        t("textgen.tone.formality.1"),
+                        t("textgen.tone.formality.2"),
+                        t("textgen.tone.formality.3")
+                      ]}
+                    />
+                    <TextgenToneScale
+                      label={t("textgen.tone.firmness")}
+                      value={toneFirmness}
+                      onChange={setToneFirmness}
+                      labels={[
+                        t("textgen.tone.firmness.1"),
+                        t("textgen.tone.firmness.2"),
+                        t("textgen.tone.firmness.3")
+                      ]}
+                    />
+                    <TextgenToneScale
+                      label={t("textgen.tone.warmth")}
+                      value={toneWarmth}
+                      onChange={setToneWarmth}
+                      labels={[
+                        t("textgen.tone.warmth.1"),
+                        t("textgen.tone.warmth.2"),
+                        t("textgen.tone.warmth.3")
+                      ]}
+                    />
+                  </div>
                 </div>
-                {pickedExamples.length === 0 ? (
-                  <p className="muted small-note">{t("textgen.examples.nonePicked")}</p>
-                ) : (
-                  <div className="textgen-example-list">
-                    {pickedExamples.map((example) => (
-                      <div className="textgen-example" key={example.id}>
-                        <div className="textgen-example-head">
-                          <strong>{example.topic || t("common.noTopic")}</strong>
+
+                <div className="textgen-more-section">
+                  <div className="textgen-more-section-head">
+                    <span className="textgen-more-section-title">
+                      {t("textgen.email.title")}
+                    </span>
+                    {emailHistory.trim() || emailHistoryOpen ? (
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => {
+                          setEmailHistory("");
+                          setEmailHistoryOpen(false);
+                        }}
+                      >
+                        {t("textgen.email.remove")}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => setEmailHistoryOpen(true)}
+                      >
+                        {t("textgen.email.addShort")}
+                      </button>
+                    )}
+                  </div>
+                  {emailHistoryOpen || emailHistory.trim() ? (
+                    <>
+                      <p className="muted small-note">{t("textgen.email.lead")}</p>
+                      <label className="field">
+                        <textarea
+                          rows={7}
+                          className="textgen-resizable"
+                          value={emailHistory}
+                          placeholder={t("textgen.email.placeholder")}
+                          onChange={(event) => setEmailHistory(event.target.value)}
+                          aria-label={t("textgen.email.title")}
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <p className="muted small-note">{t("textgen.email.closedHint")}</p>
+                  )}
+                </div>
+
+                <div className="textgen-more-section">
+                  <span className="textgen-more-section-title">
+                    {t("textgen.field.notes")}
+                  </span>
+                  <label className="field">
+                    <textarea
+                      rows={3}
+                      className="textgen-resizable"
+                      value={freeText}
+                      placeholder={t("textgen.field.notesPlaceholder")}
+                      onChange={(event) => setFreeText(event.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="textgen-more-section textgen-more-section-examples">
+                  <div className="textgen-more-section-head">
+                    <div>
+                      <span className="textgen-more-section-title">
+                        {t("textgen.section.examples")}
+                      </span>
+                      <p className="muted small-note">
+                        {t("textgen.section.examplesHint")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="small"
+                      onClick={() => setExamplePickerOpen(true)}
+                    >
+                      {t("textgen.pickExamples")}
+                    </button>
+                  </div>
+                  {pickedExamples.length === 0 ? (
+                    <p className="muted small-note">{t("textgen.examples.nonePicked")}</p>
+                  ) : (
+                    <div className="textgen-example-list">
+                      {pickedExamples.map((example) => (
+                        <div className="textgen-example" key={example.id}>
+                          <div className="textgen-example-head">
+                            <strong>{example.topic || t("common.noTopic")}</strong>
+                            <button
+                              type="button"
+                              className="ghost danger small"
+                              onClick={() =>
+                                setSelectedExampleIds((current) =>
+                                  current.filter((id) => id !== example.id)
+                                )
+                              }
+                            >
+                              {t("common.remove")}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="textgen-more-section textgen-more-section-series">
+                  <div className="textgen-more-section-head">
+                    <div>
+                      <span className="textgen-more-section-title">
+                        {t("textgen.section.seriesTexts")}
+                      </span>
+                      <p className="muted small-note">
+                        {t("textgen.section.seriesTextsHint")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={(event) => {
+                        expandDownFrom(event.currentTarget, () =>
+                          setSeriesOpen((open) => !open)
+                        );
+                      }}
+                    >
+                      {seriesOpen ? t("common.close") : t("common.open")}
+                    </button>
+                  </div>
+                  {seriesOpen ? (
+                    seriesForPrompt.linked.length === 0 &&
+                    seriesForPrompt.other.length === 0 ? (
+                      <p className="muted small-note">{t("textgen.series.noneHint")}</p>
+                    ) : (
+                      <div className="textgen-series-list">
+                        {seriesForPrompt.linked.map((series) =>
+                          renderSeriesTextPicker(series, true)
+                        )}
+                        {seriesForPrompt.other.length > 0 ? (
+                          <>
+                            <button
+                              type="button"
+                              className="ghost small textgen-series-others-toggle"
+                              onClick={(event) => {
+                                expandDownFrom(event.currentTarget, () =>
+                                  setShowOtherSeries((value) => !value)
+                                );
+                              }}
+                            >
+                              {showOtherSeries
+                                ? t("textgen.series.hideOthers")
+                                : t("textgen.series.showOthers", {
+                                    n: seriesForPrompt.other.length
+                                  })}
+                            </button>
+                            {showOtherSeries
+                              ? seriesForPrompt.other.map((series) =>
+                                  renderSeriesTextPicker(series, false)
+                                )
+                              : null}
+                          </>
+                        ) : null}
+                      </div>
+                    )
+                  ) : (
+                    <p className="muted small-note">
+                      {selectedSeriesTextKeys.length > 0
+                        ? t("textgen.series.selectedCount", {
+                            n: selectedSeriesTextKeys.length
+                          })
+                        : t("textgen.series.openHint")}
+                    </p>
+                  )}
+                </div>
+
+                <div className="textgen-more-section">
+                  <div className="textgen-more-section-head">
+                    <span className="textgen-more-section-title">
+                      {t("textgen.links.title")}
+                    </span>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={addReferenceLink}
+                    >
+                      {t("textgen.links.add")}
+                    </button>
+                  </div>
+                  {referenceLinks.length === 0 ? (
+                    <p className="muted small-note">{t("textgen.links.empty")}</p>
+                  ) : (
+                    <div className="textgen-link-list">
+                      {referenceLinks.map((link) => (
+                        <div className="textgen-link-row" key={link.id}>
+                          <input
+                            value={link.url}
+                            placeholder="https://…"
+                            onChange={(event) =>
+                              setReferenceLinks((current) =>
+                                current.map((item) =>
+                                  item.id === link.id
+                                    ? { ...item, url: event.target.value }
+                                    : item
+                                )
+                              )
+                            }
+                          />
                           <button
                             type="button"
                             className="ghost danger small"
                             onClick={() =>
-                              setSelectedExampleIds((current) =>
-                                current.filter((id) => id !== example.id)
+                              setReferenceLinks((current) =>
+                                current.filter((item) => item.id !== link.id)
                               )
                             }
                           >
                             {t("common.remove")}
                           </button>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="pl-block-head" style={{ marginTop: "0.85rem" }}>
-                  <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
-                    {t("textgen.section.seriesTexts")}
-                    {selectedSeriesTextKeys.length > 0
-                      ? ` (${selectedSeriesTextKeys.length})`
-                      : ""}
-                  </span>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    onClick={() => setSeriesOpen((open) => !open)}
-                  >
-                    {seriesOpen ? t("common.close") : t("common.open")}
-                  </button>
-                </div>
-                {seriesOpen ? (
-                  seriesForPrompt.linked.length === 0 &&
-                  seriesForPrompt.other.length === 0 ? (
-                    <p className="muted small-note">{t("textgen.series.noneHint")}</p>
-                  ) : (
-                    <div className="textgen-series-list">
-                      {seriesForPrompt.linked.map((series) =>
-                        renderSeriesTextPicker(series, true)
-                      )}
-                      {seriesForPrompt.other.length > 0 ? (
-                        <>
-                          <button
-                            type="button"
-                            className="ghost small"
-                            onClick={() => setShowOtherSeries((value) => !value)}
-                          >
-                            {showOtherSeries
-                              ? t("textgen.series.hideOthers")
-                              : t("textgen.series.showOthers", {
-                                  n: seriesForPrompt.other.length
-                                })}
-                          </button>
-                          {showOtherSeries
-                            ? seriesForPrompt.other.map((series) =>
-                                renderSeriesTextPicker(series, false)
-                              )
-                            : null}
-                        </>
-                      ) : null}
+                      ))}
                     </div>
-                  )
-                ) : null}
-
-                <div className="pl-block-head" style={{ marginTop: "0.85rem" }}>
-                  <span className="pl-block-title" style={{ fontSize: "0.95rem" }}>
-                    {t("textgen.links.title")}
-                  </span>
-                  <button type="button" className="ghost small" onClick={addReferenceLink}>
-                    {t("textgen.links.add")}
-                  </button>
+                  )}
                 </div>
-                {referenceLinks.length === 0 ? (
-                  <p className="muted small-note">{t("textgen.links.empty")}</p>
-                ) : (
-                  <div className="textgen-link-list">
-                    {referenceLinks.map((link) => (
-                      <div className="textgen-link-row" key={link.id}>
-                        <input
-                          value={link.url}
-                          placeholder="https://…"
-                          onChange={(event) =>
-                            setReferenceLinks((current) =>
-                              current.map((item) =>
-                                item.id === link.id
-                                  ? { ...item, url: event.target.value }
-                                  : item
-                              )
-                            )
-                          }
+
+                <div className="textgen-more-section textgen-more-section-system">
+                  <div className="textgen-more-section-head">
+                    <div>
+                      <span className="textgen-more-section-title">
+                        {t("textgen.section.system")}
+                      </span>
+                      <p className="muted small-note">{t("textgen.system.hint")}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={() => setSystemPromptOpen((open) => !open)}
+                    >
+                      {systemPromptOpen ? t("common.close") : t("common.edit")}
+                    </button>
+                  </div>
+                  {systemPromptOpen ? (
+                    <>
+                      <label className="field">
+                        <textarea
+                          rows={6}
+                          className="textgen-resizable"
+                          value={systemPrompt}
+                          onChange={(event) => setSystemPrompt(event.target.value)}
+                          aria-label={t("textgen.section.system")}
                         />
+                      </label>
+                      <div className="row-actions" style={{ gap: "0.45rem" }}>
                         <button
                           type="button"
-                          className="ghost danger small"
+                          className="ghost small"
                           onClick={() =>
-                            setReferenceLinks((current) =>
-                              current.filter((item) => item.id !== link.id)
-                            )
+                            setSystemPrompt(DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT)
                           }
                         >
-                          {t("common.remove")}
+                          {t("textgen.system.restore")}
+                        </button>
+                        <button
+                          type="button"
+                          className="small"
+                          disabled={systemPromptSaving}
+                          onClick={() => void saveSystemPrompt()}
+                        >
+                          {systemPromptSaving
+                            ? t("common.saving")
+                            : t("common.save")}
                         </button>
                       </div>
-                    ))}
-                  </div>
-                )}
+                    </>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </div>
@@ -14575,16 +16328,78 @@ function ExamplePickerModal({
   const [picked, setPicked] = useState<string[]>(initialIds);
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [flatMode, setFlatMode] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const list = examples.filter((example) =>
     exampleMatchesSearch(example, search)
   );
+
+  const categoryNames = useMemo(() => {
+    const set = new Set(list.map((example) => (example.category ?? "").trim()));
+    const named = [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const hasEmpty = set.has("");
+    return hasEmpty ? ["", ...named] : named;
+  }, [list]);
 
   function toggle(id: string) {
     setPicked((current) =>
       current.includes(id)
         ? current.filter((item) => item !== id)
         : [...current, id]
+    );
+  }
+
+  function categoryLabel(cat: string) {
+    return cat || t("examples.uncategorized");
+  }
+
+  function isSectionCollapsed(key: string) {
+    if (collapsed[key] === false) return false;
+    if (collapsed[key] === true) return true;
+    // Default: collapsed, but open matching sections while searching.
+    return !search.trim();
+  }
+
+  function renderExamplePick(example: TextGeneratorExample) {
+    const open = openId === example.id;
+    const body = example.body.trim();
+    return (
+      <div
+        className={`example-pick${
+          picked.includes(example.id) ? " is-picked" : ""
+        }`}
+        key={example.id}
+      >
+        <label className="example-pick-head">
+          <input
+            type="checkbox"
+            className="picker-check"
+            checked={picked.includes(example.id)}
+            onChange={() => toggle(example.id)}
+          />
+          <span className="pick-title">
+            {example.topic || t("common.noTopic")}
+          </span>
+          <span className="muted picker-meta">
+            {t("examples.words", { n: countWords(body) })}
+          </span>
+        </label>
+        <p className="muted small-note example-pick-preview">
+          {open
+            ? body
+            : `${body.slice(0, 160)}${body.length > 160 ? "…" : ""}`}
+        </p>
+        {body.length > 160 && (
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => setOpenId(open ? null : example.id)}
+          >
+            {open ? t("common.hide") : t("examples.showAll")}
+          </button>
+        )}
+      </div>
     );
   }
 
@@ -14608,6 +16423,15 @@ function ExamplePickerModal({
             onChange={(event) => setSearch(event.target.value)}
             autoFocus
           />
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => setFlatMode((value) => !value)}
+          >
+            {flatMode
+              ? t("textgen.picker.showGrouped")
+              : t("textgen.picker.showFlat")}
+          </button>
           <button type="button" className="ghost small" onClick={onOpenLibrary}>
             {t("textgen.openLibrary")}
           </button>
@@ -14617,46 +16441,53 @@ function ExamplePickerModal({
             <p className="muted">{t("examples.pickerEmpty")}</p>
           ) : list.length === 0 ? (
             <p className="muted">{t("examples.noMatch")}</p>
+          ) : flatMode ? (
+            list.map((example) => renderExamplePick(example))
           ) : (
-            list.map((example) => {
-              const open = openId === example.id;
-              const body = example.body.trim();
-              return (
-                <div
-                  className={`example-pick${
-                    picked.includes(example.id) ? " is-picked" : ""
-                  }`}
-                  key={example.id}
-                >
-                  <label className="example-pick-head">
-                    <input
-                      type="checkbox"
-                      className="picker-check"
-                      checked={picked.includes(example.id)}
-                      onChange={() => toggle(example.id)}
-                    />
-                    <span className="pick-title">
-                      {example.topic || t("common.noTopic")}
-                    </span>
-                    <span className="muted picker-meta">
-                      {t("examples.words", { n: countWords(body) })}
-                    </span>
-                  </label>
-                  <p className="muted small-note example-pick-preview">
-                    {open ? body : `${body.slice(0, 160)}${body.length > 160 ? "…" : ""}`}
-                  </p>
-                  {body.length > 160 && (
+            <div className="examples-categories example-picker-categories">
+              {categoryNames.map((cat) => {
+                const key = cat || "__none__";
+                const items = list.filter(
+                  (example) => (example.category ?? "").trim() === cat
+                );
+                if (items.length === 0) return null;
+                const sectionCollapsed = isSectionCollapsed(key);
+                const pickedInSection = items.filter((item) =>
+                  picked.includes(item.id)
+                ).length;
+                return (
+                  <section className="examples-category" key={key}>
                     <button
                       type="button"
-                      className="ghost small"
-                      onClick={() => setOpenId(open ? null : example.id)}
+                      className="examples-category-head"
+                      onClick={() =>
+                        setCollapsed((current) => ({
+                          ...current,
+                          [key]: !sectionCollapsed
+                        }))
+                      }
                     >
-                      {open ? t("common.hide") : t("examples.showAll")}
+                      <span className="examples-category-caret" aria-hidden>
+                        {sectionCollapsed ? "▸" : "▾"}
+                      </span>
+                      <span className="examples-category-name">
+                        {categoryLabel(cat)}
+                      </span>
+                      <span className="count-pill">
+                        {pickedInSection > 0
+                          ? `${pickedInSection}/${items.length}`
+                          : items.length}
+                      </span>
                     </button>
-                  )}
-                </div>
-              );
-            })
+                    {!sectionCollapsed ? (
+                      <div className="examples-category-body">
+                        {items.map((example) => renderExamplePick(example))}
+                      </div>
+                    ) : null}
+                  </section>
+                );
+              })}
+            </div>
           )}
         </div>
         <div className="modal-actions">
@@ -14881,20 +16712,28 @@ function ApplicationsPage({
                   className="app-line-row"
                   onClick={() => setEditing(app)}
                 >
-                  <span className="expense-cat-pill">
-                    {kindLabels[app.kind]}
-                  </span>
-                  <strong>{app.title}</strong>
-                  <span>{app.organization || "—"}</span>
-                  <span>
-                    {app.deadline ||
-                      (app.createdAt
-                        ? app.createdAt.slice(0, 10).split("-").reverse().join("-")
-                        : "—")}
-                  </span>
-                  <span className="pricing-line-value">{app.artworkIds.length}</span>
-                  <span className="pricing-line-chevron" aria-hidden>
-                    ›
+                  <span className="app-line-row-grid">
+                    <span className="expense-cat-pill">
+                      {kindLabels[app.kind]}
+                    </span>
+                    <strong>{app.title}</strong>
+                    <span>{app.organization || "—"}</span>
+                    <span>
+                      {app.deadline ||
+                        (app.createdAt
+                          ? app.createdAt
+                              .slice(0, 10)
+                              .split("-")
+                              .reverse()
+                              .join("-")
+                          : "—")}
+                    </span>
+                    <span className="pricing-line-value">
+                      {app.artworkIds.length}
+                    </span>
+                    <span className="pricing-line-chevron" aria-hidden>
+                      ›
+                    </span>
                   </span>
                 </button>
               ))}
@@ -16126,49 +17965,368 @@ function ApplicationEditor({
 
 function PriceListPage({
   inventory,
+  setInventory,
   preset,
+  onPresetConsumed,
   onError,
-  onToast
+  onToast,
+  onDirtyChange,
+  saveRef,
+  guard,
+  resetToken = 0
 }: {
   inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
   preset: PriceListPreset | null;
+  onPresetConsumed?: () => void;
   onError: (message: string) => void;
   onToast: (message: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
+  guard?: (action: () => void) => void;
+  resetToken?: number;
 }) {
   const t = useT();
-  const [mode, setMode] = useState<"free" | "exhibition">(
-    preset?.exhibitionId ? "exhibition" : "free"
+  const hasLaunchPreset = Boolean(
+    preset?.exhibitionId || (preset?.artworkIds && preset.artworkIds.length > 0)
   );
-  const [exhibitionId, setExhibitionId] = useState(preset?.exhibitionId ?? "");
-  const [freeSelected, setFreeSelected] = useState<string[]>(preset?.artworkIds ?? []);
-  const [exhibitionOrder, setExhibitionOrder] = useState<string[]>([]);
-  const [header, setHeader] = useState("");
-  const [subtitle, setSubtitle] = useState("");
-  const [leftHeader, setLeftHeader] = useState("");
-  const [rightHeader, setRightHeader] = useState("");
-  const [showPrice, setShowPrice] = useState(true);
-  const [imagesPerPage, setImagesPerPage] = useState(4);
-  const [language, setLanguage] = useState<PriceLang>("es");
-  const [fontHeader, setFontHeader] = useState("Georgia");
-  const [fontSubtitle, setFontSubtitle] = useState("Georgia");
-  const [fontBody, setFontBody] = useState("Georgia");
-  const [headerBold, setHeaderBold] = useState(true);
-  const [headerItalic, setHeaderItalic] = useState(false);
-  const [headerColor, setHeaderColor] = useState("#1c1c1c");
-  const [subtitleItalic, setSubtitleItalic] = useState(true);
-  const [subtitleColor, setSubtitleColor] = useState("#555555");
-  const [priceBold, setPriceBold] = useState(true);
-  const [imageGap, setImageGap] = useState(16);
-  const [frameBorderColor, setFrameBorderColor] = useState("#e4e4e4");
+  const [launchPreset, setLaunchPreset] = useState<PriceListPreset | null>(
+    hasLaunchPreset ? preset : null
+  );
+  const [editing, setEditing] = useState<PriceListDoc | null | "new">(
+    hasLaunchPreset ? "new" : null
+  );
+  const [search, setSearch] = useState("");
+
+  const lastResetToken = useRef(resetToken);
+  useEffect(() => {
+    if (resetToken === lastResetToken.current) return;
+    lastResetToken.current = resetToken;
+    setEditing(null);
+    setLaunchPreset(null);
+    onDirtyChange?.(false);
+  }, [resetToken, onDirtyChange]);
+
+  // Opening from an exhibition (or with preselected works) jumps straight into a new draft.
+  useEffect(() => {
+    if (!preset?.exhibitionId && !(preset?.artworkIds && preset.artworkIds.length > 0)) {
+      return;
+    }
+    setLaunchPreset(preset);
+    setEditing("new");
+    onPresetConsumed?.();
+  }, [preset, onPresetConsumed]);
+
+  const allDocs = inventory.priceLists ?? [];
+  const list = useMemo(() => {
+    const filtered = allDocs.filter((doc) => {
+      const hay = [doc.title, doc.header, doc.subtitle, doc.leftHeader]
+        .join(" ")
+        .toLowerCase();
+      if (search && !hay.includes(search.toLowerCase())) return false;
+      return true;
+    });
+    return [...filtered].sort((a, b) => {
+      const aMs = Date.parse(a.updatedAt || a.createdAt || "") || 0;
+      const bMs = Date.parse(b.updatedAt || b.createdAt || "") || 0;
+      return bMs - aMs;
+    });
+  }, [allDocs, search]);
+
+  function leaveEditor() {
+    (guard ?? ((action: () => void) => action()))(() => {
+      setEditing(null);
+      setLaunchPreset(null);
+    });
+  }
+
+  function formatUpdated(iso: string | undefined): string {
+    if (!iso) return "—";
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return "—";
+    return new Date(ms).toLocaleDateString("es-ES", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric"
+    });
+  }
+
+  return (
+    <section className="list-page pricelist-page">
+      {editing !== null ? (
+        <PriceListEditor
+          inventory={inventory}
+          setInventory={setInventory}
+          document={editing === "new" ? null : editing}
+          preset={editing === "new" ? launchPreset : null}
+          onBack={leaveEditor}
+          onError={onError}
+          onToast={onToast}
+          onDirtyChange={onDirtyChange}
+          saveRef={saveRef}
+        />
+      ) : (
+        <>
+          <div className="page-head">
+            <div>
+              <p className="eyebrow">{t("pricelist.eyebrow")}</p>
+              <h2>{t("pricelist.title")}</h2>
+              <p className="page-lead">{t("pricelist.lead")}</p>
+            </div>
+            <button
+              type="button"
+              className="cuentas-primary"
+              onClick={() => {
+                setLaunchPreset(null);
+                setEditing("new");
+              }}
+            >
+              {t("pricelist.add")}
+            </button>
+          </div>
+
+          <div className="list-toolbar">
+            <input
+              className="search-input grow"
+              placeholder={t("pricelist.search")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            {search ? (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setSearch("")}
+              >
+                {t("common.clear")}
+              </button>
+            ) : null}
+            <span className="count-pill">{list.length}</span>
+          </div>
+
+          {allDocs.length === 0 ? (
+            <div className="empty-friendly">
+              <p>{t("pricelist.empty")}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setLaunchPreset(null);
+                  setEditing("new");
+                }}
+              >
+                {t("pricelist.createFirst")}
+              </button>
+            </div>
+          ) : list.length === 0 ? (
+            <p className="muted">{t("pricelist.noMatch")}</p>
+          ) : (
+            <div className="app-line-list">
+              <div className="app-line-head pl-line-head">
+                <span>{t("pricelist.col.name")}</span>
+                <span>{t("pricelist.col.mode")}</span>
+                <span>{t("pricelist.col.works")}</span>
+                <span>{t("pricelist.col.updated")}</span>
+                <span />
+              </div>
+              {list.map((doc) => {
+                const exh =
+                  doc.mode === "exhibition" && doc.exhibitionId
+                    ? inventory.exhibitions.find((e) => e.id === doc.exhibitionId)
+                    : undefined;
+                return (
+                  <button
+                    key={doc.id}
+                    type="button"
+                    className="app-line-row pl-line-row"
+                    onClick={() => setEditing(doc)}
+                  >
+                    <span className="app-line-row-grid pl-line-row-grid">
+                      <strong>
+                        {doc.title || doc.header || t("pricelist.untitled")}
+                      </strong>
+                      <span>
+                        {doc.mode === "exhibition"
+                          ? exh?.title || t("pricelist.mode.exhibition")
+                          : doc.mode === "series"
+                            ? doc.seriesName?.trim() ||
+                              t("pricelist.mode.series")
+                            : t("pricelist.mode.free")}
+                      </span>
+                      <span className="pricing-line-value">
+                        {doc.artworkIds.length}
+                      </span>
+                      <span>{formatUpdated(doc.updatedAt || doc.createdAt)}</span>
+                      <span className="pricing-line-chevron" aria-hidden>
+                        ›
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function PriceListEditor({
+  inventory,
+  setInventory,
+  document,
+  preset,
+  onBack,
+  onError,
+  onToast,
+  onDirtyChange,
+  saveRef
+}: {
+  inventory: InventoryData;
+  setInventory: (data: InventoryData) => void;
+  document: PriceListDoc | null;
+  preset: PriceListPreset | null;
+  onBack: () => void;
+  onError: (message: string) => void;
+  onToast: (message: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
+}) {
+  const t = useT();
+  const [docId, setDocId] = useState(document?.id ?? "");
+  const [mode, setMode] = useState<"free" | "exhibition" | "series">(
+    document?.mode ?? (preset?.exhibitionId ? "exhibition" : "free")
+  );
+  const [exhibitionId, setExhibitionId] = useState(
+    document?.exhibitionId ?? preset?.exhibitionId ?? ""
+  );
+  const [seriesName, setSeriesName] = useState(document?.seriesName ?? "");
+  const [freeSelected, setFreeSelected] = useState<string[]>(
+    document?.mode === "free"
+      ? document.artworkIds
+      : preset?.artworkIds ?? []
+  );
+  const [exhibitionOrder, setExhibitionOrder] = useState<string[]>(
+    document?.mode === "exhibition" ? document.artworkIds : []
+  );
+  const [seriesOrder, setSeriesOrder] = useState<string[]>(
+    document?.mode === "series" ? document.artworkIds : []
+  );
+  const [priceOverrides, setPriceOverrides] = useState<Record<string, string>>(
+    () => ({ ...(document?.priceOverrides ?? {}) })
+  );
+  const [showPricesModal, setShowPricesModal] = useState(false);
+  const [bulkPriceMode, setBulkPriceMode] = useState<"free" | "factors">(
+    "factors"
+  );
+  const [factorDateIso, setFactorDateIso] = useState(() => todayIsoLocal());
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+  const [fillAllDraft, setFillAllDraft] = useState("");
+  const [header, setHeader] = useState(document?.header ?? "");
+  const [subtitle, setSubtitle] = useState(document?.subtitle ?? "");
+  const [leftHeader, setLeftHeader] = useState(document?.leftHeader ?? "");
+  const [rightHeader, setRightHeader] = useState(document?.rightHeader ?? "");
+  const [showPrice, setShowPrice] = useState(document?.showPrice !== false);
+  const [imagesPerPage, setImagesPerPage] = useState(document?.imagesPerPage ?? 4);
+  const [language, setLanguage] = useState<PriceLang>(document?.language ?? "es");
+  const [fontHeader, setFontHeader] = useState(document?.fonts?.header ?? "Georgia");
+  const [fontSubtitle, setFontSubtitle] = useState(
+    document?.fonts?.subtitle ?? "Georgia"
+  );
+  const [fontBody, setFontBody] = useState(document?.fonts?.body ?? "Georgia");
+  const [headerBold, setHeaderBold] = useState(document?.headerStyle?.bold !== false);
+  const [headerItalic, setHeaderItalic] = useState(
+    document?.headerStyle?.italic === true
+  );
+  const [headerColor, setHeaderColor] = useState(
+    document?.headerStyle?.color ?? "#1c1c1c"
+  );
+  const [subtitleItalic, setSubtitleItalic] = useState(
+    document?.subtitleStyle?.italic !== false
+  );
+  const [subtitleColor, setSubtitleColor] = useState(
+    document?.subtitleStyle?.color ?? "#555555"
+  );
+  const [priceBold, setPriceBold] = useState(document?.priceBold !== false);
+  const [imageGap, setImageGap] = useState(document?.imageGap ?? 16);
+  const [frameBorderColor, setFrameBorderColor] = useState(
+    document?.frameBorderColor ?? "#e4e4e4"
+  );
   const [customImages, setCustomImages] = useState<Record<string, string>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
   const [showFreePicker, setShowFreePicker] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [previewSplitPct, setPreviewSplitPct] = useState(() => {
+    try {
+      const raw = Number(localStorage.getItem("pricelist-preview-split"));
+      if (Number.isFinite(raw) && raw >= 28 && raw <= 70) return raw;
+    } catch {
+      /* ignore */
+    }
+    return 48;
+  });
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const splitDragging = useRef(false);
+
+  function markDirty() {
+    onDirtyChange?.(true);
+  }
+
+  function nudgePreviewZoom(delta: number) {
+    setPreviewZoom((current) =>
+      Math.max(0.4, Math.min(2.5, Math.round((current + delta) * 10) / 10))
+    );
+  }
+
+  function onSplitPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const layout = handle.parentElement;
+    if (!layout) return;
+    splitDragging.current = true;
+    handle.setPointerCapture(event.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      if (!splitDragging.current) return;
+      const rect = layout.getBoundingClientRect();
+      if (rect.width < 80) return;
+      const fromRight = rect.right - ev.clientX;
+      const pct = Math.round((fromRight / rect.width) * 100);
+      const next = Math.min(70, Math.max(28, pct));
+      setPreviewSplitPct(next);
+      try {
+        localStorage.setItem("pricelist-preview-split", String(next));
+      } catch {
+        /* ignore */
+      }
+    };
+    const onUp = () => {
+      splitDragging.current = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   const artworkById = useMemo(
     () => new Map(inventory.artworks.map((art) => [art.id, art])),
     [inventory.artworks]
   );
+
+  const seriesOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const art of inventory.artworks) {
+      const name = String(art.series ?? "").trim();
+      if (!name || isNoSeries(name)) continue;
+      names.add(name);
+    }
+    for (const info of inventory.seriesInfo ?? []) {
+      const name = String(info.name ?? "").trim();
+      if (!name || isNoSeries(name)) continue;
+      names.add(name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [inventory.artworks, inventory.seriesInfo]);
 
   const exhibitionArtworkIds = useMemo(() => {
     if (!exhibitionId) return [];
@@ -16181,6 +18339,18 @@ function PriceListPage({
       .map((movement) => movement.artworkId);
   }, [exhibitionId, inventory.movements]);
 
+  const seriesArtworkIds = useMemo(() => {
+    const target = seriesName.trim().toLowerCase();
+    if (!target) return [];
+    return inventory.artworks
+      .filter(
+        (art) =>
+          String(art.series ?? "").trim().toLowerCase() === target &&
+          !isNoSeries(art.series)
+      )
+      .map((art) => art.id);
+  }, [seriesName, inventory.artworks]);
+
   useEffect(() => {
     if (mode !== "exhibition") return;
     setExhibitionOrder((prev) => {
@@ -16190,14 +18360,31 @@ function PriceListPage({
     });
   }, [mode, exhibitionArtworkIds.join(",")]);
 
-  const selectedIds = mode === "exhibition" ? exhibitionOrder : freeSelected;
+  useEffect(() => {
+    if (mode !== "series") return;
+    setSeriesOrder((prev) => {
+      const keep = prev.filter((id) => seriesArtworkIds.includes(id));
+      const add = seriesArtworkIds.filter((id) => !keep.includes(id));
+      return [...keep, ...add];
+    });
+  }, [mode, seriesArtworkIds.join(",")]);
+
+  const selectedIds =
+    mode === "exhibition"
+      ? exhibitionOrder
+      : mode === "series"
+        ? seriesOrder
+        : freeSelected;
 
   function setSelectedIds(next: string[]) {
     if (mode === "exhibition") setExhibitionOrder(next);
+    else if (mode === "series") setSeriesOrder(next);
     else setFreeSelected(next);
+    markDirty();
   }
 
   useEffect(() => {
+    if (document) return;
     if (mode === "exhibition" && exhibitionId) {
       const exh = inventory.exhibitions.find((item) => item.id === exhibitionId);
       if (!exh) return;
@@ -16211,8 +18398,11 @@ function PriceListPage({
         setRightHeader(from && to ? `del ${from} al ${to}` : from || to);
       }
     }
+    if (mode === "series" && seriesName.trim() && !header) {
+      setHeader(seriesName.trim());
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, exhibitionId]);
+  }, [mode, exhibitionId, seriesName]);
 
   // Load main-image data URLs for the on-screen preview.
   useEffect(() => {
@@ -16235,6 +18425,8 @@ function PriceListPage({
   }, [selectedIds.join(","), inventory.images]);
 
   function listedPriceFor(artworkId: string): string {
+    const override = String(priceOverrides[artworkId] ?? "").trim();
+    if (override) return override;
     if (mode === "exhibition") {
       const mov = inventory.movements.find(
         (movement) =>
@@ -16247,6 +18439,77 @@ function PriceListPage({
     return artworkById.get(artworkId)?.soldPrice ?? "";
   }
 
+  const pricingSettings: AppSettings = useMemo(
+    () => ({
+      sizeTypes: inventory.settings.sizeTypes ?? [],
+      taxRates: inventory.settings.taxRates ?? [],
+      fixedTypePrices: inventory.settings.fixedTypePrices ?? []
+    }),
+    [
+      inventory.settings.sizeTypes,
+      inventory.settings.taxRates,
+      inventory.settings.fixedTypePrices
+    ]
+  );
+
+  function factorPriceText(artworkId: string, dateIso: string): string {
+    const art = artworkById.get(artworkId);
+    if (!art) return "";
+    const price = basePriceAt(art, pricingSettings, isoDateToMs(dateIso));
+    return price != null ? String(Math.round(price)) : "";
+  }
+
+  function openPricesModal() {
+    const today = todayIsoLocal();
+    setFactorDateIso(today);
+    setBulkPriceMode("factors");
+    setFillAllDraft("");
+    const drafts: Record<string, string> = {};
+    for (const id of selectedIds) {
+      drafts[id] = factorPriceText(id, today);
+    }
+    setPriceDrafts(drafts);
+    setShowPricesModal(true);
+  }
+
+  function closePricesModal() {
+    setShowPricesModal(false);
+    setFillAllDraft("");
+  }
+
+  function fillDraftsFromFactors(dateIso: string) {
+    const next: Record<string, string> = {};
+    for (const id of selectedIds) {
+      next[id] = factorPriceText(id, dateIso);
+    }
+    setPriceDrafts(next);
+  }
+
+  function applyPriceOverride(artworkId: string, value: string) {
+    const cleaned = value.trim();
+    setPriceOverrides((current) => {
+      const next = { ...current };
+      if (!cleaned) delete next[artworkId];
+      else next[artworkId] = cleaned;
+      return next;
+    });
+    markDirty();
+  }
+
+  function applyBulkPrices() {
+    setPriceOverrides((current) => {
+      const next = { ...current };
+      for (const id of selectedIds) {
+        const cleaned = String(priceDrafts[id] ?? "").trim();
+        if (!cleaned) delete next[id];
+        else next[id] = cleaned;
+      }
+      return next;
+    });
+    markDirty();
+    closePricesModal();
+  }
+
   // Mirrors rowImageHeight() in the PDF generator so the preview shows the
   // exact frame size the PDF will use.
   function previewFrameSize(perPage: number): number {
@@ -16256,8 +18519,71 @@ function PriceListPage({
 
   async function pickImage(id: string) {
     const dataUrl = await window.inventoryApi.pickImageDataUrl();
-    if (dataUrl) setCustomImages((current) => ({ ...current, [id]: dataUrl }));
+    if (dataUrl) {
+      setCustomImages((current) => ({ ...current, [id]: dataUrl }));
+      markDirty();
+    }
   }
+
+  function buildInput(): PriceListDocInput {
+    return {
+      id: docId || undefined,
+      title: header.trim() || t("pricelist.untitled"),
+      mode,
+      exhibitionId: mode === "exhibition" ? exhibitionId : "",
+      seriesName: mode === "series" ? seriesName.trim() : "",
+      artworkIds: selectedIds,
+      priceOverrides,
+      header: header.trim(),
+      subtitle: subtitle.trim(),
+      leftHeader: leftHeader.trim(),
+      rightHeader: rightHeader.trim(),
+      showPrice,
+      priceBold,
+      imagesPerPage,
+      imageGap,
+      frameBorderColor,
+      language,
+      fonts: { header: fontHeader, subtitle: fontSubtitle, body: fontBody },
+      headerStyle: { bold: headerBold, italic: headerItalic, color: headerColor },
+      subtitleStyle: { italic: subtitleItalic, color: subtitleColor }
+    };
+  }
+
+  async function persist(options?: { quiet?: boolean }): Promise<boolean> {
+    if (!header.trim() && selectedIds.length === 0) {
+      onError(t("pricelist.error.needTitle"));
+      return false;
+    }
+    if (!options?.quiet) setBusy(true);
+    try {
+      const data = await requireApi("savePriceList", t)(buildInput());
+      setInventory(data);
+      const saved =
+        data.priceLists?.find((item) => item.id === docId) ||
+        [...(data.priceLists ?? [])].sort((a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt)
+        )[0] ||
+        null;
+      if (saved) setDocId(saved.id);
+      onDirtyChange?.(false);
+      if (!options?.quiet) onToast(t("pricelist.toast.saved"));
+      return true;
+    } catch (error) {
+      onError(error instanceof Error ? error.message : t("common.error.save"));
+      return false;
+    } finally {
+      if (!options?.quiet) setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!saveRef) return;
+    saveRef.current = () => persist();
+    return () => {
+      if (saveRef) saveRef.current = null;
+    };
+  });
 
   async function generate() {
     if (selectedIds.length === 0) {
@@ -16266,6 +18592,8 @@ function PriceListPage({
     }
     setBusy(true);
     try {
+      // Autosave before export so the draft isn't lost.
+      await persist({ quiet: true });
       const rows = [];
       for (const id of selectedIds) {
         const art = artworkById.get(id);
@@ -16321,30 +18649,61 @@ function PriceListPage({
     <section className="list-page pricelist-page">
       <div className="page-head">
         <div>
+          <button type="button" className="ghost small" onClick={onBack}>
+            ← {t("pricelist.back")}
+          </button>
           <p className="eyebrow">{t("pricelist.eyebrow")}</p>
-          <h2>{t("pricelist.title")}</h2>
+          <h2>{header.trim() || t("pricelist.untitled")}</h2>
         </div>
         <div className="form-head-actions">
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy}
+            onClick={() => void persist()}
+          >
+            {t("common.save")}
+          </button>
           <button disabled={busy} onClick={() => void generate()}>
             {t("pricelist.generatePdf")}
           </button>
         </div>
       </div>
 
-      <div className="pl-layout">
-        <div className="pl-config">
+      <div
+        className="app-layout pl-editor-layout"
+        style={{
+          gridTemplateColumns: `minmax(260px, ${100 - previewSplitPct}fr) 8px minmax(220px, ${previewSplitPct}fr)`
+        }}
+      >
+        <div className="app-config pl-config">
           <div className="segmented">
             <button
               className={`seg ${mode === "free" ? "active" : ""}`}
-              onClick={() => setMode("free")}
+              onClick={() => {
+                setMode("free");
+                markDirty();
+              }}
             >
               {t("pricelist.mode.free")}
             </button>
             <button
               className={`seg ${mode === "exhibition" ? "active" : ""}`}
-              onClick={() => setMode("exhibition")}
+              onClick={() => {
+                setMode("exhibition");
+                markDirty();
+              }}
             >
               {t("pricelist.mode.exhibition")}
+            </button>
+            <button
+              className={`seg ${mode === "series" ? "active" : ""}`}
+              onClick={() => {
+                setMode("series");
+                markDirty();
+              }}
+            >
+              {t("pricelist.mode.series")}
             </button>
           </div>
 
@@ -16353,7 +18712,10 @@ function PriceListPage({
               {t("movement.exhibition.select")}
               <select
                 value={exhibitionId}
-                onChange={(event) => setExhibitionId(event.target.value)}
+                onChange={(event) => {
+                  setExhibitionId(event.target.value);
+                  markDirty();
+                }}
               >
                 <option value="">{t("common.selectPlaceholder")}</option>
                 {inventory.exhibitions.map((exh) => (
@@ -16363,6 +18725,31 @@ function PriceListPage({
                   </option>
                 ))}
               </select>
+            </label>
+          )}
+
+          {mode === "series" && (
+            <label className="field">
+              {t("pricelist.series.select")}
+              <select
+                value={seriesName}
+                onChange={(event) => {
+                  setSeriesName(event.target.value);
+                  markDirty();
+                }}
+              >
+                <option value="">{t("common.selectPlaceholder")}</option>
+                {seriesOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              {!seriesName ? (
+                <p className="muted small-note">{t("pricelist.series.pickHint")}</p>
+              ) : seriesArtworkIds.length === 0 ? (
+                <p className="muted small-note">{t("pricelist.series.empty")}</p>
+              ) : null}
             </label>
           )}
 
@@ -16384,14 +18771,27 @@ function PriceListPage({
 
           {selectedIds.length > 0 && (
             <div className="pl-block">
-              <span className="pl-block-title">{t("pricelist.rowsTitle")}</span>
+              <div className="pl-block-head">
+                <span className="pl-block-title">{t("pricelist.rowsTitle")}</span>
+                <button
+                  type="button"
+                  className="ghost small"
+                  onClick={openPricesModal}
+                >
+                  {t("pricelist.price.setAll")}
+                </button>
+              </div>
               <p className="muted small-note">{t("pricelist.rowsHint")}</p>
               <div className="pl-row-list">
                 {selectedIds.map((id, index) => {
                   const art = artworkById.get(id);
                   if (!art) return null;
+                  const price = listedPriceFor(id);
                   return (
-                    <div className="pl-row-item" key={id}>
+                    <div
+                      className={`pl-row-item${mode === "free" ? " has-remove" : ""}`}
+                      key={id}
+                    >
                       <OrderButtons
                         index={index}
                         total={selectedIds.length}
@@ -16399,27 +18799,60 @@ function PriceListPage({
                           setSelectedIds(moveIdInList(selectedIds, index, dir))
                         }
                       />
-                      <span className="pl-row-title" title={art.title}>
-                        {art.title}
-                      </span>
-                      <button className="ghost small" onClick={() => pickImage(id)}>
-                        {customImages[id]
-                          ? t("pricelist.changeImage")
-                          : t("pricelist.otherImage")}
-                      </button>
-                      {mode === "free" && (
-                        <button
-                          type="button"
-                          className="link-button remove-link"
-                          onClick={() =>
-                            setFreeSelected((current) =>
-                              current.filter((item) => item !== id)
+                      <div className="pl-row-main">
+                        <span className="pl-row-title" title={art.title}>
+                          <bdi>{art.title}</bdi>
+                        </span>
+                      </div>
+                      <label className="pl-row-price-field">
+                        <span className="sr-only">
+                          {t("pricelist.price.set")}
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          className="pl-row-price-input"
+                          value={price.replace(/[^\d.,]/g, "")}
+                          placeholder="—"
+                          onChange={(event) =>
+                            applyPriceOverride(
+                              id,
+                              event.target.value.replace(/[^\d.,]/g, "")
                             )
                           }
-                        >
-                          {t("common.remove")}
-                        </button>
-                      )}
+                        />
+                        <span className="pl-row-eur" aria-hidden>
+                          €
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        className="ghost small pl-row-img-btn"
+                        title={
+                          customImages[id]
+                            ? t("pricelist.changeImage")
+                            : t("pricelist.otherImage")
+                        }
+                        onClick={() => pickImage(id)}
+                      >
+                        {t("pricelist.imageShort")}
+                      </button>
+                      {mode === "free" ? (
+                        <div className="pl-row-remove">
+                          <button
+                            type="button"
+                            className="link-button remove-link"
+                            onClick={() => {
+                              setFreeSelected((current) =>
+                                current.filter((item) => item !== id)
+                              );
+                              markDirty();
+                            }}
+                          >
+                            {t("common.remove")}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -16432,7 +18865,10 @@ function PriceListPage({
             <input
               value={header}
               placeholder={t("pricelist.headerPlaceholder")}
-              onChange={(event) => setHeader(event.target.value)}
+              onChange={(event) => {
+                setHeader(event.target.value);
+                markDirty();
+              }}
             />
           </label>
           <label className="field">
@@ -16440,7 +18876,10 @@ function PriceListPage({
             <input
               value={subtitle}
               placeholder={t("pricelist.subtitlePlaceholder")}
-              onChange={(event) => setSubtitle(event.target.value)}
+              onChange={(event) => {
+                setSubtitle(event.target.value);
+                markDirty();
+              }}
             />
           </label>
 
@@ -16450,7 +18889,10 @@ function PriceListPage({
               <input
                 value={leftHeader}
                 placeholder={t("pricelist.leftPlaceholder")}
-                onChange={(event) => setLeftHeader(event.target.value)}
+                onChange={(event) => {
+                  setLeftHeader(event.target.value);
+                  markDirty();
+                }}
               />
             </label>
             <label className="field">
@@ -16458,7 +18900,10 @@ function PriceListPage({
               <input
                 value={rightHeader}
                 placeholder={t("pricelist.rightPlaceholder")}
-                onChange={(event) => setRightHeader(event.target.value)}
+                onChange={(event) => {
+                  setRightHeader(event.target.value);
+                  markDirty();
+                }}
               />
             </label>
           </div>
@@ -16468,7 +18913,10 @@ function PriceListPage({
               {t("pricelist.field.artTypeLang")}
               <select
                 value={language}
-                onChange={(event) => setLanguage(event.target.value as PriceLang)}
+                onChange={(event) => {
+                  setLanguage(event.target.value as PriceLang);
+                  markDirty();
+                }}
               >
                 {PRICE_LANGS.map(([code, name]) => (
                   <option key={code} value={code}>
@@ -16481,7 +18929,10 @@ function PriceListPage({
               {t("pricelist.field.perPageLabel")}
               <select
                 value={imagesPerPage}
-                onChange={(event) => setImagesPerPage(Number(event.target.value))}
+                onChange={(event) => {
+                  setImagesPerPage(Number(event.target.value));
+                  markDirty();
+                }}
               >
                 {[2, 3, 4, 5, 6].map((value) => (
                   <option key={value} value={value}>
@@ -16496,7 +18947,10 @@ function PriceListPage({
             <input
               type="checkbox"
               checked={showPrice}
-              onChange={(event) => setShowPrice(event.target.checked)}
+              onChange={(event) => {
+                setShowPrice(event.target.checked);
+                markDirty();
+              }}
             />
             {t("pricelist.field.showPriceEuros")}
           </label>
@@ -16505,7 +18959,10 @@ function PriceListPage({
               <input
                 type="checkbox"
                 checked={priceBold}
-                onChange={(event) => setPriceBold(event.target.checked)}
+                onChange={(event) => {
+                  setPriceBold(event.target.checked);
+                  markDirty();
+                }}
               />
               {t("pricelist.field.boldPrice")}
             </label>
@@ -16520,7 +18977,10 @@ function PriceListPage({
                   min={0}
                   max={120}
                   value={imageGap}
-                  onChange={(event) => setImageGap(Number(event.target.value))}
+                  onChange={(event) => {
+                    setImageGap(Number(event.target.value));
+                    markDirty();
+                  }}
                 />
                 <span className="range-value">{imageGap}px</span>
               </div>
@@ -16531,7 +18991,10 @@ function PriceListPage({
                 type="color"
                 className="color-chip"
                 value={frameBorderColor}
-                onChange={(event) => setFrameBorderColor(event.target.value)}
+                onChange={(event) => {
+                  setFrameBorderColor(event.target.value);
+                  markDirty();
+                }}
               />
             </label>
           </div>
@@ -16541,7 +19004,10 @@ function PriceListPage({
             <div className="pl-style-row">
               <select
                 value={fontHeader}
-                onChange={(event) => setFontHeader(event.target.value)}
+                onChange={(event) => {
+                  setFontHeader(event.target.value);
+                  markDirty();
+                }}
               >
                 {PRICELIST_FONTS.map((font) => (
                   <option key={font} value={font}>
@@ -16552,14 +19018,20 @@ function PriceListPage({
               <button
                 type="button"
                 className={`toggle-chip ${headerBold ? "on" : ""}`}
-                onClick={() => setHeaderBold((value) => !value)}
+                onClick={() => {
+                  setHeaderBold((value) => !value);
+                  markDirty();
+                }}
               >
                 <strong>N</strong>
               </button>
               <button
                 type="button"
                 className={`toggle-chip ${headerItalic ? "on" : ""}`}
-                onClick={() => setHeaderItalic((value) => !value)}
+                onClick={() => {
+                  setHeaderItalic((value) => !value);
+                  markDirty();
+                }}
               >
                 <em>C</em>
               </button>
@@ -16567,7 +19039,10 @@ function PriceListPage({
                 type="color"
                 className="color-chip"
                 value={headerColor}
-                onChange={(event) => setHeaderColor(event.target.value)}
+                onChange={(event) => {
+                  setHeaderColor(event.target.value);
+                  markDirty();
+                }}
               />
             </div>
           </div>
@@ -16577,7 +19052,10 @@ function PriceListPage({
             <div className="pl-style-row">
               <select
                 value={fontSubtitle}
-                onChange={(event) => setFontSubtitle(event.target.value)}
+                onChange={(event) => {
+                  setFontSubtitle(event.target.value);
+                  markDirty();
+                }}
               >
                 {PRICELIST_FONTS.map((font) => (
                   <option key={font} value={font}>
@@ -16588,7 +19066,10 @@ function PriceListPage({
               <button
                 type="button"
                 className={`toggle-chip ${subtitleItalic ? "on" : ""}`}
-                onClick={() => setSubtitleItalic((value) => !value)}
+                onClick={() => {
+                  setSubtitleItalic((value) => !value);
+                  markDirty();
+                }}
               >
                 <em>C</em>
               </button>
@@ -16596,14 +19077,23 @@ function PriceListPage({
                 type="color"
                 className="color-chip"
                 value={subtitleColor}
-                onChange={(event) => setSubtitleColor(event.target.value)}
+                onChange={(event) => {
+                  setSubtitleColor(event.target.value);
+                  markDirty();
+                }}
               />
             </div>
           </div>
 
           <label className="field">
             {t("pricelist.field.bodyFont")}
-            <select value={fontBody} onChange={(event) => setFontBody(event.target.value)}>
+            <select
+              value={fontBody}
+              onChange={(event) => {
+                setFontBody(event.target.value);
+                markDirty();
+              }}
+            >
               {PRICELIST_FONTS.map((font) => (
                 <option key={font} value={font}>
                   {font}
@@ -16613,12 +19103,57 @@ function PriceListPage({
           </label>
         </div>
 
+        <div
+          className="app-split-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("pricelist.preview.resizeAria")}
+          title={t("pricelist.preview.resizeTitle")}
+          onPointerDown={onSplitPointerDown}
+        />
+
         <div className="pl-preview-pane">
-          <span className="pl-fp-label muted">
-            {t("pricelist.preview.lead", { count: selectedIds.length })}
-          </span>
+          <div className="app-preview-toolbar">
+            <span className="pl-fp-label muted">
+              {t("pricelist.preview.label", { n: selectedIds.length })}
+            </span>
+            <div className="app-preview-zoom">
+              <button
+                type="button"
+                className="ghost small app-zoom-btn"
+                aria-label={t("common.zoomOut")}
+                disabled={previewZoom <= 0.4}
+                onClick={() => nudgePreviewZoom(-0.1)}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className="ghost small app-zoom-pct"
+                title={t("common.zoomReset")}
+                onClick={() => setPreviewZoom(1)}
+              >
+                {Math.round(previewZoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className="ghost small app-zoom-btn"
+                aria-label={t("common.zoomIn")}
+                disabled={previewZoom >= 2.5}
+                onClick={() => nudgePreviewZoom(0.1)}
+              >
+                +
+              </button>
+            </div>
+          </div>
           <div className="pl-paper">
-            <div className="pl-sheet" style={{ fontFamily: fontBody }}>
+            <div
+              className="pl-sheet"
+              style={{
+                fontFamily: fontBody,
+                zoom: 0.66 * previewZoom
+              }}
+            >
               {(leftHeader || rightHeader) && (
                 <div className="pl-sheet-subhead">
                   <span className="pl-sheet-subhead-left">{leftHeader}</span>
@@ -16653,7 +19188,9 @@ function PriceListPage({
                 <p className="muted">
                   {mode === "exhibition"
                     ? t("pricelist.preview.pickExhibition")
-                    : t("pricelist.preview.addWorks")}
+                    : mode === "series"
+                      ? t("pricelist.preview.pickSeries")
+                      : t("pricelist.preview.addWorks")}
                 </p>
               ) : (
                 selectedIds.map((id, index) => {
@@ -16677,7 +19214,7 @@ function PriceListPage({
                   }
                   return (
                     <Fragment key={id}>
-                      {pageBreakHere && (
+                      {pageBreakHere ? (
                         <div className="pl-page-break">
                           <span>
                             {t("pricelist.preview.page", {
@@ -16685,64 +19222,66 @@ function PriceListPage({
                             })}
                           </span>
                         </div>
-                      )}
-                    <div
-                      className="pl-sheet-row"
-                      style={
-                        index === 0 || pageBreakHere
-                          ? { borderTop: "1px solid #d8d8d8" }
-                          : undefined
-                      }
-                    >
-                      <div className="pl-sheet-imgcell">
+                      ) : null}
+                      <div
+                        className="pl-sheet-row"
+                        style={
+                          index === 0 || pageBreakHere
+                            ? { borderTop: "1px solid #d8d8d8" }
+                            : undefined
+                        }
+                      >
+                        <div className="pl-sheet-imgcell">
+                          <div
+                            className="pl-sheet-frame"
+                            style={{
+                              width: `${frameSize}px`,
+                              height: `${frameSize}px`,
+                              borderColor: frameBorderColor
+                            }}
+                          >
+                            {url ? (
+                              <img
+                                src={url}
+                                alt={art.title}
+                                style={{
+                                  width: `${iw}px`,
+                                  height: `${ih}px`,
+                                  objectFit: "fill"
+                                }}
+                              />
+                            ) : (
+                              <span className="pl-sheet-noimg">
+                                {t("common.noImage")}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                         <div
-                          className="pl-sheet-frame"
-                          style={{
-                            width: `${frameSize}px`,
-                            height: `${frameSize}px`,
-                            borderColor: frameBorderColor
-                          }}
+                          className="pl-sheet-info"
+                          style={{ paddingLeft: `${imageGap}px` }}
                         >
-                          {url ? (
-                            <img
-                              src={url}
-                              alt={art.title}
-                              style={{
-                                width: `${iw}px`,
-                                height: `${ih}px`,
-                                objectFit: "fill"
-                              }}
-                            />
-                          ) : (
-                            <span className="pl-sheet-noimg">{t("common.noImage")}</span>
+                          <div className="pl-sheet-info-title">{art.title}</div>
+                          {art.series && (
+                            <div className="pl-sheet-meta">{art.series}</div>
+                          )}
+                          <div className="pl-sheet-meta">
+                            {artTypeLabel(inventory, art.type, language)}
+                          </div>
+                          <div className="pl-sheet-meta">{formatSize(art)}</div>
+                          {art.yearMade && (
+                            <div className="pl-sheet-meta">{art.yearMade}</div>
+                          )}
+                          {showPrice && (
+                            <div
+                              className="pl-sheet-price"
+                              style={{ fontWeight: priceBold ? 700 : 400 }}
+                            >
+                              {formatEuro(listedPriceFor(id)) || "—"}
+                            </div>
                           )}
                         </div>
                       </div>
-                      <div
-                        className="pl-sheet-info"
-                        style={{ paddingLeft: `${imageGap}px` }}
-                      >
-                        <div className="pl-sheet-info-title">{art.title}</div>
-                        {art.series && (
-                          <div className="pl-sheet-meta">{art.series}</div>
-                        )}
-                        <div className="pl-sheet-meta">
-                          {artTypeLabel(inventory, art.type, language)}
-                        </div>
-                        <div className="pl-sheet-meta">{formatSize(art)}</div>
-                        {art.yearMade && (
-                          <div className="pl-sheet-meta">{art.yearMade}</div>
-                        )}
-                        {showPrice && (
-                          <div
-                            className="pl-sheet-price"
-                            style={{ fontWeight: priceBold ? 700 : 400 }}
-                          >
-                            {formatEuro(listedPriceFor(id)) || "—"}
-                          </div>
-                        )}
-                      </div>
-                    </div>
                     </Fragment>
                   );
                 })
@@ -16760,9 +19299,179 @@ function PriceListPage({
           onConfirm={(ids) => {
             setFreeSelected((current) => [...current, ...ids]);
             setShowFreePicker(false);
+            markDirty();
           }}
           onClose={() => setShowFreePicker(false)}
         />
+      )}
+
+      {showPricesModal && (
+        <div className="modal-backdrop" onClick={closePricesModal}>
+          <div
+            className="modal modal-wide pl-prices-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{t("pricelist.price.bulkTitle")}</h3>
+              <button
+                type="button"
+                className="icon-button ghost"
+                onClick={closePricesModal}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="segmented pl-price-mode-seg">
+                <button
+                  type="button"
+                  className={`seg ${bulkPriceMode === "free" ? "active" : ""}`}
+                  onClick={() => setBulkPriceMode("free")}
+                >
+                  {t("pricelist.price.modeFreeLong")}
+                </button>
+                <button
+                  type="button"
+                  className={`seg ${
+                    bulkPriceMode === "factors" ? "active" : ""
+                  }`}
+                  onClick={() => {
+                    setBulkPriceMode("factors");
+                    fillDraftsFromFactors(factorDateIso);
+                  }}
+                >
+                  {t("pricelist.price.modeFactorsLong")}
+                </button>
+              </div>
+
+              {bulkPriceMode === "free" ? (
+                <div className="pl-bulk-free-bar">
+                  <p className="muted small-note">
+                    {t("pricelist.price.bulkFreeHint")}
+                  </p>
+                  <label className="field pl-bulk-fill-all">
+                    {t("pricelist.price.fillAll")}
+                    <div className="pl-price-input-row">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={fillAllDraft}
+                        placeholder={t("pricelist.price.freePlaceholder")}
+                        onChange={(event) =>
+                          setFillAllDraft(
+                            event.target.value.replace(/[^\d.,]/g, "")
+                          )
+                        }
+                      />
+                      <span className="muted">€</span>
+                      <button
+                        type="button"
+                        className="ghost small"
+                        disabled={!fillAllDraft.trim()}
+                        onClick={() => {
+                          const value = fillAllDraft.trim();
+                          if (!value) return;
+                          const next: Record<string, string> = {};
+                          for (const id of selectedIds) next[id] = value;
+                          setPriceDrafts(next);
+                        }}
+                      >
+                        {t("pricelist.price.fillAllApply")}
+                      </button>
+                    </div>
+                  </label>
+                </div>
+              ) : (
+                <div className="pl-bulk-factors-bar">
+                  <p className="muted small-note">
+                    {t("pricelist.price.bulkFactorsHint")}
+                  </p>
+                  <label className="field">
+                    {t("pricelist.price.factorDate")}
+                    <input
+                      type="date"
+                      value={factorDateIso}
+                      onChange={(event) => {
+                        const next = event.target.value || todayIsoLocal();
+                        setFactorDateIso(next);
+                        fillDraftsFromFactors(next);
+                      }}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <div className="pl-bulk-list">
+                {selectedIds.map((id) => {
+                  const art = artworkById.get(id);
+                  if (!art) return null;
+                  const draft = priceDrafts[id] ?? "";
+                  const factorMissing =
+                    bulkPriceMode === "factors" && !draft;
+                  const calcHint = priceCalcHint(
+                    art,
+                    pricingSettings,
+                    bulkPriceMode === "factors"
+                      ? isoDateToMs(factorDateIso)
+                      : Date.now()
+                  );
+                  return (
+                    <div className="pl-bulk-row" key={id}>
+                      <div className="pl-bulk-main">
+                        <span className="pl-bulk-title" title={art.title}>
+                          <bdi>{art.title}</bdi>
+                        </span>
+                        {calcHint ? (
+                          <span className="pl-bulk-calc" title={calcHint}>
+                            {calcHint}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="pl-price-input-row">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={draft}
+                          placeholder={
+                            factorMissing
+                              ? t("pricelist.price.factorsNoneShort")
+                              : t("pricelist.price.freePlaceholder")
+                          }
+                          onChange={(event) => {
+                            const value = event.target.value.replace(
+                              /[^\d.,]/g,
+                              ""
+                            );
+                            setPriceDrafts((current) => ({
+                              ...current,
+                              [id]: value
+                            }));
+                            if (bulkPriceMode === "factors") {
+                              setBulkPriceMode("free");
+                            }
+                          }}
+                        />
+                        <span className="muted">€</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={closePricesModal}
+              >
+                {t("common.cancel")}
+              </button>
+              <button type="button" onClick={applyBulkPrices}>
+                {t("pricelist.price.applyAll")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );
@@ -17585,6 +20294,28 @@ function toIsoDate(ddmmyyyy: string): string {
 function fromIsoDate(iso: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
   return match ? `${match[3]}-${match[2]}-${match[1]}` : "";
+}
+
+/** Local calendar date as YYYY-MM-DD for `<input type="date">`. */
+function todayIsoLocal(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function isoDateToMs(iso: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+  if (!match) return Date.now();
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    12,
+    0,
+    0
+  ).getTime();
 }
 
 function slugify(value: string) {

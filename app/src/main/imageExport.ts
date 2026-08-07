@@ -1,12 +1,14 @@
 import {
   BrowserWindow,
+  dialog,
   nativeImage,
   shell,
-  type NativeImage
+  type NativeImage,
+  type OpenDialogOptions
 } from "electron";
-import { writeFile } from "fs/promises";
+import { access, mkdir, writeFile } from "fs/promises";
 import path from "path";
-import { chooseGeneratedSavePath } from "./exportPath";
+import { chooseGeneratedSavePath, GENERATED_FOLDER } from "./exportPath";
 
 export type ImageExportFormat = "jpg" | "png" | "pdf";
 
@@ -42,6 +44,42 @@ export interface ImageExportResult {
 export interface ImageProbe {
   width: number;
   height: number;
+}
+
+export type BulkExportDestination = "generated" | "chooseFolder";
+
+export interface BulkImageExportItem {
+  sourcePath: string;
+  suggestedName: string;
+  /** Stable id so filenames never collide across works. */
+  artworkId?: string;
+  /** Per-work print size override (print mode). */
+  printWidthCm?: number;
+  printHeightCm?: number;
+}
+
+export interface BulkImageExportOptions {
+  items: BulkImageExportItem[];
+  format: ImageExportFormat;
+  targetKB?: number;
+  dpiMode?: ImageExportDpiMode;
+  dpi?: number;
+  /** Fallback print size when an item has no measures. */
+  printWidthCm?: number;
+  printHeightCm?: number;
+  destination: BulkExportDestination;
+  /**
+   * Only used when destination is chooseFolder:
+   * creates `{pickedParent}/{newFolderName}/` and saves inside.
+   */
+  newFolderName?: string;
+}
+
+export interface BulkImageExportResult {
+  directory: string;
+  saved: ImageExportResult[];
+  skipped: Array<{ suggestedName: string; reason: string }>;
+  failed: Array<{ suggestedName: string; error: string }>;
 }
 
 export function probeImage(sourcePath: string): ImageProbe | null {
@@ -199,60 +237,96 @@ function prepareImage(
   return { image: source, dpi: undefined };
 }
 
-const JPEG_QUALITIES = [95, 92, 88, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 12];
+/** Minimum width while shrinking to meet a hard byte limit. */
+const MIN_LIMIT_WIDTH = 48;
 
+/**
+ * Highest JPEG quality (1–95) whose encoded size is ≤ targetBytes.
+ * Binary search so we land close to the limit instead of jumping down a coarse step.
+ */
+function jpegUnderLimit(
+  image: NativeImage,
+  targetBytes: number,
+  finalize: (raw: Buffer) => Buffer
+): Buffer | null {
+  let lo = 1;
+  let hi = 95;
+  let best: Buffer | null = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const buffer = finalize(image.toJPEG(mid));
+    if (buffer.length <= targetBytes) {
+      best = buffer;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
+/**
+ * Encode a raster image. When targetBytes is set, the returned buffer is
+ * guaranteed to be ≤ targetBytes (after optional DPI metadata), or we throw.
+ * JPEG aims for the largest file still under the limit (close to the ceiling).
+ */
 function encodeRaster(
   source: NativeImage,
   format: "jpg" | "png",
-  targetBytes: number | undefined
+  targetBytes: number | undefined,
+  dpi?: number
 ): { buffer: Buffer; width: number; height: number } {
   let image = source;
 
+  const finalize = (raw: Buffer) => applyDpiMetadata(raw, format, dpi);
+
   if (format === "png") {
-    let buffer = image.toPNG();
-    while (targetBytes && buffer.length > targetBytes && image.getSize().width > 100) {
-      image = image.resize({ width: Math.round(image.getSize().width * 0.85) });
-      buffer = image.toPNG();
+    let buffer = finalize(image.toPNG());
+    while (targetBytes && buffer.length > targetBytes) {
+      const { width } = image.getSize();
+      if (width <= MIN_LIMIT_WIDTH) {
+        throw new Error(
+          "No se pudo comprimir la imagen por debajo del límite de peso. Prueba JPG o un límite más alto."
+        );
+      }
+      image = image.resize({
+        width: Math.max(MIN_LIMIT_WIDTH, Math.floor(width * 0.92))
+      });
+      buffer = finalize(image.toPNG());
     }
     const size = image.getSize();
     return { buffer, width: size.width, height: size.height };
   }
 
   if (!targetBytes) {
-    const buffer = image.toJPEG(92);
+    const buffer = finalize(image.toJPEG(92));
     const size = image.getSize();
     return { buffer, width: size.width, height: size.height };
   }
 
-  let best = image.toJPEG(92);
-  if (best.length <= targetBytes) {
+  // Full resolution first: pick the highest quality that still fits.
+  let fitted = jpegUnderLimit(image, targetBytes, finalize);
+  if (fitted) {
     const size = image.getSize();
-    return { buffer: best, width: size.width, height: size.height };
+    return { buffer: fitted, width: size.width, height: size.height };
   }
 
-  for (const quality of JPEG_QUALITIES) {
-    const buffer = image.toJPEG(quality);
-    if (buffer.length < best.length) best = buffer;
-    if (buffer.length <= targetBytes) {
+  // Still too big even at quality 1 — shrink gently and retry.
+  while (image.getSize().width > MIN_LIMIT_WIDTH) {
+    const { width } = image.getSize();
+    image = image.resize({
+      width: Math.max(MIN_LIMIT_WIDTH, Math.floor(width * 0.92))
+    });
+    fitted = jpegUnderLimit(image, targetBytes, finalize);
+    if (fitted) {
       const size = image.getSize();
-      return { buffer, width: size.width, height: size.height };
+      return { buffer: fitted, width: size.width, height: size.height };
     }
   }
 
-  while (image.getSize().width > 140) {
-    image = image.resize({ width: Math.round(image.getSize().width * 0.85) });
-    for (const quality of JPEG_QUALITIES) {
-      const buffer = image.toJPEG(quality);
-      if (buffer.length < best.length) best = buffer;
-      if (buffer.length <= targetBytes) {
-        const size = image.getSize();
-        return { buffer, width: size.width, height: size.height };
-      }
-    }
-  }
-
-  const size = image.getSize();
-  return { buffer: best, width: size.width, height: size.height };
+  throw new Error(
+    "No se pudo comprimir la imagen por debajo del límite de peso. Prueba un límite más alto."
+  );
 }
 
 /**
@@ -329,6 +403,129 @@ function sanitizeName(name: string): string {
   );
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Pick a free path in dir. Uses title + artwork id so works never overwrite. */
+async function uniquePathInDir(
+  dir: string,
+  baseName: string,
+  extension: string,
+  artworkId?: string
+): Promise<string> {
+  const safe = sanitizeName(baseName) || "obra";
+  const idBit = artworkId
+    ? (sanitizeName(artworkId) || artworkId).replace(/[^a-zA-Z0-9_-]/g, "").slice(-8)
+    : "";
+  const stem = idBit ? `${safe}-${idBit}` : safe;
+  let candidate = path.join(dir, `${stem}.${extension}`);
+  if (!(await fileExists(candidate))) return candidate;
+  for (let n = 2; n < 1000; n += 1) {
+    candidate = path.join(dir, `${stem}-${n}.${extension}`);
+    if (!(await fileExists(candidate))) return candidate;
+  }
+  return path.join(dir, `${stem}-${Date.now()}.${extension}`);
+}
+
+async function uniqueSubdir(parent: string, folderName: string): Promise<string> {
+  const safe = sanitizeName(folderName) || "fotos";
+  let dir = path.join(parent, safe);
+  if (!(await fileExists(dir))) {
+    await mkdir(dir, { recursive: true });
+    return dir;
+  }
+  for (let n = 2; n < 1000; n += 1) {
+    dir = path.join(parent, `${safe}-${n}`);
+    if (!(await fileExists(dir))) {
+      await mkdir(dir, { recursive: true });
+      return dir;
+    }
+  }
+  dir = path.join(parent, `${safe}-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  return dir;
+}
+
+function buildExportBuffer(
+  source: NativeImage,
+  options: ImageExportOptions
+): {
+  buffer: Buffer;
+  width: number;
+  height: number;
+  dpi?: number;
+} {
+  const prepared = prepareImage(source, options);
+  const targetBytes = options.targetKB
+    ? Math.floor(options.targetKB * 1000)
+    : undefined;
+
+  let buffer: Buffer;
+  let width: number;
+  let height: number;
+
+  if (options.format === "pdf") {
+    let jpegBudget = targetBytes
+      ? Math.max(1024, Math.floor(targetBytes * 0.92) - 4096)
+      : undefined;
+    let encoded = encodeRaster(prepared.image, "jpg", jpegBudget, undefined);
+    width = encoded.width;
+    height = encoded.height;
+    buffer = buildJpegPdf(
+      encoded.buffer,
+      { width, height },
+      prepared.dpi ?? 96
+    );
+
+    let guard = 0;
+    while (targetBytes && buffer.length > targetBytes && guard < 24) {
+      guard += 1;
+      jpegBudget = Math.max(
+        512,
+        Math.floor((jpegBudget ?? buffer.length) * 0.85)
+      );
+      encoded = encodeRaster(prepared.image, "jpg", jpegBudget, undefined);
+      width = encoded.width;
+      height = encoded.height;
+      buffer = buildJpegPdf(
+        encoded.buffer,
+        { width, height },
+        prepared.dpi ?? 96
+      );
+    }
+
+    if (targetBytes && buffer.length > targetBytes) {
+      throw new Error(
+        "No se pudo comprimir el PDF por debajo del límite de peso. Prueba un límite más alto."
+      );
+    }
+  } else {
+    const encoded = encodeRaster(
+      prepared.image,
+      options.format,
+      targetBytes,
+      prepared.dpi
+    );
+    width = encoded.width;
+    height = encoded.height;
+    buffer = encoded.buffer;
+  }
+
+  if (targetBytes && buffer.length > targetBytes) {
+    throw new Error(
+      "No se pudo comprimir la imagen por debajo del límite de peso. Prueba un límite más alto."
+    );
+  }
+
+  return { buffer, width, height, dpi: prepared.dpi };
+}
+
 export async function exportImage(
   parentWindow: BrowserWindow | null,
   options: ImageExportOptions,
@@ -339,7 +536,6 @@ export async function exportImage(
     throw new Error("No se pudo leer la imagen seleccionada.");
   }
 
-  const prepared = prepareImage(source, options);
   const base = sanitizeName(
     options.suggestedName || path.basename(options.sourcePath)
   );
@@ -358,40 +554,143 @@ export async function exportImage(
   );
   if (!filePath) return null;
 
-  const targetBytes = options.targetKB
-    ? Math.round(options.targetKB * 1024)
-    : undefined;
-
-  let buffer: Buffer;
-  let width: number;
-  let height: number;
-
-  if (options.format === "pdf") {
-    const headroom = targetBytes
-      ? Math.max(8 * 1024, targetBytes - 12 * 1024)
-      : undefined;
-    const encoded = encodeRaster(prepared.image, "jpg", headroom);
-    width = encoded.width;
-    height = encoded.height;
-    buffer = buildJpegPdf(
-      encoded.buffer,
-      { width, height },
-      prepared.dpi ?? 96
-    );
-  } else {
-    const encoded = encodeRaster(prepared.image, options.format, targetBytes);
-    width = encoded.width;
-    height = encoded.height;
-    buffer = applyDpiMetadata(encoded.buffer, options.format, prepared.dpi);
-  }
-
-  await writeFile(filePath, buffer);
+  const encoded = buildExportBuffer(source, options);
+  await writeFile(filePath, encoded.buffer);
   shell.showItemInFolder(filePath);
   return {
     path: filePath,
-    bytes: buffer.length,
-    width,
-    height,
-    dpi: prepared.dpi
+    bytes: encoded.buffer.length,
+    width: encoded.width,
+    height: encoded.height,
+    dpi: encoded.dpi
   };
+}
+
+async function pickDirectory(
+  parentWindow: BrowserWindow | null,
+  title: string,
+  defaultPath?: string
+): Promise<string | null> {
+  const options: OpenDialogOptions = {
+    title,
+    properties: ["openDirectory", "createDirectory"],
+    ...(defaultPath ? { defaultPath } : {})
+  };
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) return null;
+  return result.filePaths[0];
+}
+
+async function resolveBulkDirectory(
+  parentWindow: BrowserWindow | null,
+  libraryPath: string,
+  destination: BulkExportDestination,
+  newFolderName?: string
+): Promise<string | null> {
+  const generated = libraryPath
+    ? path.join(libraryPath, GENERATED_FOLDER)
+    : "";
+
+  // generated → loose files directly in library/generated
+  if (destination === "generated") {
+    if (!generated) throw new Error("No hay biblioteca abierta.");
+    await mkdir(generated, { recursive: true });
+    return generated;
+  }
+
+  // own location → create named folder inside the parent the user picks
+  const folderName = String(newFolderName ?? "").trim();
+  if (!folderName) {
+    throw new Error("Indica un nombre para la carpeta.");
+  }
+  const parent = await pickDirectory(
+    parentWindow,
+    "Elegir dónde crear la carpeta",
+    generated || undefined
+  );
+  if (!parent) return null;
+  return uniqueSubdir(parent, folderName);
+}
+
+export async function exportImagesBulk(
+  parentWindow: BrowserWindow | null,
+  options: BulkImageExportOptions,
+  libraryPath = ""
+): Promise<BulkImageExportResult | null> {
+  if (!options.items.length) {
+    throw new Error("No hay obras seleccionadas.");
+  }
+
+  const directory = await resolveBulkDirectory(
+    parentWindow,
+    libraryPath,
+    options.destination,
+    options.newFolderName
+  );
+  if (!directory) return null;
+
+  const extension = options.format === "jpg" ? "jpg" : options.format;
+  const saved: ImageExportResult[] = [];
+  const skipped: BulkImageExportResult["skipped"] = [];
+  const failed: BulkImageExportResult["failed"] = [];
+
+  for (const item of options.items) {
+    const name = item.suggestedName || path.basename(item.sourcePath);
+    if (!item.sourcePath) {
+      skipped.push({ suggestedName: name, reason: "Sin foto principal." });
+      continue;
+    }
+    try {
+      const source = nativeImage.createFromPath(item.sourcePath);
+      if (source.isEmpty()) {
+        skipped.push({
+          suggestedName: name,
+          reason: "No se pudo leer la foto principal."
+        });
+        continue;
+      }
+
+      const encoded = buildExportBuffer(source, {
+        sourcePath: item.sourcePath,
+        format: options.format,
+        targetKB: options.targetKB,
+        dpiMode: options.dpiMode,
+        dpi: options.dpi,
+        printWidthCm: item.printWidthCm ?? options.printWidthCm,
+        printHeightCm: item.printHeightCm ?? options.printHeightCm,
+        suggestedName: name
+      });
+
+      const filePath = await uniquePathInDir(
+        directory,
+        name,
+        extension,
+        item.artworkId
+      );
+      await writeFile(filePath, encoded.buffer);
+      saved.push({
+        path: filePath,
+        bytes: encoded.buffer.length,
+        width: encoded.width,
+        height: encoded.height,
+        dpi: encoded.dpi
+      });
+    } catch (error) {
+      failed.push({
+        suggestedName: name,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  // Open the destination so the user sees the result.
+  if (saved.length === 1) {
+    shell.showItemInFolder(saved[0].path);
+  } else {
+    await shell.openPath(directory);
+  }
+
+  return { directory, saved, skipped, failed };
 }

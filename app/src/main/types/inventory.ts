@@ -299,11 +299,54 @@ export interface InboxTodo {
   body: string;
   /** ISO date when marked done; empty = still open. */
   doneAt?: string;
+  /** Optional due date as DD-MM-YYYY; empty = no date. */
+  dueDate?: string;
   createdAt: string;
 }
 
 export interface ApplicationInput
   extends Omit<Application, "id" | "createdAt" | "updatedAt"> {
+  id?: string;
+}
+
+/**
+ * Saved “Folleto de obras” (price-list brochure). JSON-only — optional on
+ * older libraries (missing → []). Mirrors the ephemeral PriceListPage state.
+ */
+export interface PriceListDoc {
+  id: string;
+  /** Name shown in the list (usually the document header). */
+  title: string;
+  mode: "free" | "exhibition" | "series";
+  exhibitionId?: string;
+  /** Series name when mode is "series" (matches Artwork.series). */
+  seriesName?: string;
+  /** Ordered artwork IDs included in the brochure. */
+  artworkIds: string[];
+  /**
+   * Optional brochure-only price overrides (artworkId → amount text).
+   * Missing on older libraries → {}.
+   */
+  priceOverrides?: Record<string, string>;
+  header: string;
+  subtitle?: string;
+  leftHeader?: string;
+  rightHeader?: string;
+  showPrice: boolean;
+  priceBold?: boolean;
+  imagesPerPage?: number;
+  imageGap?: number;
+  frameBorderColor?: string;
+  language?: "es" | "en" | "de";
+  fonts?: { header: string; subtitle: string; body: string };
+  headerStyle?: { bold?: boolean; italic?: boolean; color?: string };
+  subtitleStyle?: { italic?: boolean; color?: string };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PriceListDocInput
+  extends Omit<PriceListDoc, "id" | "createdAt" | "updatedAt"> {
   id?: string;
 }
 
@@ -416,6 +459,8 @@ export interface InventoryData {
   expenses: Expense[];
   seriesInfo: SeriesInfo[];
   applications: Application[];
+  /** Saved folleto de obras drafts (JSON-only; optional for old libs). */
+  priceLists?: PriceListDoc[];
   textGeneratorExamples: TextGeneratorExample[];
   /** Recurring contact reach-out reminders (JSON-only; optional for old libs). */
   contactReminders?: ContactReminder[];

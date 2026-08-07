@@ -29,7 +29,13 @@ import {
   generateApplicationDocument,
   type ApplicationPdfPayload
 } from "./applicationPdf";
-import { exportImage, probeImage, type ImageExportOptions } from "./imageExport";
+import {
+  exportImage,
+  exportImagesBulk,
+  probeImage,
+  type BulkImageExportOptions,
+  type ImageExportOptions
+} from "./imageExport";
 import {
   libraryFolderFor,
   libraryLocationChoices,
@@ -48,6 +54,7 @@ import type {
   InboxNote,
   InboxTodo,
   LookupInput,
+  PriceListDocInput,
   SeriesInfoInput,
   TextGeneratorExample
 } from "./types/inventory";
@@ -218,11 +225,6 @@ ipcMain.handle("inbox:saveNotes", async (_event, notes: InboxNote[]) =>
 );
 ipcMain.handle("inbox:saveTodos", async (_event, todos: InboxTodo[]) =>
   store().saveInboxTodos(todos)
-);
-ipcMain.handle(
-  "image:restoreArtwork",
-  async (_event, artworkId: string, imageId: string) =>
-    store().restoreArtworkImage(artworkId, imageId)
 );
 ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
   clipboard.writeText(String(text ?? ""));
@@ -407,6 +409,12 @@ ipcMain.handle("application:save", async (_event, input: ApplicationInput) =>
 );
 ipcMain.handle("application:delete", async (_event, applicationId: string) =>
   store().deleteApplication(applicationId)
+);
+ipcMain.handle("pricelist:save", async (_event, input: PriceListDocInput) =>
+  store().savePriceList(input)
+);
+ipcMain.handle("pricelist:delete", async (_event, priceListId: string) =>
+  store().deletePriceList(priceListId)
 );
 ipcMain.handle(
   "application:generatePdf",
@@ -676,6 +684,12 @@ ipcMain.handle(
     exportImage(mainWindow, options, libraryPath)
 );
 
+ipcMain.handle(
+  "image:exportBulk",
+  async (_event, options: BulkImageExportOptions) =>
+    exportImagesBulk(mainWindow, options, libraryPath)
+);
+
 ipcMain.handle("image:probe", async (_event, sourcePath: string) =>
   probeImage(sourcePath)
 );
@@ -756,7 +770,7 @@ ipcMain.handle(
   "document:import",
   async (
     _event,
-    targetType: "artwork" | "edition" | "exhibition",
+    targetType: "artwork" | "edition" | "exhibition" | "series",
     targetId: string
   ) => {
     const options: OpenDialogOptions = {

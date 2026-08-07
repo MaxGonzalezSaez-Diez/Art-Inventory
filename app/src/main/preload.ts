@@ -3,6 +3,8 @@ import type {
   PriceListPayload
 } from "./pricelist";
 import type {
+  BulkImageExportOptions,
+  BulkImageExportResult,
   ImageExportOptions,
   ImageExportResult,
   ImageProbe
@@ -16,6 +18,7 @@ import type {
   ExpenseInput,
   InventoryData,
   LookupInput,
+  PriceListDocInput,
   SeriesInfoInput,
   TextGeneratorExample,
   ContactReminder,
@@ -71,6 +74,7 @@ const api = {
     copyLabel?: string;
     artistName?: string;
     language?: "es" | "en" | "de";
+    imageDataUrl?: string;
   }): Promise<string | null> =>
     ipcRenderer.invoke("certificate:generate", payload),
   deleteExhibition: (exhibitionId: string): Promise<InventoryData> =>
@@ -104,11 +108,6 @@ const api = {
     ipcRenderer.invoke("inbox:saveNotes", notes),
   saveInboxTodos: (todos: InboxTodo[]): Promise<InventoryData> =>
     ipcRenderer.invoke("inbox:saveTodos", todos),
-  restoreArtworkImage: (
-    artworkId: string,
-    imageId: string
-  ): Promise<InventoryData> =>
-    ipcRenderer.invoke("image:restoreArtwork", artworkId, imageId),
   writeClipboardText: (text: string): Promise<boolean> =>
     ipcRenderer.invoke("clipboard:writeText", text),
   writeClipboardImageFiles: (
@@ -140,6 +139,10 @@ const api = {
     ipcRenderer.invoke("application:save", input),
   deleteApplication: (applicationId: string): Promise<InventoryData> =>
     ipcRenderer.invoke("application:delete", applicationId),
+  savePriceList: (input: PriceListDocInput): Promise<InventoryData> =>
+    ipcRenderer.invoke("pricelist:save", input),
+  deletePriceList: (priceListId: string): Promise<InventoryData> =>
+    ipcRenderer.invoke("pricelist:delete", priceListId),
   generateApplicationPdf: (
     payload: ApplicationPdfPayload
   ): Promise<string | null> =>
@@ -191,7 +194,7 @@ const api = {
   ): Promise<{ image: unknown; inventory: InventoryData } | null> =>
     ipcRenderer.invoke("image:import", targetType, targetId, category),
   importDocument: (
-    targetType: "artwork" | "edition" | "exhibition",
+    targetType: "artwork" | "edition" | "exhibition" | "series",
     targetId: string
   ): Promise<{ image: unknown; inventory: InventoryData } | null> =>
     ipcRenderer.invoke("document:import", targetType, targetId),
@@ -241,6 +244,10 @@ const api = {
     ipcRenderer.invoke("image:saveCopy", filePath, suggestedName),
   exportImage: (options: ImageExportOptions): Promise<ImageExportResult | null> =>
     ipcRenderer.invoke("image:export", options),
+  exportImagesBulk: (
+    options: BulkImageExportOptions
+  ): Promise<BulkImageExportResult | null> =>
+    ipcRenderer.invoke("image:exportBulk", options),
   probeImage: (filePath: string): Promise<ImageProbe | null> =>
     ipcRenderer.invoke("image:probe", filePath),
   pickImageDataUrl: (): Promise<string | null> =>

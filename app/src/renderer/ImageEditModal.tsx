@@ -85,7 +85,7 @@ export function ImageEditModal({
   onSave
 }: {
   sourceDataUrl: string;
-  /** upload = straighten first + keep original as extra; retouch = edit only */
+  /** upload = straighten first + keep original as extra; retouch = straighten first, no new original */
   mode?: "upload" | "retouch";
   onCancel: () => void;
   onSave: (result: ImageEditSaveResult) => void | Promise<void>;
@@ -94,15 +94,25 @@ export function ImageEditModal({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const straightenStageRef = useRef<HTMLDivElement>(null);
   const [originalDataUrl] = useState(sourceDataUrl);
-  const [step, setStep] = useState<"straighten" | "edit">(
-    mode === "upload" ? "straighten" : "edit"
-  );
+  const [step, setStep] = useState<"straighten" | "edit">("straighten");
   const [rawImage, setRawImage] = useState<HTMLImageElement | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [scannedPreview, setScannedPreview] = useState<string | null>(null);
   const [corners, setCorners] = useState<Point[] | null>(null);
   const [detected, setDetected] = useState(false);
-  const [cornerDrag, setCornerDrag] = useState<number | null>(null);
+  /** Corner index, or edge between ordered corners i and (i+1)%4. */
+  const [straightenDrag, setStraightenDrag] = useState<
+    | { kind: "corner"; index: number; grabOffset: Point }
+    | {
+        kind: "edge";
+        index: number;
+        startPoint: Point;
+        startCorners: Point[];
+        /** true = move only X (vertical edge); false = only Y (horizontal). */
+        horizontal: boolean;
+      }
+    | null
+  >(null);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -152,11 +162,6 @@ export function ImageEditModal({
       .then(async (img) => {
         if (cancelled) return;
         setRawImage(img);
-        if (mode === "retouch") {
-          setImage(img);
-          setDetecting(false);
-          return;
-        }
         await runAutoScan(img);
       })
       .catch((caught) => {
@@ -173,10 +178,10 @@ export function ImageEditModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceDataUrl, mode]);
 
-  // Keep the corrected preview in sync while the user drags corners.
+  // Keep the corrected preview in sync while the user drags corners/edges.
   useEffect(() => {
     if (step !== "straighten") return;
-    if (!rawImage || !corners || cornerDrag != null || detecting) return;
+    if (!rawImage || !corners || straightenDrag != null || detecting) return;
     if (previewCornersRef.current === corners) return;
     const handle = window.setTimeout(() => {
       try {
@@ -188,7 +193,7 @@ export function ImageEditModal({
       }
     }, 120);
     return () => window.clearTimeout(handle);
-  }, [rawImage, corners, cornerDrag, detecting, step]);
+  }, [rawImage, corners, straightenDrag, detecting, step]);
 
   const natural = image
     ? rotatedSize(image.naturalWidth, image.naturalHeight, rotation)
@@ -325,24 +330,93 @@ export function ImageEditModal({
   ) {
     event.preventDefault();
     event.stopPropagation();
-    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-    setCornerDrag(index);
-  }
-
-  function onStraightenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    if (cornerDrag == null || !corners) return;
+    if (!corners) return;
     const point = clientToImagePoint(event.clientX, event.clientY);
     if (!point) return;
-    setCorners((current) => {
-      if (!current) return current;
-      const next = current.map((c) => ({ ...c }));
-      next[cornerDrag] = point;
-      return next;
+    // Lock corner order for the whole drag so handles don't jump when
+    // one corner crosses another.
+    const ordered = orderCorners(corners).map((c) => ({ ...c }));
+    setCorners(ordered);
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+    setStraightenDrag({
+      kind: "corner",
+      index,
+      // Keep the ring from jumping to the cursor on first move.
+      grabOffset: {
+        x: ordered[index].x - point.x,
+        y: ordered[index].y - point.y
+      }
     });
   }
 
+  function onEdgePointerDown(
+    edgeIndex: number,
+    event: ReactPointerEvent<HTMLButtonElement>
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!corners || !rawImage) return;
+    const point = clientToImagePoint(event.clientX, event.clientY);
+    if (!point) return;
+    const ordered = orderCorners(corners);
+    const a = ordered[edgeIndex];
+    const b = ordered[(edgeIndex + 1) % 4];
+    // Mostly-horizontal sides slide vertically; mostly-vertical sides slide
+    // horizontally — like nudging a crop edge.
+    const horizontal = Math.abs(b.x - a.x) < Math.abs(b.y - a.y);
+    setCorners(ordered.map((c) => ({ ...c })));
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+    setStraightenDrag({
+      kind: "edge",
+      index: edgeIndex,
+      startPoint: point,
+      startCorners: ordered.map((c) => ({ ...c })),
+      horizontal
+    });
+  }
+
+  function onStraightenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (straightenDrag == null || !rawImage) return;
+    const point = clientToImagePoint(event.clientX, event.clientY);
+    if (!point) return;
+    if (straightenDrag.kind === "corner") {
+      const maxX = rawImage.naturalWidth - 1;
+      const maxY = rawImage.naturalHeight - 1;
+      const { grabOffset, index } = straightenDrag;
+      setCorners((current) => {
+        if (!current) return current;
+        // Do NOT re-order while dragging — that made the ring jump.
+        const next = current.map((c) => ({ ...c }));
+        next[index] = {
+          x: clamp(point.x + grabOffset.x, 0, maxX),
+          y: clamp(point.y + grabOffset.y, 0, maxY)
+        };
+        return next;
+      });
+      return;
+    }
+    const dx = point.x - straightenDrag.startPoint.x;
+    const dy = point.y - straightenDrag.startPoint.y;
+    const moveX = straightenDrag.horizontal ? dx : 0;
+    const moveY = straightenDrag.horizontal ? 0 : dy;
+    const i0 = straightenDrag.index;
+    const i1 = (i0 + 1) % 4;
+    const maxX = rawImage.naturalWidth - 1;
+    const maxY = rawImage.naturalHeight - 1;
+    setCorners(
+      straightenDrag.startCorners.map((c, i) => {
+        if (i !== i0 && i !== i1) return c;
+        return {
+          x: clamp(c.x + moveX, 0, maxX),
+          y: clamp(c.y + moveY, 0, maxY)
+        };
+      })
+    );
+  }
+
   function onStraightenPointerUp() {
-    setCornerDrag(null);
+    setStraightenDrag(null);
+    setCorners((current) => (current ? orderCorners(current) : current));
   }
 
   async function redetectAroundClick(clientX: number, clientY: number) {
@@ -434,7 +508,11 @@ export function ImageEditModal({
     }
   }
 
-  const orderedCorners = corners ? orderCorners(corners) : null;
+  const orderedCorners = corners
+    ? straightenDrag
+      ? corners
+      : orderCorners(corners)
+    : null;
 
   return (
     <div className="modal-backdrop image-edit-backdrop" onClick={onCancel}>
@@ -451,7 +529,7 @@ export function ImageEditModal({
             </h3>
             <p className="muted small-note">
               {step === "straighten"
-                ? "Toca el cuadro en la foto para detectarlo, o arrastra las esquinas."
+                ? "Toca el cuadro, arrastra una esquina, o desliza un lado."
                 : "Puedes girar, recortar y ajustar color. Luego pulsa «Guardar foto»."}
             </p>
           </div>
@@ -461,7 +539,7 @@ export function ImageEditModal({
         </div>
 
         {step === "straighten" ? (
-          <div className="image-edit-layout">
+          <div className="image-edit-layout image-straighten-layout">
             <div className="image-edit-stage-wrap">
               {detecting ? (
                 <div className="image-edit-loading">
@@ -469,19 +547,18 @@ export function ImageEditModal({
                 </div>
               ) : rawImage && orderedCorners ? (
                 <div
-                  className="image-edit-stage image-straighten-stage"
+                  className={`image-edit-stage image-straighten-stage${
+                    straightenDrag ? " is-dragging" : ""
+                  }`}
                   ref={straightenStageRef}
-                  style={{
-                    aspectRatio: `${rawImage.naturalWidth} / ${rawImage.naturalHeight}`
-                  }}
                   onPointerMove={onStraightenPointerMove}
                   onPointerUp={onStraightenPointerUp}
                   onPointerCancel={onStraightenPointerUp}
                   onClick={(event) => {
-                    if (cornerDrag != null) return;
+                    if (straightenDrag != null) return;
                     if (
                       (event.target as HTMLElement).closest(
-                        ".image-straighten-handle"
+                        ".image-straighten-handle, .image-straighten-edge"
                       )
                     ) {
                       return;
@@ -507,35 +584,77 @@ export function ImageEditModal({
                         .join(" ")}
                     />
                   </svg>
-                  {orderedCorners.map((point, index) => (
-                    <button
-                      key={index}
-                      type="button"
-                      className="image-straighten-handle"
-                      style={{
-                        left: `${(point.x / rawImage.naturalWidth) * 100}%`,
-                        top: `${(point.y / rawImage.naturalHeight) * 100}%`
-                      }}
-                      aria-label={`Esquina ${index + 1}`}
-                      onPointerDown={(event) =>
-                        onCornerPointerDown(index, event)
-                      }
-                    />
-                  ))}
+                  {orderedCorners.map((point, index) => {
+                    const next = orderedCorners[(index + 1) % 4];
+                    const midX = (point.x + next.x) / 2;
+                    const midY = (point.y + next.y) / 2;
+                    const dx = next.x - point.x;
+                    const dy = next.y - point.y;
+                    const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+                    const horizontal = Math.abs(dx) < Math.abs(dy);
+                    return (
+                      <button
+                        key={`edge-${index}`}
+                        type="button"
+                        className={`image-straighten-edge${
+                          horizontal
+                            ? " image-straighten-edge-v"
+                            : " image-straighten-edge-h"
+                        }`}
+                        style={{
+                          left: `${(midX / rawImage.naturalWidth) * 100}%`,
+                          top: `${(midY / rawImage.naturalHeight) * 100}%`,
+                          transform: `translate(-50%, -50%) rotate(${angleDeg}deg)`
+                        }}
+                        aria-label={`Lado ${index + 1}`}
+                        onPointerDown={(event) =>
+                          onEdgePointerDown(index, event)
+                        }
+                      />
+                    );
+                  })}
+                  {(() => {
+                    const cx =
+                      orderedCorners.reduce((sum, p) => sum + p.x, 0) / 4;
+                    const cy =
+                      orderedCorners.reduce((sum, p) => sum + p.y, 0) / 4;
+                    const push =
+                      Math.hypot(
+                        rawImage.naturalWidth,
+                        rawImage.naturalHeight
+                      ) * 0.016;
+                    const cornerNames = ["tl", "tr", "br", "bl"] as const;
+                    return orderedCorners.map((point, index) => {
+                      const ox = point.x - cx;
+                      const oy = point.y - cy;
+                      const len = Math.hypot(ox, oy) || 1;
+                      // Sit just outside the corner so the painting edge stays visible.
+                      const hx = point.x + (ox / len) * push;
+                      const hy = point.y + (oy / len) * push;
+                      return (
+                        <button
+                          key={`corner-${index}`}
+                          type="button"
+                          className={`image-straighten-handle image-straighten-handle-${cornerNames[index]}`}
+                          style={{
+                            left: `${(hx / rawImage.naturalWidth) * 100}%`,
+                            top: `${(hy / rawImage.naturalHeight) * 100}%`
+                          }}
+                          aria-label={`Esquina ${index + 1}`}
+                          onPointerDown={(event) =>
+                            onCornerPointerDown(index, event)
+                          }
+                        />
+                      );
+                    });
+                  })()}
                 </div>
               ) : (
                 <div className="image-edit-loading">Cargando imagen…</div>
               )}
             </div>
 
-            <div className="image-edit-controls">
-              <p className="image-straighten-status">
-                {detecting
-                  ? "Detectando bordes…"
-                  : detected
-                    ? "Así quedará el cuadro. Si no acertó, toca el cuadro en la foto."
-                    : "No se encontró el cuadro. Tócalo en la foto o arrastra las esquinas."}
-              </p>
+            <div className="image-edit-stage-wrap image-straighten-result-wrap">
               {scannedPreview ? (
                 <img
                   className="image-scan-result"
@@ -543,7 +662,19 @@ export function ImageEditModal({
                   alt="Resultado"
                   draggable={false}
                 />
-              ) : null}
+              ) : (
+                <div className="image-edit-loading">Vista corregida…</div>
+              )}
+            </div>
+
+            <div className="image-straighten-footer">
+              <p className="image-straighten-status">
+                {detecting
+                  ? "Detectando bordes…"
+                  : detected
+                    ? "Así quedará el cuadro. Si no acertó, toca el cuadro en la foto."
+                    : "No se encontró el cuadro. Tócalo en la foto o arrastra las esquinas."}
+              </p>
               <div className="row-actions" style={{ flexWrap: "wrap", gap: "0.45rem" }}>
                 <button
                   type="button"
@@ -564,7 +695,6 @@ export function ImageEditModal({
                 <div
                   className="image-edit-stage"
                   ref={stageRef}
-                  style={{ aspectRatio: `${natural.width} / ${natural.height}` }}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
                   onPointerCancel={onPointerUp}

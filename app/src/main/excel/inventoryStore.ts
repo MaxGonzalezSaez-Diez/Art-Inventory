@@ -27,6 +27,8 @@ import type {
   LookupInput,
   LookupOption,
   Movement,
+  PriceListDoc,
+  PriceListDocInput,
   ReminderChannel,
   ReminderIntervalUnit,
   SeriesInfo,
@@ -88,6 +90,7 @@ export class InventoryStore {
         expenses: [],
         seriesInfo: [],
         applications: [],
+        priceLists: [],
         textGeneratorExamples: [],
         contactReminders: [],
         inboxNotes: [],
@@ -471,42 +474,6 @@ export class InventoryStore {
     return this.load();
   }
 
-  /** Promote a previous photo version back to main (keeps current main in history). */
-  async restoreArtworkImage(
-    artworkId: string,
-    imageId: string
-  ): Promise<InventoryData> {
-    const data = await this.load();
-    const now = new Date().toISOString();
-    const target = data.images.find(
-      (image) =>
-        image.id === imageId &&
-        image.targetType === "artwork" &&
-        image.targetId === artworkId
-    );
-    if (!target) throw new Error("No se encontró esa versión de la foto.");
-
-    data.images = data.images.map((image) => {
-      if (image.targetType !== "artwork" || image.targetId !== artworkId) {
-        return image;
-      }
-      if (image.category === "main") {
-        return { ...image, category: "history" };
-      }
-      if (image.id === imageId) {
-        return { ...image, category: "main" };
-      }
-      return image;
-    });
-    data.artworks = data.artworks.map((artwork) =>
-      artwork.id === artworkId
-        ? { ...artwork, mainImageId: imageId, updatedAt: now }
-        : artwork
-    );
-    await this.persist(data);
-    return this.load();
-  }
-
   async saveExpense(input: ExpenseInput): Promise<InventoryData> {
     const data = await this.load();
     const now = new Date().toISOString();
@@ -657,6 +624,94 @@ export class InventoryStore {
     data.images = data.images.filter(
       (image) =>
         !(image.targetType === "application" && image.targetId === applicationId)
+    );
+    await this.persist(data);
+    return this.load();
+  }
+
+  async savePriceList(input: PriceListDocInput): Promise<InventoryData> {
+    const data = await this.load();
+    const now = new Date().toISOString();
+    const header = String(input.header ?? "").trim();
+    const title =
+      String(input.title ?? "").trim() || header || "Folleto de obras";
+    const existing = input.id
+      ? (data.priceLists ?? []).find((item) => item.id === input.id)
+      : undefined;
+    const mode =
+      input.mode === "exhibition"
+        ? "exhibition"
+        : input.mode === "series"
+          ? "series"
+          : "free";
+    const language =
+      input.language === "en" || input.language === "de" || input.language === "es"
+        ? input.language
+        : existing?.language || "es";
+    const priceOverrides = normalizePriceOverrides(
+      input.priceOverrides ?? existing?.priceOverrides
+    );
+    const record: PriceListDoc = {
+      id: existing?.id ?? `PL-${randomUUID().slice(0, 8)}`,
+      title,
+      mode,
+      exhibitionId:
+        mode === "exhibition"
+          ? String(input.exhibitionId ?? existing?.exhibitionId ?? "").trim()
+          : "",
+      seriesName:
+        mode === "series"
+          ? String(input.seriesName ?? existing?.seriesName ?? "").trim()
+          : "",
+      artworkIds: uniquePreserveOrder(input.artworkIds),
+      priceOverrides,
+      header: header || title,
+      subtitle: String(input.subtitle ?? "").trim(),
+      leftHeader: String(input.leftHeader ?? "").trim(),
+      rightHeader: String(input.rightHeader ?? "").trim(),
+      showPrice: input.showPrice !== false,
+      priceBold: input.priceBold !== false,
+      imagesPerPage: clampInt(input.imagesPerPage ?? existing?.imagesPerPage ?? 4, 2, 6),
+      imageGap: clampInt(input.imageGap ?? existing?.imageGap ?? 16, 0, 120),
+      frameBorderColor: normalizeHexColor(
+        input.frameBorderColor ?? existing?.frameBorderColor,
+        "#e4e4e4"
+      ),
+      language,
+      fonts: {
+        header: String(input.fonts?.header ?? existing?.fonts?.header ?? "Georgia").trim() || "Georgia",
+        subtitle:
+          String(input.fonts?.subtitle ?? existing?.fonts?.subtitle ?? "Georgia").trim() ||
+          "Georgia",
+        body: String(input.fonts?.body ?? existing?.fonts?.body ?? "Georgia").trim() || "Georgia"
+      },
+      headerStyle: {
+        bold: input.headerStyle?.bold !== false,
+        italic: input.headerStyle?.italic === true,
+        color: normalizeHexColor(
+          input.headerStyle?.color ?? existing?.headerStyle?.color,
+          "#1c1c1c"
+        )
+      },
+      subtitleStyle: {
+        italic: input.subtitleStyle?.italic !== false,
+        color: normalizeHexColor(
+          input.subtitleStyle?.color ?? existing?.subtitleStyle?.color,
+          "#555555"
+        )
+      },
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    data.priceLists = upsertById(data.priceLists ?? [], record);
+    await this.persist(data);
+    return this.load();
+  }
+
+  async deletePriceList(priceListId: string): Promise<InventoryData> {
+    const data = await this.load();
+    data.priceLists = (data.priceLists ?? []).filter(
+      (item) => item.id !== priceListId
     );
     await this.persist(data);
     return this.load();
@@ -825,27 +880,16 @@ export class InventoryStore {
     };
 
     if (category === "main" && targetType === "artwork") {
-      // Keep previous mains as history (for retouch undo); drop only duplicates of other cats.
-      data.images = data.images.map((item) =>
-        item.targetType === targetType &&
-        item.targetId === targetId &&
-        item.category === "main"
-          ? { ...item, category: "history" }
-          : item
-      );
-      // Cap history at 12 versions (oldest first).
-      const history = data.images
-        .filter(
-          (item) =>
+      // Overwrite: drop previous main (and any legacy history versions).
+      // Keep "Foto original" extras untouched.
+      data.images = data.images.filter(
+        (item) =>
+          !(
             item.targetType === targetType &&
             item.targetId === targetId &&
-            item.category === "history"
-        )
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-      if (history.length > 12) {
-        const drop = new Set(history.slice(0, history.length - 12).map((h) => h.id));
-        data.images = data.images.filter((item) => !drop.has(item.id));
-      }
+            (item.category === "main" || item.category === "history")
+          )
+      );
     } else if (category === "main" || category === "receipt" || category === "cover") {
       data.images = data.images.filter(
         (item) =>
@@ -1266,8 +1310,11 @@ function compactData(data: InventoryData): InventoryData {
   const seriesIds = new Set(seriesInfo.map((item) => item.id));
   const applications = dedupeBy(data.applications ?? [], (item) => item.id);
   const applicationIds = new Set(applications.map((item) => item.id));
+  const priceLists = dedupeBy(data.priceLists ?? [], (item) => item.id);
   const cleanImages = dedupeImages(
     data.images.filter((image) => {
+      // Drop legacy retouch history — only main + original extras are kept.
+      if (image.category === "history") return false;
       if (image.targetType === "artwork") return artworkIds.has(image.targetId);
       if (image.targetType === "exhibition")
         return exhibitionIdSet.has(image.targetId);
@@ -1362,6 +1409,7 @@ function compactData(data: InventoryData): InventoryData {
     expenses,
     seriesInfo,
     applications,
+    priceLists,
     lookups: uniqueLookups(data.lookups)
   };
 }
@@ -1526,6 +1574,7 @@ function emptyInventory(libraryPath: string): InventoryData {
     expenses: [],
     seriesInfo: [],
     applications: [],
+    priceLists: [],
     textGeneratorExamples: [],
     contactReminders: [],
     inboxNotes: [],
@@ -1553,6 +1602,9 @@ function normalizeRaw(
       : [],
     applications: Array.isArray(raw.applications)
       ? raw.applications.map((item, index) => hydrateApplication(item, index))
+      : [],
+    priceLists: Array.isArray(raw.priceLists)
+      ? raw.priceLists.map((item, index) => hydratePriceList(item, index))
       : [],
     textGeneratorExamples: Array.isArray(raw.textGeneratorExamples)
       ? raw.textGeneratorExamples.map((item, index) =>
@@ -1654,10 +1706,13 @@ function hydrateInboxTodo(
   item: Partial<InboxTodo>,
   index: number
 ): InboxTodo {
+  const dueRaw = String(item.dueDate ?? "").trim();
+  const dueDate = /^\d{2}-\d{2}-\d{4}$/.test(dueRaw) ? dueRaw : "";
   return {
     id: String(item.id || `TODO-${index}`),
     body: String(item.body ?? "").trim(),
     doneAt: String(item.doneAt ?? "").trim(),
+    dueDate,
     createdAt: String(item.createdAt ?? new Date().toISOString())
   };
 }
@@ -1812,6 +1867,84 @@ function hydrateApplication(
     createdAt: item.createdAt || new Date().toISOString(),
     updatedAt: item.updatedAt || new Date().toISOString()
   };
+}
+
+function clampInt(value: unknown, min: number, max: number): number {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+  const raw = String(value ?? "").trim();
+  const hex = raw.replace(/^#/, "");
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex.toLowerCase()}` : fallback;
+}
+
+function hydratePriceList(
+  item: Partial<PriceListDoc>,
+  index: number
+): PriceListDoc {
+  const mode =
+    item.mode === "exhibition"
+      ? "exhibition"
+      : item.mode === "series"
+        ? "series"
+        : "free";
+  const header = String(item.header ?? "").trim();
+  const title = String(item.title ?? "").trim() || header || "Folleto de obras";
+  return {
+    id: item.id || `PL-${index}`,
+    title,
+    mode,
+    exhibitionId: mode === "exhibition" ? String(item.exhibitionId ?? "").trim() : "",
+    seriesName: mode === "series" ? String(item.seriesName ?? "").trim() : "",
+    artworkIds: uniquePreserveOrder(item.artworkIds),
+    priceOverrides: normalizePriceOverrides(item.priceOverrides),
+    header: header || title,
+    subtitle: String(item.subtitle ?? "").trim(),
+    leftHeader: String(item.leftHeader ?? "").trim(),
+    rightHeader: String(item.rightHeader ?? "").trim(),
+    showPrice: item.showPrice !== false,
+    priceBold: item.priceBold !== false,
+    imagesPerPage: clampInt(item.imagesPerPage ?? 4, 2, 6),
+    imageGap: clampInt(item.imageGap ?? 16, 0, 120),
+    frameBorderColor: normalizeHexColor(item.frameBorderColor, "#e4e4e4"),
+    language:
+      item.language === "en" || item.language === "de" || item.language === "es"
+        ? item.language
+        : "es",
+    fonts: {
+      header: String(item.fonts?.header ?? "Georgia").trim() || "Georgia",
+      subtitle: String(item.fonts?.subtitle ?? "Georgia").trim() || "Georgia",
+      body: String(item.fonts?.body ?? "Georgia").trim() || "Georgia"
+    },
+    headerStyle: {
+      bold: item.headerStyle?.bold !== false,
+      italic: item.headerStyle?.italic === true,
+      color: normalizeHexColor(item.headerStyle?.color, "#1c1c1c")
+    },
+    subtitleStyle: {
+      italic: item.subtitleStyle?.italic !== false,
+      color: normalizeHexColor(item.subtitleStyle?.color, "#555555")
+    },
+    createdAt: item.createdAt || new Date().toISOString(),
+    updatedAt: item.updatedAt || new Date().toISOString()
+  };
+}
+
+function normalizePriceOverrides(
+  raw: Record<string, string> | undefined
+): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [id, value] of Object.entries(raw)) {
+    const key = String(id ?? "").trim();
+    const price = String(value ?? "").trim();
+    if (!key || !price) continue;
+    out[key] = price;
+  }
+  return out;
 }
 
 function normalizeSeriesTexts(
