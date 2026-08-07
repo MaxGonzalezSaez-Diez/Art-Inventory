@@ -412,18 +412,13 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-/** Pick a free path in dir. Uses title + artwork id so works never overwrite. */
+/** Pick a free path in dir from the artwork title (title.jpg, title-2.jpg, …). */
 async function uniquePathInDir(
   dir: string,
   baseName: string,
-  extension: string,
-  artworkId?: string
+  extension: string
 ): Promise<string> {
-  const safe = sanitizeName(baseName) || "obra";
-  const idBit = artworkId
-    ? (sanitizeName(artworkId) || artworkId).replace(/[^a-zA-Z0-9_-]/g, "").slice(-8)
-    : "";
-  const stem = idBit ? `${safe}-${idBit}` : safe;
+  const stem = sanitizeName(baseName) || "obra";
   let candidate = path.join(dir, `${stem}.${extension}`);
   if (!(await fileExists(candidate))) return candidate;
   for (let n = 2; n < 1000; n += 1) {
@@ -663,12 +658,7 @@ export async function exportImagesBulk(
         suggestedName: name
       });
 
-      const filePath = await uniquePathInDir(
-        directory,
-        name,
-        extension,
-        item.artworkId
-      );
+      const filePath = await uniquePathInDir(directory, name, extension);
       await writeFile(filePath, encoded.buffer);
       saved.push({
         path: filePath,
