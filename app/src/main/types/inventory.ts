@@ -282,7 +282,9 @@ export interface ContactReminder {
   updatedAt: string;
 }
 
-/** Free-form inbox note, newest first in the UI. */
+/** Free-form inbox note, newest first in the UI.
+ * `body` may be plain text (older notes) or simple HTML (bold / lists).
+ */
 export interface InboxNote {
   id: string;
   body: string;

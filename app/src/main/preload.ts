@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   PriceListPayload
 } from "./pricelist";
@@ -204,9 +204,22 @@ const api = {
     ipcRenderer.invoke("document:open", filePath),
   pickImagePath: (): Promise<{ path: string; dataUrl: string } | null> =>
     ipcRenderer.invoke("image:pickPath"),
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file) || "";
+    } catch {
+      return "";
+    }
+  },
   importImageFromPath: (
     sourcePath: string,
-    targetType: "artwork" | "edition" | "exhibition",
+    targetType:
+      | "artwork"
+      | "edition"
+      | "exhibition"
+      | "expense"
+      | "series"
+      | "application",
     targetId: string,
     category: string
   ): Promise<{ image: unknown; inventory: InventoryData } | null> =>

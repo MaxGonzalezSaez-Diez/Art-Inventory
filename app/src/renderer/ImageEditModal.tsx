@@ -7,7 +7,9 @@ import {
 import {
   autoScanPainting,
   canvasToJpegDataUrl,
+  canvasToPngDataUrl,
   defaultCorners,
+  fullFrameCorners,
   orderCorners,
   warpPaintingPerspective,
   type Point
@@ -187,7 +189,7 @@ export function ImageEditModal({
       try {
         const canvas = warpPaintingPerspective(rawImage, orderCorners(corners));
         previewCornersRef.current = corners;
-        setScannedPreview(canvasToJpegDataUrl(canvas));
+        setScannedPreview(canvasToPngDataUrl(canvas));
       } catch {
         setScannedPreview(null);
       }
@@ -216,6 +218,13 @@ export function ImageEditModal({
     `sepia(${warmth}%)`,
     `hue-rotate(${tint}deg)`
   ].join(" ");
+  const filtersNeutral =
+    brightness === 100 &&
+    contrast === 100 &&
+    saturate === 100 &&
+    warmth === 0 &&
+    tint === 0 &&
+    exposure === 100;
 
   function resetAll() {
     setQuarterTurns(0);
@@ -310,16 +319,15 @@ export function ImageEditModal({
     const stage = straightenStageRef.current;
     if (!stage || !rawImage) return null;
     const rect = stage.getBoundingClientRect();
+    // Allow the true edges (0 … width/height inclusive of last pixel).
+    const maxX = Math.max(0, rawImage.naturalWidth - 1);
+    const maxY = Math.max(0, rawImage.naturalHeight - 1);
     return {
-      x: clamp(
-        ((clientX - rect.left) / rect.width) * rawImage.naturalWidth,
-        0,
-        rawImage.naturalWidth - 1
-      ),
+      x: clamp(((clientX - rect.left) / rect.width) * rawImage.naturalWidth, 0, maxX),
       y: clamp(
         ((clientY - rect.top) / rect.height) * rawImage.naturalHeight,
         0,
-        rawImage.naturalHeight - 1
+        maxY
       )
     };
   }
@@ -428,8 +436,13 @@ export function ImageEditModal({
 
   function resetCorners() {
     if (!rawImage) return;
-    setCorners(defaultCorners(rawImage.naturalWidth, rawImage.naturalHeight));
+    // Full frame — user asked for no crop / all the way to the edges.
+    setCorners(
+      fullFrameCorners(rawImage.naturalWidth, rawImage.naturalHeight)
+    );
     setDetected(false);
+    setScannedPreview(null);
+    previewCornersRef.current = null;
   }
 
   async function acceptScannedAndEdit() {
@@ -442,7 +455,7 @@ export function ImageEditModal({
           rawImage,
           orderCorners(corners)
         );
-        preview = canvasToJpegDataUrl(canvas);
+        preview = canvasToPngDataUrl(canvas);
         setScannedPreview(preview);
       }
       if (!preview) {
@@ -474,11 +487,46 @@ export function ImageEditModal({
     setBusy(true);
     setError("");
     try {
+      const rotationZero = normalizeDeg(rotation) === 0;
+      const cropFull =
+        !cropEnabled ||
+        (crop.x <= 0.0001 &&
+          crop.y <= 0.0001 &&
+          crop.w >= 0.999 &&
+          crop.h >= 0.999);
+      // No color / crop / rotate edits → keep pixels already on the image.
+      // Prefer the current bitmap’s data URL (post-straighten PNG) over another
+      // canvas round-trip, which makes colors look a touch more intense.
+      if (filtersNeutral && rotationZero && cropFull) {
+        const passthrough =
+          image === rawImage
+            ? originalDataUrl
+            : image.src.startsWith("data:")
+              ? image.src
+              : "";
+        if (passthrough) {
+          await onSave({
+            editedDataUrl: passthrough,
+            originalDataUrl,
+            keepOriginalAsExtra:
+              mode === "upload" && passthrough !== originalDataUrl
+          });
+          return;
+        }
+      }
+
       const rotated = document.createElement("canvas");
       rotated.width = natural.width;
       rotated.height = natural.height;
+      // Default canvas (no forced colorSpace) — matches how <img> displays the file.
       const rctx = rotated.getContext("2d");
       if (!rctx) throw new Error("No se pudo preparar el lienzo.");
+      // 1:1 copy — smoothing can add contrast/halo.
+      rctx.imageSmoothingEnabled = false;
+      if (!filtersNeutral) {
+        rctx.fillStyle = "#ffffff";
+        rctx.fillRect(0, 0, rotated.width, rotated.height);
+      }
       drawRotated(rctx, image, rotation);
 
       const activeCrop = cropEnabled ? crop : FULL_CROP;
@@ -492,11 +540,25 @@ export function ImageEditModal({
       out.height = sh;
       const octx = out.getContext("2d");
       if (!octx) throw new Error("No se pudo preparar el lienzo.");
-      octx.filter = filterCss;
+      const scaling =
+        sw !== rotated.width ||
+        sh !== rotated.height ||
+        sx !== 0 ||
+        sy !== 0 ||
+        !rotationZero;
+      octx.imageSmoothingEnabled = scaling;
+      octx.imageSmoothingQuality = "high";
+      if (!filtersNeutral) {
+        octx.fillStyle = "#ffffff";
+        octx.fillRect(0, 0, sw, sh);
+        octx.filter = filterCss;
+      }
       octx.drawImage(rotated, sx, sy, sw, sh, 0, 0, sw, sh);
       octx.filter = "none";
 
-      const dataUrl = out.toDataURL("image/jpeg", 0.92);
+      const dataUrl = filtersNeutral
+        ? canvasToPngDataUrl(out)
+        : canvasToJpegDataUrl(out, 0.98);
       await onSave({
         editedDataUrl: dataUrl,
         originalDataUrl,
@@ -504,6 +566,7 @@ export function ImageEditModal({
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo guardar.");
+    } finally {
       setBusy(false);
     }
   }
@@ -614,23 +677,25 @@ export function ImageEditModal({
                     );
                   })}
                   {(() => {
-                    const cx =
-                      orderedCorners.reduce((sum, p) => sum + p.x, 0) / 4;
-                    const cy =
-                      orderedCorners.reduce((sum, p) => sum + p.y, 0) / 4;
-                    const push =
-                      Math.hypot(
-                        rawImage.naturalWidth,
-                        rawImage.naturalHeight
-                      ) * 0.016;
+                    const maxX = Math.max(0, rawImage.naturalWidth - 1);
+                    const maxY = Math.max(0, rawImage.naturalHeight - 1);
+                    const edgePad = Math.max(
+                      10,
+                      Math.hypot(rawImage.naturalWidth, rawImage.naturalHeight) *
+                        0.012
+                    );
                     const cornerNames = ["tl", "tr", "br", "bl"] as const;
                     return orderedCorners.map((point, index) => {
-                      const ox = point.x - cx;
-                      const oy = point.y - cy;
-                      const len = Math.hypot(ox, oy) || 1;
-                      // Sit just outside the corner so the painting edge stays visible.
-                      const hx = point.x + (ox / len) * push;
-                      const hy = point.y + (oy / len) * push;
+                      // Keep handles on-image so overflow:hidden doesn’t clip
+                      // them when corners sit on the true edges.
+                      let hx = point.x;
+                      let hy = point.y;
+                      if (hx < edgePad) hx = Math.min(point.x + edgePad * 0.35, maxX);
+                      if (hx > maxX - edgePad)
+                        hx = Math.max(point.x - edgePad * 0.35, 0);
+                      if (hy < edgePad) hy = Math.min(point.y + edgePad * 0.35, maxY);
+                      if (hy > maxY - edgePad)
+                        hy = Math.max(point.y - edgePad * 0.35, 0);
                       return (
                         <button
                           key={`corner-${index}`}
@@ -682,7 +747,7 @@ export function ImageEditModal({
                   disabled={!rawImage || busy}
                   onClick={resetCorners}
                 >
-                  Toda la foto
+                  Toda la foto (sin recortar)
                 </button>
               </div>
               {error ? <p className="error-text">{error}</p> : null}
@@ -702,7 +767,7 @@ export function ImageEditModal({
                   <canvas
                     className="image-edit-canvas"
                     ref={canvasRef}
-                    style={{ filter: filterCss }}
+                    style={filtersNeutral ? undefined : { filter: filterCss }}
                   />
                   {cropEnabled ? (
                     <div

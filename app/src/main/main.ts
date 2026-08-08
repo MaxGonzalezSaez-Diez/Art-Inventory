@@ -721,7 +721,13 @@ ipcMain.handle(
   async (
     _event,
     sourcePath: string,
-    targetType: "artwork" | "edition" | "exhibition",
+    targetType:
+      | "artwork"
+      | "edition"
+      | "exhibition"
+      | "expense"
+      | "series"
+      | "application",
     targetId: string,
     category: string
   ) => store().importImage(sourcePath, targetType, targetId, category)
@@ -796,8 +802,18 @@ ipcMain.handle(
             "webp",
             "gif",
             "tiff",
-            "heic"
+            "heic",
+            "mov",
+            "mp4",
+            "m4v",
+            "avi",
+            "mkv",
+            "webm"
           ]
+        },
+        {
+          name: "Videos",
+          extensions: ["mov", "mp4", "m4v", "avi", "mkv", "webm"]
         },
         { name: "Todos los archivos", extensions: ["*"] }
       ]

@@ -148,6 +148,16 @@ const strings = {
   "common.edit": { es: "Editar", en: "Edit", de: "Bearbeiten" },
   "common.back": { es: "Volver", en: "Back", de: "Zurück" },
   "common.add": { es: "Añadir", en: "Add", de: "Hinzufügen" },
+  "common.copied": {
+    es: "Copiado.",
+    en: "Copied.",
+    de: "Kopiert."
+  },
+  "common.clickToCopy": {
+    es: "Pulsa para copiar",
+    en: "Click to copy",
+    de: "Klicken zum Kopieren"
+  },
   "common.remove": { es: "Quitar", en: "Remove", de: "Entfernen" },
   "common.erase": { es: "Borrar", en: "Erase", de: "Löschen" },
   "common.search": { es: "Buscar...", en: "Search...", de: "Suchen..." },
@@ -471,9 +481,24 @@ const strings = {
     de: "Drücke «Bearbeiten», um das Foto zu ändern."
   },
   "artwork.photo.hint.click": {
-    es: "Clic para elegir y recortar.",
-    en: "Click to choose and crop.",
-    de: "Klicken zum Auswählen und Zuschneiden."
+    es: "Clic o arrastra una foto para elegir y recortar.",
+    en: "Click or drag a photo to choose and crop.",
+    de: "Klicken oder Foto ziehen zum Auswählen und Zuschneiden."
+  },
+  "artwork.photo.hint.drop": {
+    es: "También puedes arrastrar una foto aquí.",
+    en: "You can also drag a photo here.",
+    de: "Du kannst auch ein Foto hierher ziehen."
+  },
+  "artwork.error.dropImageOnly": {
+    es: "Solo se pueden soltar imágenes (jpg, png…).",
+    en: "Only images can be dropped (jpg, png…).",
+    de: "Nur Bilder können abgelegt werden (jpg, png…)."
+  },
+  "artwork.error.dropFailed": {
+    es: "No se pudo importar el archivo soltado.",
+    en: "Could not import the dropped file.",
+    de: "Die abgelegte Datei konnte nicht importiert werden."
   },
   "artwork.edition.question": {
     es: "¿Obra única o varias copias?",
@@ -597,6 +622,11 @@ const strings = {
   "artwork.detail.meta.soldBy": { es: "Vendida por", en: "Sold by", de: "Verkauft durch" },
   "artwork.detail.meta.edition": { es: "Edición", en: "Edition", de: "Edition" },
   "artwork.detail.meta.notes": { es: "Notas", en: "Notes", de: "Notizen" },
+  "artwork.detail.copyHint": {
+    es: "Pulsa cualquier dato para copiarlo.",
+    en: "Click any field to copy it.",
+    de: "Tippe auf ein Feld, um es zu kopieren."
+  },
   "artwork.detail.edition.multiple": {
     es: "Varias copias ({count})",
     en: "Multiple copies ({count})",
@@ -629,9 +659,9 @@ const strings = {
     de: "Dokument hinzufügen"
   },
   "artwork.docs.hint": {
-    es: "PDFs, Word, imágenes u otros archivos. Puedes añadir una descripción a cada uno.",
-    en: "PDFs, Word, images, or other files. You can add a description to each.",
-    de: "PDFs, Word, Bilder oder andere Dateien. Du kannst jedem eine Beschreibung geben."
+    es: "PDFs, Word, imágenes, videos (.mov, .mp4…) u otros archivos. Arrastra aquí o pulsa Añadir. Puedes añadir una descripción a cada uno.",
+    en: "PDFs, Word, images, videos (.mov, .mp4…), or other files. Drag here or press Add. You can add a description to each.",
+    de: "PDFs, Word, Bilder, Videos (.mov, .mp4…) oder andere Dateien. Hierher ziehen oder Hinzufügen. Du kannst jedem eine Beschreibung geben."
   },
   "artwork.docs.empty": {
     es: "Aún no hay documentos.",
@@ -679,9 +709,9 @@ const strings = {
     de: "Werk löschen…"
   },
   "artwork.detail.saveImage": {
-    es: "Salvar foto actual en otro tamaño/formato…",
-    en: "Save current photo in another size/format…",
-    de: "Aktuelles Foto in anderer Größe/Format speichern…"
+    es: "Salvar foto…",
+    en: "Save photo…",
+    de: "Foto speichern…"
   },
   "artwork.detail.cert": {
     es: "Generar certificado",
@@ -692,9 +722,9 @@ const strings = {
 
   /* ── Image export modal ─────────────────────────────────────────────── */
   "artwork.export.title": {
-    es: "Salvar foto en otro tamaño/formato",
-    en: "Save photo in another size/format",
-    de: "Foto in anderer Größe/Format speichern"
+    es: "Salvar foto",
+    en: "Save photo",
+    de: "Foto speichern"
   },
   "artwork.export.lead": {
     es: "Elige la foto, el uso y la calidad. Se guarda una copia en la carpeta que indiques.",
@@ -705,6 +735,21 @@ const strings = {
     es: "1 · Elige la foto",
     en: "1 · Choose the photo",
     de: "1 · Foto wählen"
+  },
+  "artwork.export.step1Hint": {
+    es: "Principal o de Documentos.",
+    en: "Main photo or from Documents.",
+    de: "Hauptfoto oder aus Dokumente."
+  },
+  "artwork.export.thumb.main": {
+    es: "Principal",
+    en: "Main",
+    de: "Haupt"
+  },
+  "artwork.export.thumb.doc": {
+    es: "Documento",
+    en: "Document",
+    de: "Dokument"
   },
   "artwork.export.step2": {
     es: "2 · ¿Para qué la quieres?",
@@ -783,14 +828,14 @@ const strings = {
     de: "Bild konnte nicht gespeichert werden."
   },
   "artwork.export.subLead": {
-    es: "Copia para enviar o imprimir. La foto de la ficha no se toca.",
-    en: "A copy to send or print. The photo on the record stays untouched.",
-    de: "Eine Kopie zum Senden oder Drucken. Das Foto im Datensatz bleibt unverändert."
+    es: "Copia para enviar o imprimir (foto principal o imagen de Documentos). La ficha no se toca.",
+    en: "A copy to send or print (main photo or an image from Documents). The record stays untouched.",
+    de: "Kopie zum Senden/Drucken (Hauptfoto oder Bild aus Dokumente). Der Datensatz bleibt unverändert."
   },
   "artwork.export.noPhotos": {
-    es: "Esta obra todavía no tiene fotos. Añade una primero.",
-    en: "This artwork has no photos yet. Add one first.",
-    de: "Dieses Werk hat noch keine Fotos. Füge zuerst eines hinzu."
+    es: "Esta obra no tiene fotos (ni principal ni en Documentos).",
+    en: "This artwork has no photos (neither main nor in Documents).",
+    de: "Dieses Werk hat keine Fotos (weder Hauptfoto noch in Dokumente)."
   },
   "artwork.export.sourcePixels": {
     es: "Foto: {width}×{height} píxeles.",
@@ -2772,9 +2817,9 @@ const strings = {
     de: "Dokument hinzufügen"
   },
   "series.docs.hint": {
-    es: "PDFs, Word, imágenes u otros archivos de la serie. Puedes añadir una descripción corta a cada uno.",
-    en: "PDFs, Word, images, or other series files. You can add a short description to each.",
-    de: "PDFs, Word, Bilder oder andere Seriendateien. Du kannst jedem eine kurze Beschreibung geben."
+    es: "PDFs, Word, imágenes, videos (.mov, .mp4…) u otros archivos de la serie. Arrastra aquí o pulsa Añadir. Puedes añadir una descripción corta a cada uno.",
+    en: "PDFs, Word, images, videos (.mov, .mp4…), or other series files. Drag here or press Add. You can add a short description to each.",
+    de: "PDFs, Word, Bilder, Videos (.mov, .mp4…) oder andere Seriendateien. Hierher ziehen oder Hinzufügen. Du kannst jedem eine kurze Beschreibung geben."
   },
   "series.docs.empty": {
     es: "Sin documentos todavía.",
@@ -2817,6 +2862,11 @@ const strings = {
     es: "Documento añadido.",
     en: "Document added.",
     de: "Dokument hinzugefügt."
+  },
+  "series.toast.docsAdded": {
+    es: "{count} documentos añadidos.",
+    en: "{count} documents added.",
+    de: "{count} Dokumente hinzugefügt."
   },
 
   /* ── Example library ────────────────────────────────────────────────── */
@@ -3099,19 +3149,54 @@ const strings = {
     de: "Alle sind oben als fällig."
   },
   "inbox.notes.lead": {
-    es: "Solo lectura aquí. Nueva nota = ventana.",
-    en: "View only here. New note = window.",
-    de: "Hier nur lesen. Neue Notiz = Fenster."
+    es: "Pulsa una nota para editarla.",
+    en: "Tap a note to edit it.",
+    de: "Tippe eine Notiz an, um sie zu bearbeiten."
   },
   "inbox.notes.modalTitle": {
     es: "Nueva nota",
     en: "New note",
     de: "Neue Notiz"
   },
+  "inbox.notes.editTitle": {
+    es: "Editar nota",
+    en: "Edit note",
+    de: "Notiz bearbeiten"
+  },
   "inbox.notes.viewTitle": {
     es: "Nota",
     en: "Note",
     de: "Notiz"
+  },
+  "inbox.notes.clickToEdit": {
+    es: "Pulsa para editar",
+    en: "Click to edit",
+    de: "Klicken zum Bearbeiten"
+  },
+  "inbox.notes.format": {
+    es: "Formato",
+    en: "Format",
+    de: "Format"
+  },
+  "inbox.notes.bold": {
+    es: "Negrita",
+    en: "Bold",
+    de: "Fett"
+  },
+  "inbox.notes.bullets": {
+    es: "Viñetas",
+    en: "Bullets",
+    de: "Aufzählung"
+  },
+  "inbox.notes.numbers": {
+    es: "Numeración",
+    en: "Numbering",
+    de: "Nummerierung"
+  },
+  "inbox.notes.emptyBody": {
+    es: "(vacía)",
+    en: "(empty)",
+    de: "(leer)"
   },
   "inbox.notes.find": {
     es: "Buscar",
@@ -4208,9 +4293,14 @@ const strings = {
     de: "Bild, Preis und Reihenfolge jedes Werks"
   },
   "pricelist.rowsHint": {
-    es: "Usa «Poner precios» para calcularlos todos a la vez. Luego puedes ajustar cada precio a mano y ordenar con ↑ ↓.",
-    en: "Use «Set prices» to calculate them all at once. Then you can tweak each price by hand and reorder with ↑ ↓.",
-    de: "Mit «Preise setzen» berechnest du alle auf einmal. Danach kannst du jeden Preis manuell anpassen und mit ↑ ↓ sortieren."
+    es: "Usa «Poner precios» para calcularlos todos a la vez. Luego ajusta cada precio y arrastra las obras para ordenarlas.",
+    en: "Use «Set prices» to calculate them all at once. Then tweak each price and drag works to reorder.",
+    de: "Mit «Preise setzen» berechnest du alle auf einmal. Danach Preise anpassen und Werke per Drag & Drop sortieren."
+  },
+  "pricelist.dragHandle": {
+    es: "Arrastrar para ordenar",
+    en: "Drag to reorder",
+    de: "Ziehen zum Sortieren"
   },
   "pricelist.changeImage": {
     es: "Cambiar imagen",
@@ -5604,9 +5694,9 @@ const strings = {
     de: "Werke, die vor dem Startdatum dieser Ausstellung verkauft wurden, erscheinen nicht."
   },
   "exhibition.docs.hint": {
-    es: "Fotos de la sala, catálogos, notas de prensa, PDF o Word. Cada archivo puede llevar una descripción.",
-    en: "Room photos, catalogues, press notes, PDF or Word. Each file can carry a description.",
-    de: "Raumfotos, Kataloge, Pressenotizen, PDF oder Word. Jede Datei kann eine Beschreibung haben."
+    es: "Fotos de la sala, catálogos, videos (.mov, .mp4…), PDF o Word. Cada archivo puede llevar una descripción.",
+    en: "Room photos, catalogues, videos (.mov, .mp4…), PDF or Word. Each file can carry a description.",
+    de: "Raumfotos, Kataloge, Videos (.mov, .mp4…), PDF oder Word. Jede Datei kann eine Beschreibung haben."
   },
   "exhibition.docs.saveFirst": {
     es: "Guarda la exposición para poder añadir documentos y ventas.",

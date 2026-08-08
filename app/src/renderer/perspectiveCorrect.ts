@@ -12,6 +12,20 @@ function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
 }
 
+/** Decode sRGB 0–255 → linear light (fixes oversaturated bilinear warps). */
+function srgb8ToLinear(c: number): number {
+  const x = c / 255;
+  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+}
+
+/** Encode linear light → sRGB 0–255. */
+function linearToSrgb8(c: number): number {
+  const x = clamp(c, 0, 1);
+  const encoded =
+    x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
+  return clamp(Math.round(encoded * 255), 0, 255);
+}
+
 export function defaultCorners(width: number, height: number): Point[] {
   const insetX = width * 0.07;
   const insetY = height * 0.07;
@@ -20,6 +34,18 @@ export function defaultCorners(width: number, height: number): Point[] {
     { x: width - insetX, y: insetY },
     { x: width - insetX, y: height - insetY },
     { x: insetX, y: height - insetY }
+  ];
+}
+
+/** Full image — no crop. Use for «Toda la foto». */
+export function fullFrameCorners(width: number, height: number): Point[] {
+  const maxX = Math.max(0, width - 1);
+  const maxY = Math.max(0, height - 1);
+  return [
+    { x: 0, y: 0 },
+    { x: maxX, y: 0 },
+    { x: maxX, y: maxY },
+    { x: 0, y: maxY }
   ];
 }
 
@@ -565,14 +591,26 @@ function sampleBilinear(
   const i10 = i00 + 4;
   const i01 = i00 + width * 4;
   const i11 = i01 + 4;
+  // Interpolate RGB in linear light — gamma-space sampling looks too intense.
   const out: [number, number, number, number] = [0, 0, 0, 0];
-  for (let c = 0; c < 4; c++) {
-    out[c] =
-      data[i00 + c] * (1 - fx) * (1 - fy) +
-      data[i10 + c] * fx * (1 - fy) +
-      data[i01 + c] * (1 - fx) * fy +
-      data[i11 + c] * fx * fy;
+  for (let c = 0; c < 3; c++) {
+    const v =
+      srgb8ToLinear(data[i00 + c]) * (1 - fx) * (1 - fy) +
+      srgb8ToLinear(data[i10 + c]) * fx * (1 - fy) +
+      srgb8ToLinear(data[i01 + c]) * (1 - fx) * fy +
+      srgb8ToLinear(data[i11 + c]) * fx * fy;
+    out[c] = linearToSrgb8(v);
   }
+  out[3] = clamp(
+    Math.round(
+      data[i00 + 3] * (1 - fx) * (1 - fy) +
+        data[i10 + 3] * fx * (1 - fy) +
+        data[i01 + 3] * (1 - fx) * fy +
+        data[i11 + 3] * fx * fy
+    ),
+    0,
+    255
+  );
   return out;
 }
 
@@ -657,8 +695,13 @@ export function warpPaintingPerspective(
   const srcCanvas = document.createElement("canvas");
   srcCanvas.width = image.naturalWidth;
   srcCanvas.height = image.naturalHeight;
-  const sctx = srcCanvas.getContext("2d", { willReadFrequently: true });
+  const sctx = srcCanvas.getContext("2d", {
+    willReadFrequently: true,
+    colorSpace: "srgb"
+  });
   if (!sctx) throw new Error("No se pudo leer la imagen.");
+  // Exact pixel read — no smoothing before getImageData.
+  sctx.imageSmoothingEnabled = false;
   sctx.drawImage(image, 0, 0);
   const srcData = sctx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
 
@@ -673,7 +716,7 @@ export function warpPaintingPerspective(
   const out = document.createElement("canvas");
   out.width = outW;
   out.height = outH;
-  const octx = out.getContext("2d");
+  const octx = out.getContext("2d", { colorSpace: "srgb" });
   if (!octx) throw new Error("No se pudo crear el lienzo.");
   const outImg = octx.createImageData(outW, outH);
   const pixels = outImg.data;
@@ -695,15 +738,20 @@ export function warpPaintingPerspective(
       pixels[i + 3] = a;
     }
   }
-  if (options?.flattenLighting !== false) {
+  if (options?.flattenLighting === true) {
     flattenLightingInPlace(pixels, outW, outH);
   }
   octx.putImageData(outImg, 0, 0);
   return out;
 }
 
-export function canvasToJpegDataUrl(canvas: HTMLCanvasElement, quality = 0.92) {
+export function canvasToJpegDataUrl(canvas: HTMLCanvasElement, quality = 0.98) {
   return canvas.toDataURL("image/jpeg", quality);
+}
+
+/** Prefer PNG for intermediates so colors aren’t shifted before the edit step. */
+export function canvasToPngDataUrl(canvas: HTMLCanvasElement) {
+  return canvas.toDataURL("image/png");
 }
 
 /** Detect + warp in one step (sync, light — no WASM). */
@@ -717,11 +765,12 @@ export function autoScanPainting(
   canvas: HTMLCanvasElement;
 } {
   const { corners, detected } = detectPaintingCorners(image, click);
+  // Do not auto-flatten lighting — that changes the painting’s real colors.
   const canvas = warpPaintingPerspective(image, corners, {
-    flattenLighting: true
+    flattenLighting: false
   });
   return {
-    dataUrl: canvasToJpegDataUrl(canvas),
+    dataUrl: canvasToPngDataUrl(canvas),
     corners,
     detected,
     canvas

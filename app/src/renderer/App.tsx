@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties,
   type Dispatch,
+  type DragEvent as ReactDragEvent,
   type MouseEvent,
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
@@ -145,8 +146,102 @@ async function importEditedArtworkImage(
     );
   }
 
-  const main = await importOne(dataUrl, "main", "foto.jpg");
+  const main = await importOne(
+    dataUrl,
+    "main",
+    /^data:image\/png/i.test(dataUrl) ? "foto.png" : "foto.jpg"
+  );
   return main;
+}
+
+const DROP_IMAGE_EXTENSIONS = new Set([
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "tiff",
+  "tif",
+  "bmp",
+  "heic"
+]);
+
+function fileExtension(name: string): string {
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+
+function isDropImageFile(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  return DROP_IMAGE_EXTENSIONS.has(fileExtension(file.name));
+}
+
+function pathForDroppedFile(file: File): string {
+  const api = window.inventoryApi as typeof window.inventoryApi & {
+    getPathForFile?: (file: File) => string;
+  };
+  if (typeof api.getPathForFile === "function") {
+    const path = api.getPathForFile(file);
+    if (path) return path;
+  }
+  const legacy = (file as File & { path?: string }).path;
+  return legacy || "";
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("No se pudo leer el archivo."));
+    };
+    reader.onerror = () => reject(reader.error || new Error("No se pudo leer el archivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function filesFromDropEvent(event: ReactDragEvent): File[] {
+  const list = event.dataTransfer?.files;
+  if (!list?.length) return [];
+  return Array.from(list);
+}
+
+function useFileDragOver(enabled = true) {
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+
+  function reset() {
+    depth.current = 0;
+    setOver(false);
+  }
+
+  const handlers = {
+    onDragEnter: (event: ReactDragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!enabled) return;
+      depth.current += 1;
+      setOver(true);
+    },
+    onDragOver: (event: ReactDragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!enabled) return;
+      event.dataTransfer.dropEffect = "copy";
+    },
+    onDragLeave: (event: ReactDragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!enabled) return;
+      depth.current = Math.max(0, depth.current - 1);
+      if (depth.current === 0) setOver(false);
+    },
+    onDropCapture: () => {
+      reset();
+    }
+  };
+
+  return { over, reset, handlers };
 }
 
 type Page =
@@ -1181,7 +1276,15 @@ function ArtworkRow({
       }}
     >
       <div className="thumb">
-        {imageUrl ? <img src={imageUrl} alt="" /> : <span>{t("common.noPhoto")}</span>}
+        {imageUrl ? (
+          <img src={imageUrl} alt="" />
+        ) : image?.absolutePath ? (
+          <span className="thumb-file-icon" title={documentDisplayName(image, "")}>
+            <FileKindIcon kind={fileKindFromName(image.absolutePath)} size={22} />
+          </span>
+        ) : (
+          <span>{t("common.noPhoto")}</span>
+        )}
       </div>
       <div className="title-cell">
         <strong>{artwork.title}</strong>
@@ -1320,6 +1423,7 @@ function ArtworkForm({
     keepOriginalAsExtra?: boolean;
   } | null>(null);
   const [imageEditorSrc, setImageEditorSrc] = useState<string | null>(null);
+  const photoDrop = useFileDragOver(!locked);
 
   useEffect(() => {
     onDirtyChange?.(false);
@@ -1450,6 +1554,19 @@ function ArtworkForm({
     }
   }
 
+  async function acceptDroppedMainImage(file: File) {
+    if (locked || !isDropImageFile(file)) {
+      setError(t("artwork.error.dropImageOnly"));
+      return;
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setImageEditorSrc(dataUrl);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("artwork.error.addPhoto"));
+    }
+  }
+
   function saveEditedImage(result: ImageEditSaveResult) {
     setPendingImage({
       dataUrl: result.editedDataUrl,
@@ -1506,22 +1623,45 @@ function ArtworkForm({
       </div>
 
       <div className="artwork-form-layout">
-        <aside className="artwork-form-photo">
+        <aside
+          className={`artwork-form-photo${photoDrop.over ? " is-file-drag" : ""}`}
+          {...photoDrop.handlers}
+          onDrop={(event) => {
+            if (locked) return;
+            event.preventDefault();
+            event.stopPropagation();
+            photoDrop.reset();
+            const file = filesFromDropEvent(event).find(isDropImageFile);
+            if (file) void acceptDroppedMainImage(file);
+            else if (filesFromDropEvent(event).length > 0) {
+              setError(t("artwork.error.dropImageOnly"));
+            }
+          }}
+        >
           <button
             type="button"
             className={`artwork-photo-frame${
-              pendingImage || imageUrl ? " has-image" : ""
-            }`}
+              pendingImage || imageUrl || image?.absolutePath ? " has-image" : ""
+            }${photoDrop.over ? " is-file-drag" : ""}`}
             onClick={() => {
               if (!locked) void addImage();
             }}
             disabled={locked}
-            title={pendingImage || imageUrl ? t("artwork.photo.change") : t("artwork.photo.add")}
+            title={
+              pendingImage || imageUrl || image?.absolutePath
+                ? t("artwork.photo.change")
+                : t("artwork.photo.add")
+            }
           >
             {pendingImage ? (
               <img src={pendingImage.dataUrl} alt="" />
             ) : imageUrl ? (
               <img src={imageUrl} alt="" />
+            ) : image?.absolutePath ? (
+              <span className="artwork-photo-file-fallback">
+                <FileKindIcon kind={fileKindFromName(image.absolutePath)} size={40} />
+                <span>{documentDisplayName(image, t("common.documentOne"))}</span>
+              </span>
             ) : (
               <span className="artwork-photo-empty">
                 <span className="artwork-photo-plus">+</span>
@@ -2699,21 +2839,39 @@ function formatCm(cm: number): string {
 function ExportThumb({
   image,
   active,
+  label,
   onClick
 }: {
   image: ArtworkImage;
   active: boolean;
+  label?: string;
   onClick: () => void;
 }) {
-  const t = useT();
-  const url = useImageDataUrl(image.absolutePath);
+  const name = documentDisplayName(image, "");
+  const kind = fileKindFromName(name);
+  const showInline = canInlineImagePreview(name);
+  const url = useImageDataUrl(showInline ? image.absolutePath : undefined);
+  const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    setBroken(false);
+  }, [image.id, url]);
+  const showImage = showInline && Boolean(url) && !broken;
   return (
     <button
       type="button"
-      className={`export-thumb${active ? " active" : ""}`}
+      className={`export-thumb${active ? " active" : ""}${
+        showImage ? "" : " is-icon"
+      }`}
       onClick={onClick}
     >
-      {url ? <img src={url} alt="" /> : <span className="muted">…</span>}
+      {showImage ? (
+        <img src={url} alt="" onError={() => setBroken(true)} />
+      ) : (
+        <span className="export-thumb-icon">
+          <FileKindIcon kind={kind} size={28} />
+        </span>
+      )}
+      {label ? <span className="export-thumb-label">{label}</span> : null}
     </button>
   );
 }
@@ -2742,12 +2900,18 @@ function ImageExportModal({
   const t = useT();
   const main = mainImageFor(artwork, inventory);
   const all = inventory.images.filter(
-    (image) => image.targetType === "artwork" && image.targetId === artwork.id
+    (image) =>
+      image.targetType === "artwork" &&
+      image.targetId === artwork.id &&
+      image.absolutePath &&
+      isImageFile(documentDisplayName(image, image.relativePath))
   );
   const ordered = [
-    ...(main ? [main] : []),
+    ...(main && all.some((image) => image.id === main.id) ? [main] : []),
     ...all.filter((image) => image.id !== main?.id)
-  ].filter((image) => image.absolutePath);
+  ];
+  const isMainImage = (image: ArtworkImage) =>
+    Boolean(main && image.id === main.id);
 
   const artworkCmW = Number(artwork.width) || 0;
   const artworkCmH = Number(artwork.height) || 0;
@@ -2946,12 +3110,18 @@ function ImageExportModal({
             <>
               <div className="export-step">
                 <p className="export-step-title">{t("artwork.export.step1")}</p>
+                <p className="muted small-note">{t("artwork.export.step1Hint")}</p>
                 <div className="export-thumb-grid">
                   {ordered.map((image) => (
                     <ExportThumb
                       key={image.id}
                       image={image}
                       active={image.id === selectedId}
+                      label={
+                        isMainImage(image)
+                          ? t("artwork.export.thumb.main")
+                          : t("artwork.export.thumb.doc")
+                      }
                       onClick={() => {
                         setSelectedId(image.id);
                         clearFeedback();
@@ -3797,6 +3967,7 @@ function ArtworkDetail({
     "upload"
   );
   const [imageBusy, setImageBusy] = useState(false);
+  const imageDrop = useFileDragOver(!imageBusy);
   const image = mainImageFor(artwork, inventory);
   const imageUrl = useImageDataUrl(image?.absolutePath);
   const editions = inventory.editions.filter((item) => item.artworkId === artwork.id);
@@ -3812,6 +3983,22 @@ function ArtworkDetail({
       setImageEditorSrc(picked.dataUrl);
     } catch {
       /* ignore */
+    }
+  }
+
+  async function acceptDroppedMainImage(file: File) {
+    if (imageBusy || !isDropImageFile(file)) {
+      onError(t("artwork.error.dropImageOnly"));
+      return;
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setImageEditorMode("upload");
+      setImageEditorSrc(dataUrl);
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : t("artwork.error.addPhoto")
+      );
     }
   }
 
@@ -3958,10 +4145,59 @@ function ArtworkDetail({
     setCertLangOpen(true);
   }
 
+  function copiedToast() {
+    onToast(t("common.copied"));
+  }
+
+  const dimensionsText = (() => {
+    const parts = [artwork.height, artwork.width, artwork.depth].filter(Boolean);
+    if (parts.length === 0) return "";
+    const unit = String(artwork.unit || "").trim();
+    return unit ? `${parts.join(" x ")} ${unit}` : parts.join(" x ");
+  })();
+  const seriesText = seriesLabel(artwork.series, t);
+  const typeText = labelFor(inventory, "artworkType", artwork.type, lang);
+  const statusText = labelFor(inventory, "status", artwork.status, lang);
+  const galleryText =
+    artwork.galleryName || contactName(inventory, artwork.galleryContactId);
+  const soldText = [
+    artwork.soldPrice,
+    artwork.soldToName,
+    artwork.soldDate
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const editionText =
+    artwork.editionMode === "multiple"
+      ? t("artwork.detail.edition.multiple", { count: editions.length })
+      : t("artwork.detail.edition.unique");
+
   return (
     <section className="detail-layout">
-      <div className="detail-image-panel">
-        {imageUrl ? <img src={imageUrl} alt={artwork.title} /> : <div>{t("common.noPhoto")}</div>}
+      <div
+        className={`detail-image-panel${imageDrop.over ? " is-file-drag" : ""}`}
+        {...imageDrop.handlers}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          imageDrop.reset();
+          const file = filesFromDropEvent(event).find(isDropImageFile);
+          if (file) void acceptDroppedMainImage(file);
+          else if (filesFromDropEvent(event).length > 0) {
+            onError(t("artwork.error.dropImageOnly"));
+          }
+        }}
+      >
+        {imageUrl ? (
+          <img src={imageUrl} alt={artwork.title} />
+        ) : image?.absolutePath ? (
+          <div className="detail-file-fallback">
+            <FileKindIcon kind={fileKindFromName(image.absolutePath)} size={48} />
+            <span>{documentDisplayName(image, t("common.documentOne"))}</span>
+          </div>
+        ) : (
+          <div>{t("common.noPhoto")}</div>
+        )}
         <div className="image-panel-actions image-panel-actions-stack">
           <button
             type="button"
@@ -3990,6 +4226,9 @@ function ArtworkDetail({
             {t("artwork.detail.saveImage")}
           </button>
         </div>
+        <p className="muted small-note artwork-photo-hint detail-photo-drop-hint">
+          {t("artwork.photo.hint.drop")}
+        </p>
       </div>
       {imageEditorSrc ? (
         <Suspense fallback={null}>
@@ -4111,8 +4350,20 @@ function ArtworkDetail({
       <div className="detail-panel">
         <div className="detail-header">
           <div>
-            <p className="eyebrow">{artwork.id}</p>
-            <h2>{artwork.title}</h2>
+            <p className="eyebrow">
+              <CopyableValue
+                value={artwork.id}
+                className="copyable-inline"
+                onCopied={copiedToast}
+              />
+            </p>
+            <h2>
+              <CopyableValue
+                value={artwork.title}
+                className="copyable-title"
+                onCopied={copiedToast}
+              />
+            </h2>
           </div>
           <div className="form-head-actions">
             <button
@@ -4154,70 +4405,119 @@ function ArtworkDetail({
         )}
 
         {tab === "info" && (
-          <dl className="metadata">
-            <dt>{t("artwork.detail.meta.series")}</dt>
-            <dd>{seriesLabel(artwork.series, t)}</dd>
-            <dt>{t("artwork.detail.meta.type")}</dt>
-            <dd>{labelFor(inventory, "artworkType", artwork.type, lang)}</dd>
-            <dt>{t("artwork.detail.meta.year")}</dt>
-            <dd>{artwork.yearMade || "-"}</dd>
-            <dt>{t("artwork.detail.meta.dimensions")}</dt>
-            <dd>
-              {[artwork.height, artwork.width, artwork.depth].filter(Boolean).join(" x ") ||
-                "-"}{" "}
-              {artwork.unit}
-            </dd>
-            <dt>{t("artwork.detail.meta.status")}</dt>
-            <dd>
-              <span className={`status-pill st-${slugify(artwork.status)}`}>
-                {labelFor(inventory, "status", artwork.status, lang)}
-              </span>{" "}
-              {overdueMovement(artwork, inventory) && (
-                <RetrievalMark
-                  artwork={artwork}
-                  movement={overdueMovement(artwork, inventory)!}
-                  inventory={inventory}
-                  setInventory={setInventory}
-                />
+          <>
+            <p className="muted small-note detail-copy-hint">
+              {t("artwork.detail.copyHint")}
+            </p>
+            <dl className="metadata">
+              <dt>{t("artwork.detail.meta.series")}</dt>
+              <dd>
+                <CopyableValue value={seriesText} onCopied={copiedToast} />
+              </dd>
+              <dt>{t("artwork.detail.meta.type")}</dt>
+              <dd>
+                <CopyableValue value={typeText} onCopied={copiedToast} />
+              </dd>
+              <dt>{t("artwork.detail.meta.year")}</dt>
+              <dd>
+                <CopyableValue
+                  value={artwork.yearMade || ""}
+                  onCopied={copiedToast}
+                >
+                  {artwork.yearMade || "-"}
+                </CopyableValue>
+              </dd>
+              <dt>{t("artwork.detail.meta.dimensions")}</dt>
+              <dd>
+                <CopyableValue
+                  value={dimensionsText}
+                  onCopied={copiedToast}
+                >
+                  {dimensionsText || "-"}
+                </CopyableValue>
+              </dd>
+              <dt>{t("artwork.detail.meta.status")}</dt>
+              <dd className="metadata-status-dd">
+                <CopyableValue
+                  value={statusText}
+                  className={`status-pill st-${slugify(artwork.status)} copyable-pill`}
+                  onCopied={copiedToast}
+                />{" "}
+                {overdueMovement(artwork, inventory) && (
+                  <RetrievalMark
+                    artwork={artwork}
+                    movement={overdueMovement(artwork, inventory)!}
+                    inventory={inventory}
+                    setInventory={setInventory}
+                  />
+                )}
+              </dd>
+              {artwork.status === "consigned" && (
+                <>
+                  <dt>{t("artwork.detail.meta.gallery")}</dt>
+                  <dd>
+                    <CopyableValue
+                      value={galleryText}
+                      onCopied={copiedToast}
+                    >
+                      {galleryText || "-"}
+                    </CopyableValue>
+                  </dd>
+                </>
               )}
-            </dd>
-            {artwork.status === "consigned" && (
-              <>
-                <dt>{t("artwork.detail.meta.gallery")}</dt>
-                <dd>{artwork.galleryName || contactName(inventory, artwork.galleryContactId)}</dd>
-              </>
-            )}
-            {artwork.soldPrice && (
-              <>
-                <dt>{t("artwork.detail.meta.soldBy")}</dt>
-                <dd>
-                  {artwork.soldPrice}
-                  {artwork.soldToName ? ` · ${artwork.soldToName}` : ""}
-                  {artwork.soldDate ? ` · ${artwork.soldDate}` : ""}
-                </dd>
-              </>
-            )}
-            <dt>{t("artwork.detail.meta.edition")}</dt>
-            <dd>
-              {artwork.editionMode === "multiple"
-                ? t("artwork.detail.edition.multiple", { count: editions.length })
-                : t("artwork.detail.edition.unique")}
-            </dd>
-            <dt>{t("artwork.detail.meta.notes")}</dt>
-            <dd className="notes-display">{artwork.notes || "-"}</dd>
-          </dl>
+              {artwork.soldPrice && (
+                <>
+                  <dt>{t("artwork.detail.meta.soldBy")}</dt>
+                  <dd>
+                    <CopyableValue value={soldText} onCopied={copiedToast} />
+                  </dd>
+                </>
+              )}
+              <dt>{t("artwork.detail.meta.edition")}</dt>
+              <dd>
+                <CopyableValue value={editionText} onCopied={copiedToast} />
+              </dd>
+              <dt>{t("artwork.detail.meta.notes")}</dt>
+              <dd>
+                <CopyableValue
+                  value={artwork.notes || ""}
+                  className="notes-display"
+                  onCopied={copiedToast}
+                >
+                  {artwork.notes || "-"}
+                </CopyableValue>
+              </dd>
+            </dl>
+          </>
         )}
 
         {tab === "info" && artwork.editionMode === "multiple" && editions.length > 0 && (
           <div className="related-block">
             <h3>{t("artwork.detail.copies", { count: editions.length })}</h3>
             <div className="mini-table">
-              {editions.map((edition) => (
-                <div className="mini-row" key={edition.id}>
-                  <strong>{edition.label}</strong>
-                  <span>{labelFor(inventory, "status", edition.status || "not_made", lang)}</span>
-                </div>
-              ))}
+              {editions.map((edition) => {
+                const editionStatus = labelFor(
+                  inventory,
+                  "status",
+                  edition.status || "not_made",
+                  lang
+                );
+                return (
+                  <div className="mini-row" key={edition.id}>
+                    <CopyableValue
+                      value={edition.label}
+                      className="copyable-strong"
+                      onCopied={copiedToast}
+                    >
+                      <strong>{edition.label}</strong>
+                    </CopyableValue>
+                    <CopyableValue
+                      value={editionStatus}
+                      onCopied={copiedToast}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -5311,7 +5611,15 @@ function PickThumb({
   const imageUrl = useImageDataUrl(image?.absolutePath);
   return (
     <span className="pick-thumb">
-      {imageUrl ? <img src={imageUrl} alt={artwork.title} /> : <span>—</span>}
+      {imageUrl ? (
+        <img src={imageUrl} alt={artwork.title} />
+      ) : image?.absolutePath ? (
+        <span className="thumb-file-icon">
+          <FileKindIcon kind={fileKindFromName(image.absolutePath)} />
+        </span>
+      ) : (
+        <span>—</span>
+      )}
     </span>
   );
 }
@@ -5681,13 +5989,102 @@ const IMAGE_EXTENSIONS = [
   "gif",
   "tiff",
   "bmp",
-  "heic"
+  "heic",
+  "heif"
 ];
+
+/** Formats Chromium/Electron usually cannot paint as <img>. */
+const NO_INLINE_IMAGE_PREVIEW = new Set(["heic", "heif", "tif", "tiff"]);
+
+function fileExt(name?: string): string {
+  if (!name) return "";
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
+}
 
 function isImageFile(name?: string): boolean {
   if (!name) return false;
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return IMAGE_EXTENSIONS.includes(ext);
+  return IMAGE_EXTENSIONS.includes(fileExt(name));
+}
+
+function canInlineImagePreview(name?: string): boolean {
+  if (!isImageFile(name)) return false;
+  return !NO_INLINE_IMAGE_PREVIEW.has(fileExt(name));
+}
+
+type FileKind = "image" | "pdf" | "video" | "word" | "sheet" | "file";
+
+function fileKindFromName(name?: string): FileKind {
+  const ext = fileExt(name);
+  if (IMAGE_EXTENSIONS.includes(ext) || NO_INLINE_IMAGE_PREVIEW.has(ext)) {
+    return "image";
+  }
+  if (ext === "pdf") return "pdf";
+  if (["mov", "mp4", "m4v", "avi", "mkv", "webm"].includes(ext)) return "video";
+  if (["doc", "docx", "odt", "rtf"].includes(ext)) return "word";
+  if (["xls", "xlsx", "csv"].includes(ext)) return "sheet";
+  return "file";
+}
+
+function FileKindIcon({
+  kind,
+  size = 16
+}: {
+  kind: FileKind;
+  size?: number;
+}) {
+  const common = {
+    viewBox: "0 0 24 24",
+    width: size,
+    height: size,
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.6,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true
+  };
+  if (kind === "image") {
+    return (
+      <svg {...common} className="file-kind-icon">
+        <rect x="3.5" y="5" width="17" height="14" rx="2" />
+        <circle cx="9" cy="10" r="1.6" fill="currentColor" stroke="none" />
+        <path d="M4.5 16.5 9 12l3 3 3.5-4.5 4 5.5" />
+      </svg>
+    );
+  }
+  if (kind === "pdf") {
+    return (
+      <svg {...common} className="file-kind-icon">
+        <path d="M7 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 5.5 20V5A1.5 1.5 0 0 1 7 3.5z" />
+        <path d="M14 3.5V9h5.5" />
+        <path d="M8.5 14.5h7M8.5 17.5h5" />
+      </svg>
+    );
+  }
+  if (kind === "video") {
+    return (
+      <svg {...common} className="file-kind-icon">
+        <rect x="3.5" y="6" width="13" height="12" rx="2" />
+        <path d="M16.5 10.5 20.5 8v8l-4-2.5z" />
+      </svg>
+    );
+  }
+  if (kind === "word" || kind === "sheet") {
+    return (
+      <svg {...common} className="file-kind-icon">
+        <path d="M7 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 5.5 20V5A1.5 1.5 0 0 1 7 3.5z" />
+        <path d="M14 3.5V9h5.5" />
+        <path d="M8.5 13h7M8.5 16h7M8.5 19h4" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common} className="file-kind-icon">
+      <path d="M7 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 5.5 20V5A1.5 1.5 0 0 1 7 3.5z" />
+      <path d="M14 3.5V9h5.5" />
+    </svg>
+  );
 }
 
 function documentDisplayName(image: ArtworkImage, fallback: string): string {
@@ -5822,10 +6219,16 @@ function DocumentRow({
 }) {
   const t = useT();
   const name = documentDisplayName(image, t("common.documentOne"));
-  const isImage = isImageFile(name);
-  const url = useImageDataUrl(isImage ? image.absolutePath : undefined);
+  const kind = fileKindFromName(name);
+  const showInline = canInlineImagePreview(name);
+  const url = useImageDataUrl(showInline ? image.absolutePath : undefined);
+  const [previewBroken, setPreviewBroken] = useState(false);
   const caption = String(image.caption ?? "").trim();
   const [modal, setModal] = useState<null | "edit" | "view">(null);
+
+  useEffect(() => {
+    setPreviewBroken(false);
+  }, [image.id, url]);
 
   useEffect(() => {
     if (!autoEdit) return;
@@ -5841,22 +6244,25 @@ function DocumentRow({
 
   const preview =
     caption.length > 72 ? `${caption.slice(0, 72).trimEnd()}…` : caption;
+  const showImage = showInline && Boolean(url) && !previewBroken;
 
   return (
     <>
       <div className="doc-row">
         <button
           type="button"
-          className="doc-preview"
+          className={`doc-preview kind-${kind}${showImage ? "" : " is-icon"}`}
           onClick={open}
           title={t("common.open")}
         >
-          {isImage && url ? (
-            <img src={url} alt={name} />
+          {showImage ? (
+            <img
+              src={url}
+              alt={name}
+              onError={() => setPreviewBroken(true)}
+            />
           ) : (
-            <span className="doc-icon">
-              {name.split(".").pop()?.toUpperCase() || "DOC"}
-            </span>
+            <FileKindIcon kind={kind} />
           )}
         </button>
         <button
@@ -5971,6 +6377,7 @@ function ArtworkDocuments({
   const [busy, setBusy] = useState(false);
   const [pickMode, setPickMode] = useState<null | "save" | "remove">(null);
   const [describeId, setDescribeId] = useState<string | null>(null);
+  const docsDrop = useFileDragOver(!busy);
   const documents = inventory.images.filter(
     (image) =>
       image.targetType === "artwork" &&
@@ -5996,6 +6403,48 @@ function ArtworkDocuments({
     }
   }
 
+  async function importDroppedFiles(files: File[]) {
+    if (!files.length) return;
+    setBusy(true);
+    try {
+      let lastImported: ArtworkImage | undefined;
+      let nextInventory: InventoryData | null = null;
+      let failed = 0;
+      for (const file of files) {
+        const sourcePath = pathForDroppedFile(file);
+        if (!sourcePath) {
+          failed += 1;
+          continue;
+        }
+        try {
+          const result = await window.inventoryApi.importImageFromPath(
+            sourcePath,
+            "artwork",
+            artworkId,
+            "document"
+          );
+          if (!result) {
+            failed += 1;
+            continue;
+          }
+          nextInventory = result.inventory;
+          lastImported = result.image as ArtworkImage | undefined;
+        } catch {
+          failed += 1;
+        }
+      }
+      if (nextInventory) {
+        setInventory(nextInventory);
+        setOpen(true);
+        if (lastImported?.id) setDescribeId(lastImported.id);
+      } else if (failed > 0) {
+        /* keep quiet if nothing imported — path API may need restart */
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveCopyOf(image: ArtworkImage) {
     setPickMode(null);
     if (!image.absolutePath) return;
@@ -6012,7 +6461,16 @@ function ArtworkDocuments({
   }
 
   return (
-    <div className={`artwork-docs${open ? " open" : ""}`}>
+    <div
+      className={`artwork-docs${open ? " open" : ""}${docsDrop.over ? " is-file-drag" : ""}`}
+      {...docsDrop.handlers}
+      onDrop={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        docsDrop.reset();
+        void importDroppedFiles(filesFromDropEvent(event));
+      }}
+    >
       <button
         type="button"
         className="series-works-toggle"
@@ -10783,6 +11241,55 @@ async function copyTextToClipboard(text: string, t?: Translate): Promise<void> {
     );
 }
 
+/** Clickable value that copies plain text to the clipboard. */
+function CopyableValue({
+  value,
+  onCopied,
+  className,
+  children
+}: {
+  value: string;
+  onCopied?: () => void;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const t = useT();
+  const text = String(value ?? "").trim();
+  const empty = !text || text === "-";
+  const [flash, setFlash] = useState(false);
+
+  async function copy() {
+    if (empty) return;
+    try {
+      await copyTextToClipboard(text, t);
+      setFlash(true);
+      window.setTimeout(() => setFlash(false), 900);
+      onCopied?.();
+    } catch {
+      /* ignore — toast/errors handled by caller if needed */
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className={[
+        "copyable-value",
+        empty ? "is-empty" : "",
+        flash ? "is-copied" : "",
+        className || ""
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      onClick={() => void copy()}
+      disabled={empty}
+      title={empty ? undefined : t("common.clickToCopy")}
+    >
+      {children ?? text}
+    </button>
+  );
+}
+
 /** Accent- and case-insensitive haystack for the example searches. */
 function searchKey(value: string): string {
   return value
@@ -12113,6 +12620,26 @@ function moveIdInList(ids: string[], index: number, dir: -1 | 1): string[] {
   return next;
 }
 
+function reorderIdInList(
+  ids: string[],
+  fromIndex: number,
+  toIndex: number
+): string[] {
+  if (
+    fromIndex === toIndex ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= ids.length ||
+    toIndex >= ids.length
+  ) {
+    return ids;
+  }
+  const next = [...ids];
+  const [item] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, item);
+  return next;
+}
+
 function moveIdInListById(ids: string[], id: string, dir: -1 | 1): string[] {
   const index = ids.indexOf(id);
   if (index < 0) return ids;
@@ -12222,6 +12749,209 @@ function RichMenuSelect({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function looksLikeHtml(value: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(value);
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Keep only safe tags for inbox notes (bold + lists). */
+function sanitizeNoteHtml(html: string): string {
+  if (!html) return "";
+  let out = String(html);
+  out = out.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
+  out = out.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "");
+  out = out.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  out = out.replace(/javascript:/gi, "");
+  out = out.replace(
+    /<\/?(?!\/?(?:b|strong|i|em|br|p|div|ul|ol|li|span)\b)[^>]*>/gi,
+    ""
+  );
+  out = out.replace(/\sstyle\s*=\s*("[^"]*"|'[^']*')/gi, "");
+  out = out.replace(/\sclass\s*=\s*("[^"]*"|'[^']*')/gi, "");
+  return out;
+}
+
+function noteBodyToEditorHtml(body: string): string {
+  const raw = String(body ?? "");
+  if (!raw.trim()) return "<p><br></p>";
+  if (looksLikeHtml(raw)) {
+    const cleaned = sanitizeNoteHtml(raw).trim();
+    return cleaned || "<p><br></p>";
+  }
+  return escapeHtmlText(raw)
+    .split(/\r\n|\r|\n/)
+    .map((line) => `<p>${line || "<br>"}</p>`)
+    .join("");
+}
+
+function stripNoteHtml(html: string): string {
+  return String(html ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function isNoteBodyEmpty(html: string): boolean {
+  return !stripNoteHtml(html);
+}
+
+/** Compact note editor: bold, bullets, numbered list. */
+function SimpleNoteEditor({
+  value,
+  onChange,
+  placeholder
+}: {
+  value: string;
+  onChange: (html: string) => void;
+  placeholder?: string;
+}) {
+  const t = useT();
+  const editorRef = useRef<HTMLDivElement>(null);
+  const onChangeRef = useRef(onChange);
+  const savedRangeRef = useRef<Range | null>(null);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    el.innerHTML = noteBodyToEditorHtml(value);
+    try {
+      document.execCommand("defaultParagraphSeparator", false, "p");
+    } catch {
+      /* ignore */
+    }
+    // Mount only — avoid wiping while typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function emit() {
+    const html = sanitizeNoteHtml(editorRef.current?.innerHTML ?? "");
+    onChangeRef.current(html);
+  }
+
+  function rememberSelection() {
+    const el = editorRef.current;
+    const selection = window.getSelection();
+    if (!el || !selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (el.contains(range.commonAncestorContainer)) {
+      savedRangeRef.current = range.cloneRange();
+    }
+  }
+
+  function restoreSelection() {
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const saved = savedRangeRef.current;
+    if (saved) {
+      try {
+        if (el.contains(saved.commonAncestorContainer)) {
+          selection.removeAllRanges();
+          selection.addRange(saved);
+          return;
+        }
+      } catch {
+        /* detached range */
+      }
+    }
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function run(cmd: string) {
+    restoreSelection();
+    try {
+      document.execCommand("styleWithCSS", false, "false");
+    } catch {
+      /* ignore */
+    }
+    document.execCommand(cmd, false);
+    rememberSelection();
+    emit();
+  }
+
+  return (
+    <div className="note-editor">
+      <div className="note-toolbar" role="toolbar" aria-label={t("inbox.notes.format")}>
+        <button
+          type="button"
+          className="note-tool"
+          title={t("inbox.notes.bold")}
+          aria-label={t("inbox.notes.bold")}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            run("bold");
+          }}
+        >
+          <strong>B</strong>
+        </button>
+        <button
+          type="button"
+          className="note-tool"
+          title={t("inbox.notes.bullets")}
+          aria-label={t("inbox.notes.bullets")}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            run("insertUnorderedList");
+          }}
+        >
+          •
+        </button>
+        <button
+          type="button"
+          className="note-tool"
+          title={t("inbox.notes.numbers")}
+          aria-label={t("inbox.notes.numbers")}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            run("insertOrderedList");
+          }}
+        >
+          1.
+        </button>
+      </div>
+      <div
+        ref={editorRef}
+        className="note-editor-body"
+        contentEditable
+        suppressContentEditableWarning
+        role="textbox"
+        aria-multiline="true"
+        data-placeholder={placeholder || t("inbox.notePlaceholder")}
+        onInput={emit}
+        onBlur={emit}
+        onKeyUp={rememberSelection}
+        onMouseUp={rememberSelection}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
+            event.preventDefault();
+            run("bold");
+          }
+        }}
+      />
     </div>
   );
 }
@@ -12788,6 +13518,7 @@ function SeriesDetailPanel({
   );
   const [docsDescribeId, setDocsDescribeId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const docsDrop = useFileDragOver(!docsBusy);
 
   const docs = inventory.images.filter(
     (image) =>
@@ -12873,6 +13604,50 @@ function SeriesDetailPanel({
       const imported = result.image as ArtworkImage | undefined;
       if (imported?.id) setDocsDescribeId(imported.id);
       onToast(t("series.toast.docAdded"));
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : t("common.error.save")
+      );
+    } finally {
+      setDocsBusy(false);
+    }
+  }
+
+  async function importDroppedDocuments(files: File[]) {
+    if (!files.length) return;
+    setDocsBusy(true);
+    try {
+      const seriesId = await ensureSeriesId();
+      if (!seriesId) return;
+      let lastImported: ArtworkImage | undefined;
+      let nextInventory: InventoryData | null = null;
+      let importedCount = 0;
+      for (const file of files) {
+        const sourcePath = pathForDroppedFile(file);
+        if (!sourcePath) continue;
+        const result = await window.inventoryApi.importImageFromPath(
+          sourcePath,
+          "series",
+          seriesId,
+          "document"
+        );
+        if (!result) continue;
+        nextInventory = result.inventory;
+        lastImported = result.image as ArtworkImage | undefined;
+        importedCount += 1;
+      }
+      if (nextInventory) {
+        setInventory(nextInventory);
+        setDocsOpen(true);
+        if (lastImported?.id) setDocsDescribeId(lastImported.id);
+        onToast(
+          importedCount > 1
+            ? t("series.toast.docsAdded", { count: importedCount })
+            : t("series.toast.docAdded")
+        );
+      } else {
+        onError(t("artwork.error.dropFailed"));
+      }
     } catch (error) {
       onError(
         error instanceof Error ? error.message : t("common.error.save")
@@ -12979,7 +13754,18 @@ function SeriesDetailPanel({
         </div>
       )}
 
-      <div className={`artwork-docs${docsOpen ? " open" : ""}`}>
+      <div
+        className={`artwork-docs${docsOpen ? " open" : ""}${
+          docsDrop.over ? " is-file-drag" : ""
+        }`}
+        {...docsDrop.handlers}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          docsDrop.reset();
+          void importDroppedDocuments(filesFromDropEvent(event));
+        }}
+      >
         <button
           type="button"
           className="series-works-toggle"
@@ -13900,14 +14686,16 @@ function InboxPage({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [draftTodo, setDraftTodo] = useState("");
-  const [noteModalOpen, setNoteModalOpen] = useState(false);
-  const [draftNote, setDraftNote] = useState("");
+  const [noteDraft, setNoteDraft] = useState<{
+    id?: string;
+    body: string;
+    createdAt?: string;
+  } | null>(null);
   const [noteFindOpen, setNoteFindOpen] = useState(false);
   const [noteSearch, setNoteSearch] = useState("");
   const [noteSort, setNoteSort] = useState<
     "newest" | "oldest" | "longest" | "shortest" | "alpha"
   >("newest");
-  const [viewingNoteId, setViewingNoteId] = useState<string | null>(null);
   const [reminderDraft, setReminderDraft] = useState<ReminderDraft | null>(
     null
   );
@@ -14209,28 +14997,44 @@ function InboxPage({
   }
 
   function openNewNote() {
-    setDraftNote("");
-    setNoteModalOpen(true);
+    setNoteDraft({ body: "" });
+    setCollapsed((current) => ({ ...current, notes: false }));
+  }
+
+  function openEditNote(note: InboxNote) {
+    setNoteDraft({
+      id: note.id,
+      body: note.body,
+      createdAt: note.createdAt
+    });
   }
 
   function saveNoteFromModal() {
-    const body = draftNote.trim();
-    if (!body) return;
-    setNotes((current) => [
-      {
-        id: `NOTE-${Date.now()}`,
-        body,
-        createdAt: new Date().toISOString()
-      },
-      ...current
-    ]);
-    setDraftNote("");
-    setNoteModalOpen(false);
+    if (!noteDraft) return;
+    const body = sanitizeNoteHtml(noteDraft.body);
+    if (isNoteBodyEmpty(body)) return;
+    if (noteDraft.id) {
+      setNotes((current) =>
+        current.map((note) =>
+          note.id === noteDraft.id ? { ...note, body } : note
+        )
+      );
+    } else {
+      setNotes((current) => [
+        {
+          id: `NOTE-${Date.now()}`,
+          body,
+          createdAt: new Date().toISOString()
+        },
+        ...current
+      ]);
+    }
+    setNoteDraft(null);
   }
 
   function removeNote(id: string) {
-    setNotes((current) => current.filter((item) => item.id !== id));
-    if (viewingNoteId === id) setViewingNoteId(null);
+    setNotes((current) => current.filter((note) => note.id !== id));
+    if (noteDraft?.id === id) setNoteDraft(null);
   }
 
   const sortedReminders = [...reminders].sort(
@@ -14254,26 +15058,29 @@ function InboxPage({
     });
   const weekItemCount = weekReminders.length + weekTodos.length;
   const visibleNotes = [...notes]
-    .filter((note) => textMatchesKeywords(note.body, noteSearch))
+    .filter((note) => textMatchesKeywords(stripNoteHtml(note.body), noteSearch))
     .sort((a, b) => {
       switch (noteSort) {
         case "oldest":
           return a.createdAt.localeCompare(b.createdAt);
         case "longest":
-          return b.body.length - a.body.length;
+          return (
+            stripNoteHtml(b.body).length - stripNoteHtml(a.body).length
+          );
         case "shortest":
-          return a.body.length - b.body.length;
+          return (
+            stripNoteHtml(a.body).length - stripNoteHtml(b.body).length
+          );
         case "alpha":
-          return a.body.localeCompare(b.body, lang);
+          return stripNoteHtml(a.body).localeCompare(
+            stripNoteHtml(b.body),
+            lang
+          );
         case "newest":
         default:
           return b.createdAt.localeCompare(a.createdAt);
       }
     });
-  const viewingNote =
-    viewingNoteId == null
-      ? null
-      : notes.find((note) => note.id === viewingNoteId) ?? null;
 
   function renderDueCard(reminder: ContactReminder) {
     const due = reminderDueInfo(reminder);
@@ -14702,10 +15509,11 @@ function InboxPage({
                       <button
                         type="button"
                         className="inbox-note-preview"
-                        onClick={() => setViewingNoteId(note.id)}
+                        onClick={() => openEditNote(note)}
+                        title={t("inbox.notes.clickToEdit")}
                       >
                         <span className="inbox-note-preview-text">
-                          {note.body}
+                          {stripNoteHtml(note.body) || t("inbox.notes.emptyBody")}
                         </span>
                         <span className="muted small-note">
                           {shortDate(note.createdAt, lang)}
@@ -14794,85 +15602,71 @@ function InboxPage({
         </div>
       ) : null}
 
-      {viewingNote ? (
+      {noteDraft ? (
         <div
           className="modal-backdrop"
-          onClick={() => setViewingNoteId(null)}
+          onClick={() => setNoteDraft(null)}
         >
           <div
             className="modal confirm-modal inbox-compose-modal"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="modal-head">
-              <h3>{t("inbox.notes.viewTitle")}</h3>
+              <h3>
+                {noteDraft.id
+                  ? t("inbox.notes.editTitle")
+                  : t("inbox.notes.modalTitle")}
+              </h3>
               <button
                 type="button"
                 className="ghost small"
-                onClick={() => setViewingNoteId(null)}
+                onClick={() => setNoteDraft(null)}
               >
                 {t("common.close")}
               </button>
             </div>
-            <p className="muted small-note">
-              {shortDate(viewingNote.createdAt, lang)}
-            </p>
-            <p className="inbox-note-full">{viewingNote.body}</p>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="ghost danger"
-                onClick={() => removeNote(viewingNote.id)}
-              >
-                {t("common.erase")}
-              </button>
-              <button type="button" onClick={() => setViewingNoteId(null)}>
-                {t("common.close")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {noteModalOpen ? (
-        <div className="modal-backdrop" onClick={() => setNoteModalOpen(false)}>
-          <div
-            className="modal confirm-modal inbox-compose-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-head">
-              <h3>{t("inbox.notes.modalTitle")}</h3>
-              <button
-                type="button"
-                className="ghost small"
-                onClick={() => setNoteModalOpen(false)}
-              >
-                {t("common.close")}
-              </button>
-            </div>
-            <label className="field">
-              {t("inbox.notePlaceholder")}
-              <textarea
-                rows={8}
-                className="textgen-resizable"
-                value={draftNote}
-                autoFocus
-                onChange={(event) => setDraftNote(event.target.value)}
+            {noteDraft.createdAt ? (
+              <p className="muted small-note">
+                {shortDate(noteDraft.createdAt, lang)}
+              </p>
+            ) : null}
+            <div className="field note-editor-field">
+              <span className="sr-only">{t("inbox.notePlaceholder")}</span>
+              <SimpleNoteEditor
+                key={noteDraft.id ?? "new-note"}
+                value={noteDraft.body}
+                placeholder={t("inbox.notePlaceholder")}
+                onChange={(html) =>
+                  setNoteDraft((current) =>
+                    current ? { ...current, body: html } : current
+                  )
+                }
               />
-            </label>
+            </div>
             <div className="modal-actions">
+              {noteDraft.id ? (
+                <button
+                  type="button"
+                  className="ghost danger"
+                  onClick={() => removeNote(noteDraft.id!)}
+                >
+                  {t("common.erase")}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setNoteDraft(null)}
+                >
+                  {t("common.cancel")}
+                </button>
+              )}
               <button
                 type="button"
-                className="ghost"
-                onClick={() => setNoteModalOpen(false)}
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                disabled={!draftNote.trim()}
+                disabled={isNoteBodyEmpty(noteDraft.body)}
                 onClick={saveNoteFromModal}
               >
-                {t("inbox.addNote")}
+                {noteDraft.id ? t("common.save") : t("common.add")}
               </button>
             </div>
           </div>
@@ -15021,7 +15815,9 @@ function InboxPage({
             </div>
             <label className="field">
               {t("inbox.reminderNote")}
-              <input
+              <textarea
+                rows={3}
+                className="textgen-resizable"
                 value={reminderDraft.note}
                 onChange={(event) =>
                   setReminderDraft((current) =>
@@ -18266,6 +19062,8 @@ function PriceListEditor({
     return 48;
   });
   const [previewZoom, setPreviewZoom] = useState(1);
+  const [draggingRowId, setDraggingRowId] = useState<string | null>(null);
+  const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
   const splitDragging = useRef(false);
 
   function markDirty() {
@@ -18783,22 +19581,83 @@ function PriceListEditor({
               </div>
               <p className="muted small-note">{t("pricelist.rowsHint")}</p>
               <div className="pl-row-list">
-                {selectedIds.map((id, index) => {
+                {selectedIds.map((id) => {
                   const art = artworkById.get(id);
                   if (!art) return null;
                   const price = listedPriceFor(id);
                   return (
                     <div
-                      className={`pl-row-item${mode === "free" ? " has-remove" : ""}`}
+                      className={`pl-row-item${mode === "free" ? " has-remove" : ""}${
+                        draggingRowId === id ? " is-dragging" : ""
+                      }${
+                        dragOverRowId === id && draggingRowId !== id
+                          ? " is-drop-target"
+                          : ""
+                      }`}
                       key={id}
-                    >
-                      <OrderButtons
-                        index={index}
-                        total={selectedIds.length}
-                        onMove={(dir) =>
-                          setSelectedIds(moveIdInList(selectedIds, index, dir))
+                      onDragOver={(event) => {
+                        if (!draggingRowId || draggingRowId === id) return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        if (dragOverRowId !== id) setDragOverRowId(id);
+                      }}
+                      onDragLeave={(event) => {
+                        if (
+                          event.currentTarget.contains(
+                            event.relatedTarget as Node | null
+                          )
+                        ) {
+                          return;
                         }
-                      />
+                        if (dragOverRowId === id) setDragOverRowId(null);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const fromId =
+                          draggingRowId ||
+                          event.dataTransfer.getData("text/plain");
+                        if (!fromId || fromId === id) {
+                          setDraggingRowId(null);
+                          setDragOverRowId(null);
+                          return;
+                        }
+                        const from = selectedIds.indexOf(fromId);
+                        const to = selectedIds.indexOf(id);
+                        if (from >= 0 && to >= 0 && from !== to) {
+                          setSelectedIds(
+                            reorderIdInList(selectedIds, from, to)
+                          );
+                        }
+                        setDraggingRowId(null);
+                        setDragOverRowId(null);
+                      }}
+                    >
+                      <span
+                        className="pl-row-drag"
+                        draggable
+                        role="button"
+                        tabIndex={0}
+                        title={t("pricelist.dragHandle")}
+                        aria-label={t("pricelist.dragHandle")}
+                        onDragStart={(event) => {
+                          setDraggingRowId(id);
+                          setDragOverRowId(null);
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", id);
+                          const row = event.currentTarget.closest(
+                            ".pl-row-item"
+                          ) as HTMLElement | null;
+                          if (row) {
+                            event.dataTransfer.setDragImage(row, 12, 16);
+                          }
+                        }}
+                        onDragEnd={() => {
+                          setDraggingRowId(null);
+                          setDragOverRowId(null);
+                        }}
+                      >
+                        ⋮⋮
+                      </span>
                       <div className="pl-row-main">
                         <span className="pl-row-title" title={art.title}>
                           <bdi>{art.title}</bdi>
@@ -20080,7 +20939,7 @@ function useImageDataUrl(filePath?: string) {
   const [imageUrl, setImageUrl] = useState("");
   useEffect(() => {
     let cancelled = false;
-    if (!filePath) {
+    if (!filePath || !canInlineImagePreview(filePath)) {
       setImageUrl("");
       return;
     }

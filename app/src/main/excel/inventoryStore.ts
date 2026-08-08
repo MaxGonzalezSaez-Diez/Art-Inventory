@@ -1695,11 +1695,32 @@ function hydrateInboxNote(
   item: Partial<InboxNote>,
   index: number
 ): InboxNote {
+  const raw = String(item.body ?? "");
+  const body = /<\/?[a-z][\s\S]*>/i.test(raw)
+    ? sanitizeStoredNoteHtml(raw)
+    : raw.trim();
   return {
     id: String(item.id || `NOTE-${index}`),
-    body: String(item.body ?? "").trim(),
+    body,
     createdAt: String(item.createdAt ?? new Date().toISOString())
   };
+}
+
+/** Main-process sanitizer (keep in sync with renderer note tags). */
+function sanitizeStoredNoteHtml(html: string): string {
+  if (!html) return "";
+  let out = String(html);
+  out = out.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
+  out = out.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "");
+  out = out.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  out = out.replace(/javascript:/gi, "");
+  out = out.replace(
+    /<\/?(?!\/?(?:b|strong|i|em|br|p|div|ul|ol|li|span)\b)[^>]*>/gi,
+    ""
+  );
+  out = out.replace(/\sstyle\s*=\s*("[^"]*"|'[^']*')/gi, "");
+  out = out.replace(/\sclass\s*=\s*("[^"]*"|'[^']*')/gi, "");
+  return out.trim();
 }
 
 function hydrateInboxTodo(
