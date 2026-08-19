@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   PriceListPayload
 } from "./pricelist";
+import type { GeneratedPdfResult } from "./pdfImages";
 import type {
   BulkImageExportOptions,
   BulkImageExportResult,
@@ -59,7 +60,7 @@ const api = {
     ipcRenderer.invoke("exhibition:save", input, artworkIds, listedPrices ?? {}),
   generatePriceList: (
     payload: PriceListPayload
-  ): Promise<string | null> =>
+  ): Promise<GeneratedPdfResult | null> =>
     ipcRenderer.invoke("pricelist:generate", payload),
   generateCertificateOfAuthenticity: (payload: {
     title: string;
@@ -145,7 +146,7 @@ const api = {
     ipcRenderer.invoke("pricelist:delete", priceListId),
   generateApplicationPdf: (
     payload: ApplicationPdfPayload
-  ): Promise<string | null> =>
+  ): Promise<GeneratedPdfResult | null> =>
     ipcRenderer.invoke("application:generatePdf", payload),
   exportFinancialsSheet: (payload: {
     filename: string;

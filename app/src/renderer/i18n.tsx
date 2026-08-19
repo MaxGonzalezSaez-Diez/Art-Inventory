@@ -2810,6 +2810,16 @@ const strings = {
     en: "Remove this text",
     de: "Diesen Text entfernen"
   },
+  "series.texts.editTitle": {
+    es: "Editar texto",
+    en: "Edit text",
+    de: "Text bearbeiten"
+  },
+  "series.texts.emptyBody": {
+    es: "Sin texto todavía.",
+    en: "No text yet.",
+    de: "Noch kein Text."
+  },
   "series.docs.title": { es: "Documentos", en: "Documents", de: "Dokumente" },
   "series.docs.add": {
     es: "Añadir documento",
@@ -3879,9 +3889,34 @@ const strings = {
     de: "Bewerbung gespeichert."
   },
   "application.toast.pdfDone": {
+    es: "PDF generado ({size}).",
+    en: "PDF generated ({size}).",
+    de: "PDF erstellt ({size})."
+  },
+  "application.toast.pdfDoneSimple": {
     es: "PDF generado.",
     en: "PDF generated.",
     de: "PDF erstellt."
+  },
+  "pdf.maxMb.label": {
+    es: "Peso máximo (MB)",
+    en: "Max size (MB)",
+    de: "Max. Größe (MB)"
+  },
+  "pdf.maxMb.hint": {
+    es: "Las fotos se comprimen al generar. Vacío = sin tope. Para email, 8 suele ir bien.",
+    en: "Photos are compressed on export. Empty = no cap. For email, 8 usually works.",
+    de: "Fotos werden beim Export komprimiert. Leer = kein Limit. Für E-Mail passt oft 8."
+  },
+  "pdf.maxMb.none": {
+    es: "sin tope",
+    en: "no cap",
+    de: "kein Limit"
+  },
+  "pdf.toast.over": {
+    es: "PDF guardado ({size}). No se pudo bajar de {max} MB.",
+    en: "PDF saved ({size}). Could not get under {max} MB.",
+    de: "PDF gespeichert ({size}). Unter {max} MB nicht möglich."
   },
   "application.pdf.works": { es: "Obras", en: "Works", de: "Werke" },
   "application.pdf.aboutWorks": {
@@ -4167,6 +4202,31 @@ const strings = {
     en: "Bold price",
     de: "Preis fett"
   },
+  "pricelist.field.boldText": {
+    es: "Texto en negrita",
+    en: "Bold text",
+    de: "Text fett"
+  },
+  "pricelist.style.letterSizes": {
+    es: "Tamaños de letra",
+    en: "Letter sizes",
+    de: "Schriftgrößen"
+  },
+  "pricelist.field.titleSize": {
+    es: "Título",
+    en: "Title",
+    de: "Titel"
+  },
+  "pricelist.field.textSize": {
+    es: "Texto",
+    en: "Text",
+    de: "Text"
+  },
+  "pricelist.field.priceSize": {
+    es: "Precio",
+    en: "Price",
+    de: "Preis"
+  },
   "pricelist.preview.title": {
     es: "Vista previa · {title}",
     en: "Preview · {title}",
@@ -4193,9 +4253,14 @@ const strings = {
     de: "Wähle mindestens ein Werk."
   },
   "pricelist.toast.done": {
-    es: "Lista generada (PDF).",
-    en: "List generated (PDF).",
-    de: "Liste erstellt (PDF)."
+    es: "Lista generada ({size}).",
+    en: "List generated ({size}).",
+    de: "Liste erstellt ({size})."
+  },
+  "pricelist.toast.doneSimple": {
+    es: "Lista generada.",
+    en: "List generated.",
+    de: "Liste erstellt."
   },
   "pricelist.error.generate": {
     es: "No se pudo generar la lista.",
@@ -5773,8 +5838,9 @@ export function translate(
   key: StringKey,
   vars?: Record<string, string | number>
 ): string {
-  const entry = strings[key] as Entry;
-  const raw = entry[lang] || entry.es;
+  const entry = strings[key] as Entry | undefined;
+  if (!entry) return String(key);
+  const raw = entry[lang] || entry.es || String(key);
   return interpolate(raw, vars);
 }
 
@@ -5941,7 +6007,7 @@ export function lookupLabel(
   fallback?: string
 ): string {
   const key = `${category}:${value}` as LookupLabelKey;
-  const entry = (LOOKUP_LABELS as Record<string, Entry>)[key];
+  const entry = (LOOKUP_LABELS as Record<string, Entry | undefined>)[key];
   if (!entry) return fallback ?? value;
   return entry[lang] || entry.es || fallback || value;
 }

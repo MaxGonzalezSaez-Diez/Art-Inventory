@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "fs/promises";
+import { access, copyFile, mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 import type {
@@ -671,6 +671,16 @@ export class InventoryStore {
       rightHeader: String(input.rightHeader ?? "").trim(),
       showPrice: input.showPrice !== false,
       priceBold: input.priceBold !== false,
+      titleFontSize: clampFontSize(
+        input.titleFontSize ?? existing?.titleFontSize,
+        15
+      ),
+      textFontSize: clampFontSize(
+        input.textFontSize ?? existing?.textFontSize,
+        12.5
+      ),
+      priceFontSize: resolvePriceFontSize(input, existing),
+      textBold: input.textBold === true,
       imagesPerPage: clampInt(input.imagesPerPage ?? existing?.imagesPerPage ?? 4, 2, 6),
       imageGap: clampInt(input.imageGap ?? existing?.imageGap ?? 16, 0, 120),
       frameBorderColor: normalizeHexColor(
@@ -796,10 +806,22 @@ export class InventoryStore {
     category = "main"
   ): Promise<ImportedImage> {
     const extension = path.extname(sourcePath) || ".jpg";
-    const buffer = await readFile(sourcePath);
-    return this.importImageBuffer(
-      buffer,
-      extension,
+    const data = await this.load();
+    const now = new Date().toISOString();
+    const relativePath = this.nextImportedRelativePath(
+      targetType,
+      targetId,
+      extension
+    );
+    const destination = path.join(this.libraryPath, relativePath);
+    await mkdir(path.dirname(destination), { recursive: true });
+    // Copy on disk — videos (.mov) are often hundreds of MB and must not
+    // be loaded into RAM as a Buffer.
+    await copyFile(sourcePath, destination);
+    return this.registerImportedFile(
+      data,
+      now,
+      relativePath,
       targetType,
       targetId,
       category,
@@ -847,6 +869,32 @@ export class InventoryStore {
   ): Promise<ImportedImage> {
     const data = await this.load();
     const now = new Date().toISOString();
+    const relativePath = this.nextImportedRelativePath(
+      targetType,
+      targetId,
+      extension
+    );
+    const destination = path.join(this.libraryPath, relativePath);
+
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, buffer);
+
+    return this.registerImportedFile(
+      data,
+      now,
+      relativePath,
+      targetType,
+      targetId,
+      category,
+      originalName
+    );
+  }
+
+  private nextImportedRelativePath(
+    targetType: "artwork" | "edition" | "exhibition" | "expense" | "series" | "application",
+    targetId: string,
+    extension: string
+  ): string {
     const folder =
       targetType === "edition"
         ? "images/editions"
@@ -859,13 +907,19 @@ export class InventoryStore {
               : targetType === "application"
                 ? "images/applications"
                 : "images/originals";
-    const fileName = `${targetId}-${Date.now()}${extension}`;
-    const relativePath = path.join(folder, fileName);
-    const destination = path.join(this.libraryPath, relativePath);
+    const ext = extension.startsWith(".") ? extension : `.${extension}`;
+    return path.join(folder, `${targetId}-${Date.now()}${ext}`);
+  }
 
-    await mkdir(path.dirname(destination), { recursive: true });
-    await writeFile(destination, buffer);
-
+  private async registerImportedFile(
+    data: InventoryData,
+    now: string,
+    relativePath: string,
+    targetType: "artwork" | "edition" | "exhibition" | "expense" | "series" | "application",
+    targetId: string,
+    category: string,
+    originalName: string
+  ): Promise<ImportedImage> {
     const image: ArtworkImage = {
       id: `IMG-${randomUUID().slice(0, 8)}`,
       targetType,
@@ -1902,6 +1956,26 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex.toLowerCase()}` : fallback;
 }
 
+function clampFontSize(value: unknown, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(36, Math.max(8, Math.round(n * 2) / 2));
+}
+
+function resolvePriceFontSize(
+  item: { priceFontSize?: number; priceSize?: string },
+  existing?: { priceFontSize?: number; priceSize?: string }
+): number {
+  const raw = item.priceFontSize ?? existing?.priceFontSize;
+  if (raw != null && Number.isFinite(Number(raw))) {
+    return clampFontSize(raw, 15);
+  }
+  const legacy = item.priceSize ?? existing?.priceSize;
+  if (legacy === "text") return 12.5;
+  if (legacy === "large") return 18;
+  return 15;
+}
+
 function hydratePriceList(
   item: Partial<PriceListDoc>,
   index: number
@@ -1928,6 +2002,10 @@ function hydratePriceList(
     rightHeader: String(item.rightHeader ?? "").trim(),
     showPrice: item.showPrice !== false,
     priceBold: item.priceBold !== false,
+    titleFontSize: clampFontSize(item.titleFontSize, 15),
+    textFontSize: clampFontSize(item.textFontSize, 12.5),
+    priceFontSize: resolvePriceFontSize(item),
+    textBold: item.textBold === true,
     imagesPerPage: clampInt(item.imagesPerPage ?? 4, 2, 6),
     imageGap: clampInt(item.imageGap ?? 16, 0, 120),
     frameBorderColor: normalizeHexColor(item.frameBorderColor, "#e4e4e4"),

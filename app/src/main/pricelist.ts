@@ -1,10 +1,16 @@
 import { BrowserWindow, shell } from "electron";
-import { writeFile, unlink } from "fs/promises";
+import { writeFile, unlink, stat } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { randomUUID } from "crypto";
 import { chooseGeneratedSavePath } from "./exportPath";
 import { makeGeneratedFileEditable } from "./makeFileEditable";
+import {
+  maxBytesFromMb,
+  parseMaxMb,
+  renderPdfWithImageBudget,
+  type GeneratedPdfResult
+} from "./pdfImages";
 
 export interface PriceListRow {
   title: string;
@@ -14,6 +20,8 @@ export interface PriceListRow {
   year: string;
   price: string;
   imageDataUrl?: string;
+  /** Library file path — preferred over imageDataUrl for compression. */
+  imagePath?: string;
   widthCm?: number;
   heightCm?: number;
 }
@@ -36,7 +44,11 @@ export interface PriceListPayload {
   leftHeader?: string;
   rightHeader?: string;
   showPrice: boolean;
-  priceBold?: boolean; // whether the price is shown in bold
+  priceBold?: boolean;
+  titleFontSize?: number;
+  textFontSize?: number;
+  priceFontSize?: number;
+  textBold?: boolean;
   imagesPerPage?: number;
   imageGap?: number; // horizontal space (px) between the frame and the text
   frameBorderColor?: string; // hex colour of the image frame border
@@ -44,6 +56,8 @@ export interface PriceListPayload {
   headerStyle?: PriceListStyle;
   subtitleStyle?: PriceListStyle;
   rows: PriceListRow[];
+  /** Optional cap for the generated PDF, in megabytes. */
+  maxMb?: number;
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -88,6 +102,12 @@ function fitInSquare(
 function normalizeColor(color: string | undefined, fallback: string): string {
   const value = (color || fallback).replace(/^#/, "").trim();
   return /^[0-9a-fA-F]{6}$/.test(value) ? value.toUpperCase() : fallback;
+}
+
+function clampPdfFontSize(value: unknown, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(36, Math.max(8, Math.round(n * 2) / 2));
 }
 
 /* ---------------------------------------------------------------- PDF (HTML) */
@@ -157,6 +177,10 @@ function buildHtml(payload: PriceListPayload): string {
     .join("");
 
   const priceWeight = payload.priceBold === false ? 400 : 700;
+  const textWeight = payload.textBold ? 700 : 400;
+  const titleSizePx = clampPdfFontSize(payload.titleFontSize, 15);
+  const textSizePx = clampPdfFontSize(payload.textFontSize, 12.5);
+  const priceSizePx = clampPdfFontSize(payload.priceFontSize, 15);
 
   const subHeaderRow =
     payload.leftHeader || payload.rightHeader
@@ -212,10 +236,10 @@ function buildHtml(payload: PriceListPayload): string {
   }
   .noimg { font-size: 10px; color: #aaa; font-family: Arial, sans-serif; }
   .info-cell { text-align: left; padding-left: ${gap}px; }
-  .info-cell .title { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
-  .info-cell .meta { font-size: 12.5px; color: #444; line-height: 1.5; }
+  .info-cell .title { font-size: ${titleSizePx}px; font-weight: 600; margin-bottom: 3px; }
+  .info-cell .meta { font-size: ${textSizePx}px; font-weight: ${textWeight}; color: #444; line-height: 1.5; }
   .info-cell .price {
-    font-size: 14px; font-weight: ${priceWeight}; color: #1c1c1c; margin-top: 14px;
+    font-size: ${priceSizePx}px; font-weight: ${priceWeight}; color: #1c1c1c; margin-top: 14px;
   }
 </style></head>
 <body>
@@ -263,7 +287,7 @@ export async function generatePriceList(
   parentWindow: BrowserWindow | null,
   payload: PriceListPayload,
   libraryPath = ""
-): Promise<string | null> {
+): Promise<GeneratedPdfResult | null> {
   const safeName =
     (payload.header || "lista-de-precios")
       .toLowerCase()
@@ -282,9 +306,20 @@ export async function generatePriceList(
   );
   if (!filePath) return null;
 
-  const buffer = await renderPdf(payload);
+  const maxBytes = maxBytesFromMb(parseMaxMb(payload.maxMb));
+  const { buffer } = await renderPdfWithImageBudget({
+    rows: payload.rows,
+    maxBytes,
+    defaultEdge: 1100,
+    render: (rows) => renderPdf({ ...payload, rows })
+  });
   await writeFile(filePath, buffer);
   await makeGeneratedFileEditable(filePath);
+  const bytes = (await stat(filePath)).size;
   void shell.openPath(filePath);
-  return filePath;
+  return {
+    path: filePath,
+    bytes,
+    overLimit: Boolean(maxBytes && bytes > maxBytes)
+  };
 }

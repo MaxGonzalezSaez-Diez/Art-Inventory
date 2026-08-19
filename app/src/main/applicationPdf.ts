@@ -1,5 +1,5 @@
 import { BrowserWindow, shell } from "electron";
-import { writeFile, unlink } from "fs/promises";
+import { writeFile, unlink, stat } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { randomUUID } from "crypto";
@@ -8,6 +8,12 @@ import {
   type ApplicationPdfPayload
 } from "./applicationDocumentHtml";
 import { chooseGeneratedSavePath } from "./exportPath";
+import {
+  maxBytesFromMb,
+  parseMaxMb,
+  renderPdfWithImageBudget,
+  type GeneratedPdfResult
+} from "./pdfImages";
 
 export type {
   ApplicationPdfPayload,
@@ -17,22 +23,9 @@ export type {
 } from "./applicationDocumentHtml";
 export { buildApplicationHtml } from "./applicationDocumentHtml";
 
-export async function generateApplicationDocument(
-  mainWindow: BrowserWindow | null,
-  payload: ApplicationPdfPayload,
-  libraryPath = ""
-): Promise<string | null> {
-  const filePath = await chooseGeneratedSavePath(
-    mainWindow,
-    libraryPath,
-    `${(payload.title || "solicitud").replace(/[\\/:*?"<>|]/g, "_")}.pdf`,
-    {
-      title: "Guardar solicitud en PDF",
-      filters: [{ name: "PDF", extensions: ["pdf"] }]
-    }
-  );
-  if (!filePath) return null;
-
+async function renderApplicationPdfBuffer(
+  payload: ApplicationPdfPayload
+): Promise<Buffer> {
   const html = buildApplicationHtml(payload);
   const tempHtml = path.join(tmpdir(), `solicitud-${randomUUID()}.html`);
   await writeFile(tempHtml, html, "utf8");
@@ -65,19 +58,49 @@ export async function generateApplicationDocument(
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       })();
     `);
-    const pdf = await win.webContents.printToPDF({
+    return await win.webContents.printToPDF({
       printBackground: true,
       preferCSSPageSize: true,
       margins: { marginType: "none" },
       displayHeaderFooter: false
     });
-    await writeFile(filePath, pdf);
-    void shell.openPath(filePath);
-    return filePath;
   } finally {
     win.destroy();
     void unlink(tempHtml).catch(() => undefined);
   }
+}
+
+export async function generateApplicationDocument(
+  mainWindow: BrowserWindow | null,
+  payload: ApplicationPdfPayload,
+  libraryPath = ""
+): Promise<GeneratedPdfResult | null> {
+  const filePath = await chooseGeneratedSavePath(
+    mainWindow,
+    libraryPath,
+    `${(payload.title || "solicitud").replace(/[\\/:*?"<>|]/g, "_")}.pdf`,
+    {
+      title: "Guardar solicitud en PDF",
+      filters: [{ name: "PDF", extensions: ["pdf"] }]
+    }
+  );
+  if (!filePath) return null;
+
+  const maxBytes = maxBytesFromMb(parseMaxMb(payload.maxMb));
+  const { buffer } = await renderPdfWithImageBudget({
+    rows: payload.rows,
+    maxBytes,
+    defaultEdge: 1400,
+    render: (rows) => renderApplicationPdfBuffer({ ...payload, rows })
+  });
+  await writeFile(filePath, buffer);
+  const bytes = (await stat(filePath)).size;
+  void shell.openPath(filePath);
+  return {
+    path: filePath,
+    bytes,
+    overLimit: Boolean(maxBytes && bytes > maxBytes)
+  };
 }
 
 /** @deprecated use generateApplicationDocument */
@@ -85,6 +108,6 @@ export async function generateApplicationPdf(
   mainWindow: BrowserWindow | null,
   payload: ApplicationPdfPayload,
   libraryPath = ""
-): Promise<string | null> {
+): Promise<GeneratedPdfResult | null> {
   return generateApplicationDocument(mainWindow, payload, libraryPath);
 }

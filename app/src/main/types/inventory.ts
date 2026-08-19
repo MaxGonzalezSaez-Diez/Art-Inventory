@@ -336,6 +336,16 @@ export interface PriceListDoc {
   rightHeader?: string;
   showPrice: boolean;
   priceBold?: boolean;
+  /** @deprecated mapped into priceFontSize on load */
+  priceSize?: "text" | "title" | "large";
+  /** Artwork title size in the work row (px). Missing → 15. */
+  titleFontSize?: number;
+  /** Series / type / size / year size (px). Missing → 12.5. */
+  textFontSize?: number;
+  /** Listed price size (px). Missing → from priceSize, else 15. */
+  priceFontSize?: number;
+  /** Bold for the work-row text (not the title). Missing → false. */
+  textBold?: boolean;
   imagesPerPage?: number;
   imageGap?: number;
   frameBorderColor?: string;

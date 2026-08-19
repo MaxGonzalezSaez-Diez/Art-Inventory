@@ -783,6 +783,11 @@ ipcMain.handle(
       title: "Elegir documento",
       properties: ["openFile"],
       filters: [
+        { name: "Todos los archivos", extensions: ["*"] },
+        {
+          name: "Videos",
+          extensions: ["mov", "qt", "mp4", "m4v", "avi", "mkv", "webm", "mpg", "mpeg", "3gp"]
+        },
         {
           name: "Documentos",
           extensions: [
@@ -804,18 +809,17 @@ ipcMain.handle(
             "tiff",
             "heic",
             "mov",
+            "qt",
             "mp4",
             "m4v",
             "avi",
             "mkv",
-            "webm"
+            "webm",
+            "mpg",
+            "mpeg",
+            "3gp"
           ]
-        },
-        {
-          name: "Videos",
-          extensions: ["mov", "mp4", "m4v", "avi", "mkv", "webm"]
-        },
-        { name: "Todos los archivos", extensions: ["*"] }
+        }
       ]
     };
     const result = mainWindow

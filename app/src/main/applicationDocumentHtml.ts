@@ -10,6 +10,8 @@ export interface ApplicationPdfRow {
   size: string;
   year: string;
   imageDataUrl?: string;
+  /** Library file path — preferred over imageDataUrl when generating the PDF. */
+  imagePath?: string;
 }
 
 export interface ApplicationPdfStyle {
@@ -98,6 +100,8 @@ export interface ApplicationPdfPayload {
   headerCompetition?: string;
   style?: ApplicationPdfStyle;
   rows: ApplicationPdfRow[];
+  /** Optional cap for the generated PDF, in megabytes. */
+  maxMb?: number;
 }
 
 export function escapeHtml(value: string): string {

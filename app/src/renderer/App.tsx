@@ -6020,7 +6020,7 @@ function fileKindFromName(name?: string): FileKind {
     return "image";
   }
   if (ext === "pdf") return "pdf";
-  if (["mov", "mp4", "m4v", "avi", "mkv", "webm"].includes(ext)) return "video";
+  if (["mov", "qt", "mp4", "m4v", "avi", "mkv", "webm", "mpg", "mpeg", "3gp"].includes(ext)) return "video";
   if (["doc", "docx", "odt", "rtf"].includes(ext)) return "word";
   if (["xls", "xlsx", "csv"].includes(ext)) return "sheet";
   return "file";
@@ -12544,6 +12544,9 @@ function artTypeLabel(
   return labelFor(inventory, "artworkType", value, lang);
 }
 
+function headingDefaults(lang: PriceLang) {
+  return APP_HEADING_DEFAULTS[lang] ?? APP_HEADING_DEFAULTS.es;
+}
 
 const APP_HEADING_DEFAULTS: Record<
   PriceLang,
@@ -13286,7 +13289,7 @@ function sectionsFromApplication(
   if (application?.textAboutWorks?.trim()) {
     out.push({
       id: "sec-legacy-works",
-      heading: application.headingAboutWorks || APP_HEADING_DEFAULTS[lang].aboutWorks,
+      heading: application.headingAboutWorks || headingDefaults(lang).aboutWorks,
       bodyHtml: `<p>${application.textAboutWorks
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -13298,7 +13301,7 @@ function sectionsFromApplication(
     out.push({
       id: "sec-legacy-project",
       heading:
-        application.headingAboutProject || APP_HEADING_DEFAULTS[lang].aboutProject,
+        application.headingAboutProject || headingDefaults(lang).aboutProject,
       bodyHtml: `<p>${application.textAboutProject
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -13510,6 +13513,11 @@ function SeriesDetailPanel({
   const t = useT();
   const [texts, setTexts] = useState<SeriesText[]>(info?.texts ?? []);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{ topic: string; body: string }>({
+    topic: "",
+    body: ""
+  });
   const [worksOpen, setWorksOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
   const [docsBusy, setDocsBusy] = useState(false);
@@ -13533,6 +13541,7 @@ function SeriesDetailPanel({
   useEffect(() => {
     setTexts(info?.texts ?? []);
     setOpenId(null);
+    setEditingId(null);
     setWorksOpen(false);
     setDocsOpen(false);
     setDocsPickMode(null);
@@ -13557,21 +13566,44 @@ function SeriesDetailPanel({
     }
   }
 
-  function addText() {
-    const id = `txt-${Date.now()}`;
-    const next = [...texts, { id, topic: t("series.texts.new"), body: "" }];
-    setTexts(next);
-    setOpenId(id);
+  function openEditText(text: SeriesText) {
+    setEditingId(text.id);
+    setEditDraft({ topic: text.topic, body: text.body });
+    setOpenId(text.id);
   }
 
-  function updateText(id: string, patch: Partial<SeriesText>) {
-    setTexts((list) => list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  function closeEditText() {
+    setEditingId(null);
+  }
+
+  function applyEditText() {
+    if (!editingId) return;
+    setTexts((list) =>
+      list.map((item) =>
+        item.id === editingId
+          ? { ...item, topic: editDraft.topic, body: editDraft.body }
+          : item
+      )
+    );
+    setEditingId(null);
+  }
+
+  function addText() {
+    const id = `txt-${Date.now()}`;
+    const nextText: SeriesText = {
+      id,
+      topic: t("series.texts.new"),
+      body: ""
+    };
+    setTexts([...texts, nextText]);
+    openEditText(nextText);
   }
 
   function removeText(id: string) {
-    const next = texts.filter((t) => t.id !== id);
+    const next = texts.filter((item) => item.id !== id);
     setTexts(next);
     if (openId === id) setOpenId(null);
+    if (editingId === id) setEditingId(null);
   }
 
   async function ensureSeriesId(): Promise<string | null> {
@@ -13710,47 +13742,102 @@ function SeriesDetailPanel({
                   className="series-text-summary"
                   onClick={() => setOpenId(open ? null : text.id)}
                 >
-                  <strong>{text.topic || t("common.noTopic")}</strong>
-                  {!open && preview && (
-                    <span className="muted series-text-preview">{preview}</span>
-                  )}
+                  <span className="series-text-line">
+                    <strong>{text.topic || t("common.noTopic")}</strong>
+                    {preview ? (
+                      <span className="series-text-preview">{preview}</span>
+                    ) : null}
+                  </span>
                   <span className="series-text-chevron">{open ? "▾" : "▸"}</span>
                 </button>
                 {open && (
                   <div className="series-text-body">
-                    <label>
-                      {t("series.texts.topic")}
-                      <input
-                        value={text.topic}
-                        placeholder={t("series.texts.topicPlaceholder")}
-                        onChange={(event) =>
-                          updateText(text.id, { topic: event.target.value })
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t("series.texts.body")}
-                      <textarea
-                        rows={5}
-                        value={text.body}
-                        placeholder={t("series.texts.bodyPlaceholder")}
-                        onChange={(event) =>
-                          updateText(text.id, { body: event.target.value })
-                        }
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="ghost danger small"
-                      onClick={() => removeText(text.id)}
-                    >
-                      {t("series.texts.remove")}
-                    </button>
+                    <div className="series-text-readonly">
+                      {text.body.trim() ? (
+                        <p className="series-text-readonly-body">{text.body}</p>
+                      ) : (
+                        <p className="muted small-note">{t("series.texts.emptyBody")}</p>
+                      )}
+                    </div>
+                    <div className="series-text-actions">
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => openEditText(text)}
+                      >
+                        {t("common.edit")}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost danger small"
+                        onClick={() => removeText(text.id)}
+                      >
+                        {t("series.texts.remove")}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
             );
           })}
+        </div>
+      )}
+
+      {editingId && (
+        <div className="modal-backdrop" onClick={closeEditText}>
+          <div
+            className="modal series-text-edit-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{t("series.texts.editTitle")}</h3>
+              <button
+                type="button"
+                className="icon-button ghost"
+                onClick={closeEditText}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <label className="field">
+                {t("series.texts.topic")}
+                <input
+                  value={editDraft.topic}
+                  placeholder={t("series.texts.topicPlaceholder")}
+                  onChange={(event) =>
+                    setEditDraft((draft) => ({
+                      ...draft,
+                      topic: event.target.value
+                    }))
+                  }
+                  autoFocus
+                />
+              </label>
+              <label className="field">
+                {t("series.texts.body")}
+                <textarea
+                  rows={10}
+                  value={editDraft.body}
+                  placeholder={t("series.texts.bodyPlaceholder")}
+                  onChange={(event) =>
+                    setEditDraft((draft) => ({
+                      ...draft,
+                      body: event.target.value
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={closeEditText}>
+                {t("common.cancel")}
+              </button>
+              <button type="button" onClick={applyEditText}>
+                {t("common.save")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -17561,11 +17648,12 @@ function ApplicationEditor({
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
 }) {
   const t = useT();
+  const { lang } = useLanguage();
   const initialLang: PriceLang =
     application?.language === "en" || application?.language === "de"
       ? application.language
       : "es";
-  const defaults = APP_HEADING_DEFAULTS[initialLang];
+  const defaults = headingDefaults(initialLang);
 
   const [form, setForm] = useState<ApplicationInput>(() =>
     application
@@ -17671,6 +17759,7 @@ function ApplicationEditor({
   const [frameBorderWidth, setFrameBorderWidth] = useState(3);
   const [framePadding, setFramePadding] = useState(12);
   const [hideFrame, setHideFrame] = useState(false);
+  const [pdfMaxMb, setPdfMaxMb] = useState(readStoredPdfMaxMb);
   const [previewSplitPct, setPreviewSplitPct] = useState(() => {
     try {
       const raw = Number(localStorage.getItem("solicitud-preview-split"));
@@ -17803,7 +17892,7 @@ function ApplicationEditor({
   function changeLanguage(next: PriceLang) {
     setForm((current) => {
       const patch: ApplicationInput = { ...current, language: next };
-      const defs = APP_HEADING_DEFAULTS[next];
+      const defs = headingDefaults(next);
       if (isDefaultAppHeading(current.headingWorks, "works")) {
         patch.headingWorks = defs.works;
       }
@@ -17818,7 +17907,7 @@ function ApplicationEditor({
       ...sections,
       {
         id,
-        heading: APP_HEADING_DEFAULTS[language].aboutWorks,
+        heading: headingDefaults(language).aboutWorks,
         bodyHtml: ""
       }
     ]);
@@ -17885,7 +17974,7 @@ function ApplicationEditor({
       year: art.yearMade ?? "",
       imageDataUrl: previewImages[art.id] || undefined
     }));
-    const defs = APP_HEADING_DEFAULTS[language];
+    const defs = headingDefaults(language);
     return {
       title: (form.documentTitle || form.title || "").trim() || "Solicitud",
       coverSubtitle: form.coverSubtitle,
@@ -18057,8 +18146,33 @@ function ApplicationEditor({
     await persist();
     setExportBusy(true);
     try {
-      const path = await requireApi("generateApplicationPdf", t)(buildPayload());
-      if (path) onToast(t("application.toast.pdfDone"));
+      storePdfMaxMb(pdfMaxMb);
+      const payload = buildPayload();
+      payload.rows = selectedArts.map((art) => ({
+        title: art.title,
+        series: art.series ?? "",
+        material: artTypeLabel(inventory, art.type, language),
+        size: formatSize(art),
+        year: art.yearMade ?? "",
+        imagePath: mainImageFor(art, inventory)?.absolutePath,
+        imageDataUrl: previewImages[art.id] || undefined
+      }));
+      const result = await requireApi("generateApplicationPdf", t)({
+        ...payload,
+        maxMb: parsePdfMaxMbInput(pdfMaxMb)
+      });
+      if (result) {
+        const meta = pdfResultMeta(result);
+        const size = formatPdfMb(meta?.bytes ?? 0, lang);
+        const max = parsePdfMaxMbInput(pdfMaxMb);
+        onToast(
+          meta?.overLimit && max
+            ? t("pdf.toast.over", { size: size || "PDF", max: String(max) })
+            : size
+              ? t("application.toast.pdfDone", { size })
+              : t("application.toast.pdfDoneSimple")
+        );
+      }
     } catch (error) {
       onError(
         error instanceof Error ? error.message : t("application.error.pdf")
@@ -18153,7 +18267,20 @@ function ApplicationEditor({
                   ))}
                 </select>
               </label>
+              <label>
+                {t("pdf.maxMb.label")}
+                <input
+                  type="number"
+                  min={1}
+                  max={80}
+                  step={1}
+                  placeholder={t("pdf.maxMb.none")}
+                  value={pdfMaxMb}
+                  onChange={(event) => setPdfMaxMb(event.target.value)}
+                />
+              </label>
             </div>
+            <p className="muted small-note">{t("pdf.maxMb.hint")}</p>
           </AppFormBlock>
 
           <AppFormBlock
@@ -18288,7 +18415,7 @@ function ApplicationEditor({
                           sortArtworkIdsBySeries(
                             form.artworkIds ?? [],
                             inventory,
-                            APP_HEADING_DEFAULTS[language].noSeries
+                            headingDefaults(language).noSeries
                           )
                         )
                       }
@@ -18306,7 +18433,7 @@ function ApplicationEditor({
               {t("application.field.worksHeading")}
               <input
                 value={form.headingWorks ?? ""}
-                placeholder={APP_HEADING_DEFAULTS[language].works}
+                placeholder={headingDefaults(language).works}
                 onChange={(event) => set("headingWorks", event.target.value)}
               />
             </label>
@@ -18326,7 +18453,7 @@ function ApplicationEditor({
                         groupArtworksBySeriesOrder(
                           form.artworkIds ?? [],
                           inventory,
-                          APP_HEADING_DEFAULTS[language].noSeries
+                          headingDefaults(language).noSeries
                         )
                       )
                     );
@@ -18341,7 +18468,7 @@ function ApplicationEditor({
                   {t("application.toc.worksOnly", {
                     label:
                       form.headingWorks ||
-                      APP_HEADING_DEFAULTS[language].works
+                      headingDefaults(language).works
                   })}
                 </option>
               </select>
@@ -18354,7 +18481,7 @@ function ApplicationEditor({
                 <ApplicationSeriesOrder
                   artworkIds={form.artworkIds ?? []}
                   inventory={inventory}
-                  noSeriesLabel={APP_HEADING_DEFAULTS[language].noSeries}
+                  noSeriesLabel={headingDefaults(language).noSeries}
                   onChange={(ids, options) =>
                     set("artworkIds", ids, options)
                   }
@@ -18400,7 +18527,7 @@ function ApplicationEditor({
                           <strong className="expense-note">{art.title}</strong>
                           <span className="muted expense-meta">
                             {art.series ||
-                              APP_HEADING_DEFAULTS[language].noSeries}
+                              headingDefaults(language).noSeries}
                             {art.yearMade ? ` · ${art.yearMade}` : ""}
                           </span>
                         </div>
@@ -18745,7 +18872,7 @@ function ApplicationEditor({
                     groupArtworksBySeriesOrder(
                       merged,
                       inventory,
-                      APP_HEADING_DEFAULTS[language].noSeries
+                      headingDefaults(language).noSeries
                     )
                   )
                 : merged
@@ -18967,6 +19094,65 @@ function PriceListPage({
   );
 }
 
+function clampPricelistFontSize(value: unknown, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(36, Math.max(8, Math.round(n * 2) / 2));
+}
+
+function readStoredPdfMaxMb(): string {
+  try {
+    return localStorage.getItem("pdf-max-mb") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storePdfMaxMb(value: string) {
+  try {
+    localStorage.setItem("pdf-max-mb", value);
+  } catch {
+    /* ignore */
+  }
+}
+
+function parsePdfMaxMbInput(raw: string): number | undefined {
+  const n = Number(String(raw).trim().replace(",", "."));
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(80, Math.max(1, Math.round(n * 10) / 10));
+}
+
+function formatPdfMb(bytes: number, lang: string): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  const mb = bytes / (1024 * 1024);
+  const value = mb < 9.95 ? mb.toFixed(1) : String(Math.round(mb));
+  const localized = lang === "en" ? value : value.replace(".", ",");
+  return `${localized} MB`;
+}
+
+function pdfResultMeta(result: unknown): { bytes: number; overLimit: boolean } | null {
+  if (!result) return null;
+  if (typeof result === "string") return { bytes: 0, overLimit: false };
+  if (typeof result === "object") {
+    const bytes = Number((result as { bytes?: unknown }).bytes);
+    const overLimit = (result as { overLimit?: unknown }).overLimit === true;
+    return {
+      bytes: Number.isFinite(bytes) ? bytes : 0,
+      overLimit
+    };
+  }
+  return null;
+}
+
+function initialPriceFontSize(document: PriceListDoc | null): number {
+  if (document?.priceFontSize != null) {
+    return clampPricelistFontSize(document.priceFontSize, 15);
+  }
+  if (document?.priceSize === "text") return 12.5;
+  if (document?.priceSize === "large") return 18;
+  return 15;
+}
+
 function PriceListEditor({
   inventory,
   setInventory,
@@ -18989,6 +19175,7 @@ function PriceListEditor({
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
 }) {
   const t = useT();
+  const { lang } = useLanguage();
   const [docId, setDocId] = useState(document?.id ?? "");
   const [mode, setMode] = useState<"free" | "exhibition" | "series">(
     document?.mode ?? (preset?.exhibitionId ? "exhibition" : "free")
@@ -19044,10 +19231,21 @@ function PriceListEditor({
     document?.subtitleStyle?.color ?? "#555555"
   );
   const [priceBold, setPriceBold] = useState(document?.priceBold !== false);
+  const [textBold, setTextBold] = useState(document?.textBold === true);
+  const [titleFontSize, setTitleFontSize] = useState(
+    clampPricelistFontSize(document?.titleFontSize, 15)
+  );
+  const [textFontSize, setTextFontSize] = useState(
+    clampPricelistFontSize(document?.textFontSize, 12.5)
+  );
+  const [priceFontSize, setPriceFontSize] = useState(() =>
+    initialPriceFontSize(document)
+  );
   const [imageGap, setImageGap] = useState(document?.imageGap ?? 16);
   const [frameBorderColor, setFrameBorderColor] = useState(
     document?.frameBorderColor ?? "#e4e4e4"
   );
+  const [pdfMaxMb, setPdfMaxMb] = useState(readStoredPdfMaxMb);
   const [customImages, setCustomImages] = useState<Record<string, string>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
   const [showFreePicker, setShowFreePicker] = useState(false);
@@ -19338,6 +19536,10 @@ function PriceListEditor({
       rightHeader: rightHeader.trim(),
       showPrice,
       priceBold,
+      titleFontSize,
+      textFontSize,
+      priceFontSize,
+      textBold,
       imagesPerPage,
       imageGap,
       frameBorderColor,
@@ -19396,13 +19598,7 @@ function PriceListEditor({
       for (const id of selectedIds) {
         const art = artworkById.get(id);
         if (!art) continue;
-        let imageDataUrl = customImages[id];
-        if (!imageDataUrl) {
-          const image = mainImageFor(art, inventory);
-          if (image?.absolutePath) {
-            imageDataUrl = await window.inventoryApi.imageToDataUrl(image.absolutePath);
-          }
-        }
+        const image = mainImageFor(art, inventory);
         rows.push({
           title: art.title,
           series: art.series ?? "",
@@ -19410,29 +19606,45 @@ function PriceListEditor({
           size: formatSize(art),
           year: art.yearMade ?? "",
           price: formatEuro(listedPriceFor(id)),
-          imageDataUrl,
+          imageDataUrl: customImages[id] || previewImages[id] || undefined,
+          imagePath: customImages[id] ? undefined : image?.absolutePath,
           widthCm: toCm(art.width, art.unit),
           heightCm: toCm(art.height, art.unit)
         });
       }
-      const savedPath = await window.inventoryApi.generatePriceList({
+      const result = await window.inventoryApi.generatePriceList({
         header: header || "Folleto de obras",
         subtitle,
         leftHeader,
         rightHeader,
         showPrice,
         priceBold,
+        titleFontSize,
+        textFontSize,
+        priceFontSize,
+        textBold,
         imagesPerPage,
         imageGap,
         frameBorderColor,
         fonts: { header: fontHeader, subtitle: fontSubtitle, body: fontBody },
         headerStyle: { bold: headerBold, italic: headerItalic, color: headerColor },
         subtitleStyle: { italic: subtitleItalic, color: subtitleColor },
-        rows
+        rows,
+        maxMb: parsePdfMaxMbInput(pdfMaxMb)
       });
-      if (savedPath) {
+      if (result) {
         onError("");
-        onToast(t("pricelist.toast.done"));
+        storePdfMaxMb(pdfMaxMb);
+        const meta = pdfResultMeta(result);
+        const size = formatPdfMb(meta?.bytes ?? 0, lang);
+        const max = parsePdfMaxMbInput(pdfMaxMb);
+        onToast(
+          meta?.overLimit && max
+            ? t("pdf.toast.over", { size: size || "PDF", max: String(max) })
+            : size
+              ? t("pricelist.toast.done", { size })
+              : t("pricelist.toast.doneSimple")
+        );
       }
     } catch (caught) {
       onError(
@@ -19813,19 +20025,103 @@ function PriceListEditor({
             />
             {t("pricelist.field.showPriceEuros")}
           </label>
-          {showPrice && (
+
+          <div className="pl-style-block">
+            <span className="pl-block-title">{t("pricelist.style.letterSizes")}</span>
+            <div className="pl-size-row">
+              <label className="field">
+                {t("pricelist.field.titleSize")}
+                <input
+                  type="number"
+                  min={8}
+                  max={36}
+                  step={0.5}
+                  value={titleFontSize}
+                  onChange={(event) => {
+                    setTitleFontSize(
+                      clampPricelistFontSize(event.target.value, 15)
+                    );
+                    markDirty();
+                  }}
+                />
+              </label>
+              <label className="field">
+                {t("pricelist.field.textSize")}
+                <input
+                  type="number"
+                  min={8}
+                  max={36}
+                  step={0.5}
+                  value={textFontSize}
+                  onChange={(event) => {
+                    setTextFontSize(
+                      clampPricelistFontSize(event.target.value, 12.5)
+                    );
+                    markDirty();
+                  }}
+                />
+              </label>
+              {showPrice ? (
+                <label className="field">
+                  {t("pricelist.field.priceSize")}
+                  <input
+                    type="number"
+                    min={8}
+                    max={36}
+                    step={0.5}
+                    value={priceFontSize}
+                    onChange={(event) => {
+                      setPriceFontSize(
+                        clampPricelistFontSize(event.target.value, 15)
+                      );
+                      markDirty();
+                    }}
+                  />
+                </label>
+              ) : null}
+            </div>
             <label className="checkline">
               <input
                 type="checkbox"
-                checked={priceBold}
+                checked={textBold}
                 onChange={(event) => {
-                  setPriceBold(event.target.checked);
+                  setTextBold(event.target.checked);
                   markDirty();
                 }}
               />
-              {t("pricelist.field.boldPrice")}
+              {t("pricelist.field.boldText")}
             </label>
-          )}
+            {showPrice ? (
+              <label className="checkline">
+                <input
+                  type="checkbox"
+                  checked={priceBold}
+                  onChange={(event) => {
+                    setPriceBold(event.target.checked);
+                    markDirty();
+                  }}
+                />
+                {t("pricelist.field.boldPrice")}
+              </label>
+            ) : null}
+          </div>
+
+          <div className="pl-style-block">
+            <span className="pl-block-title">{t("pdf.maxMb.label")}</span>
+            <p className="muted small-note">{t("pdf.maxMb.hint")}</p>
+            <label className="field">
+              {t("pdf.maxMb.label")}
+              <input
+                type="number"
+                min={1}
+                max={80}
+                step={1}
+                placeholder={t("pdf.maxMb.none")}
+                value={pdfMaxMb}
+                onChange={(event) => setPdfMaxMb(event.target.value)}
+              />
+            </label>
+          </div>
 
           <div className="form-row">
             <label className="field">
@@ -20120,21 +20416,59 @@ function PriceListEditor({
                           className="pl-sheet-info"
                           style={{ paddingLeft: `${imageGap}px` }}
                         >
-                          <div className="pl-sheet-info-title">{art.title}</div>
+                          <div
+                            className="pl-sheet-info-title"
+                            style={{ fontSize: `${titleFontSize}px` }}
+                          >
+                            {art.title}
+                          </div>
                           {art.series && (
-                            <div className="pl-sheet-meta">{art.series}</div>
+                            <div
+                              className="pl-sheet-meta"
+                              style={{
+                                fontSize: `${textFontSize}px`,
+                                fontWeight: textBold ? 700 : 400
+                              }}
+                            >
+                              {art.series}
+                            </div>
                           )}
-                          <div className="pl-sheet-meta">
+                          <div
+                            className="pl-sheet-meta"
+                            style={{
+                              fontSize: `${textFontSize}px`,
+                              fontWeight: textBold ? 700 : 400
+                            }}
+                          >
                             {artTypeLabel(inventory, art.type, language)}
                           </div>
-                          <div className="pl-sheet-meta">{formatSize(art)}</div>
+                          <div
+                            className="pl-sheet-meta"
+                            style={{
+                              fontSize: `${textFontSize}px`,
+                              fontWeight: textBold ? 700 : 400
+                            }}
+                          >
+                            {formatSize(art)}
+                          </div>
                           {art.yearMade && (
-                            <div className="pl-sheet-meta">{art.yearMade}</div>
+                            <div
+                              className="pl-sheet-meta"
+                              style={{
+                                fontSize: `${textFontSize}px`,
+                                fontWeight: textBold ? 700 : 400
+                              }}
+                            >
+                              {art.yearMade}
+                            </div>
                           )}
                           {showPrice && (
                             <div
                               className="pl-sheet-price"
-                              style={{ fontWeight: priceBold ? 700 : 400 }}
+                              style={{
+                                fontWeight: priceBold ? 700 : 400,
+                                fontSize: `${priceFontSize}px`
+                              }}
                             >
                               {formatEuro(listedPriceFor(id)) || "—"}
                             </div>
