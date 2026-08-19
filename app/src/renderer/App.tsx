@@ -12828,7 +12828,7 @@ function SimpleNoteEditor({
   const t = useT();
   const editorRef = useRef<HTMLDivElement>(null);
   const onChangeRef = useRef(onChange);
-  const savedRangeRef = useRef<Range | null>(null);
+  const savedRangeRef = useRef<globalThis.Range | null>(null);
   onChangeRef.current = onChange;
 
   useEffect(() => {
