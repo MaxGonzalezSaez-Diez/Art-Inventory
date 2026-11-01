@@ -334,6 +334,8 @@ export interface PriceListDoc {
   subtitle?: string;
   leftHeader?: string;
   rightHeader?: string;
+  /** Optional text under the header, before the works. Missing → "". */
+  introText?: string;
   showPrice: boolean;
   priceBold?: boolean;
   /** @deprecated mapped into priceFontSize on load */
@@ -481,6 +483,11 @@ export interface InventoryData {
   /** Checklist todos (JSON-only; optional for old libs). */
   inboxTodos?: InboxTodo[];
   settings: AppSettings;
+  /**
+   * Set on load (never saved) when inventory.json was unreadable or missing
+   * and was restored from the snapshot taken at this time (ISO).
+   */
+  recoveredFrom?: string;
 }
 
 export interface EditionInput

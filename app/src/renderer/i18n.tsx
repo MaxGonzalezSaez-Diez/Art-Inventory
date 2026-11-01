@@ -48,7 +48,7 @@ const strings = {
     de: "Personen und Galerien"
   },
   "nav.exhibitions": { es: "Exposiciones", en: "Exhibitions", de: "Ausstellungen" },
-  "nav.pricelist": { es: "Folleto de obras", en: "Artwork booklet", de: "Werkbroschüre" },
+  "nav.pricelist": { es: "Dossier de obras", en: "Works dossier", de: "Werkdossier" },
   "nav.pricing": {
     es: "Factores y precios",
     en: "Factors and prices",
@@ -66,6 +66,81 @@ const strings = {
     en: "Example library",
     de: "Beispielbibliothek"
   },
+  "update.available": {
+    es: "Hay una versión nueva del programa ({version}).",
+    en: "A new version of the app is available ({version}).",
+    de: "Eine neue Version des Programms ist da ({version})."
+  },
+  "update.download": { es: "Descargar", en: "Download", de: "Herunterladen" },
+  "update.howTo": {
+    es: "Se está descargando. Abre el archivo descargado y arrastra «Inventario de Arte» a «Aplicaciones» (elige «Reemplazar»). Tus datos no se tocan.",
+    en: "It's downloading. Open the downloaded file and drag «Inventario de Arte» into «Applications» (choose «Replace»). Your data isn't touched.",
+    de: "Wird heruntergeladen. Öffne die Datei und ziehe «Inventario de Arte» in «Programme» (wähle «Ersetzen»). Deine Daten bleiben unberührt."
+  },
+  "backup.title": { es: "Copia de seguridad", en: "Backup", de: "Sicherung" },
+  "backup.off": {
+    es: "Todavía no hay copia fuera de este ordenador.",
+    en: "No copy outside this computer yet.",
+    de: "Noch keine Kopie außerhalb dieses Computers."
+  },
+  "backup.useICloud": {
+    es: "Guardar copia en iCloud",
+    en: "Back up to iCloud",
+    de: "In iCloud sichern"
+  },
+  "backup.pickFolder": {
+    es: "Otra carpeta…",
+    en: "Another folder…",
+    de: "Anderer Ordner…"
+  },
+  "backup.running": { es: "Copiando…", en: "Copying…", de: "Wird kopiert…" },
+  "backup.last": {
+    es: "Última copia: {date}",
+    en: "Last copy: {date}",
+    de: "Letzte Kopie: {date}"
+  },
+  "backup.never": {
+    es: "Aún no se ha hecho ninguna copia.",
+    en: "No copy made yet.",
+    de: "Noch keine Kopie gemacht."
+  },
+  "backup.blocked": {
+    es: "No se ha copiado: aquí hay muchos menos datos que en la copia ({library} obras frente a {copy}). La copia sigue intacta. Si no has borrado nada a propósito, no sigas y escribe a Max.",
+    en: "Not copied: there is much less data here than in the copy ({library} works vs {copy}). The copy is untouched. If you didn't delete things on purpose, stop and write to Max.",
+    de: "Nicht kopiert: Hier sind viel weniger Daten als in der Kopie ({library} Werke statt {copy}). Die Kopie ist unverändert. Wenn du nicht absichtlich gelöscht hast, hör auf und schreib Max."
+  },
+  "backup.force": {
+    es: "Copiar igualmente",
+    en: "Copy anyway",
+    de: "Trotzdem kopieren"
+  },
+  "backup.force.title": {
+    es: "¿Copiar igualmente?",
+    en: "Copy anyway?",
+    de: "Trotzdem kopieren?"
+  },
+  "backup.force.message": {
+    es: "Hazlo solo si has borrado obras o datos a propósito. La copia pasará a tener {library} obras en vez de {copy}. El archivo anterior de la copia se guarda en su carpeta «backups».",
+    en: "Only do this if you deleted works or data on purpose. The copy will then have {library} works instead of {copy}. The copy's previous file is kept in its «backups» folder.",
+    de: "Nur, wenn du absichtlich Werke oder Daten gelöscht hast. Die Kopie hat dann {library} Werke statt {copy}. Die bisherige Datei der Kopie bleibt in ihrem Ordner «backups»."
+  },
+  "backup.now": { es: "Hacer copia ahora", en: "Back up now", de: "Jetzt sichern" },
+  "recovery.notice": {
+    es: "El archivo del inventario no se podía leer, así que se ha recuperado la copia del {date}. Revisa los últimos cambios de después de esa hora. El archivo dañado está guardado en la carpeta «backups».",
+    en: "The inventory file couldn't be read, so the copy from {date} was restored. Check any changes made after that time. The damaged file is kept in the «backups» folder.",
+    de: "Die Inventardatei war nicht lesbar, deshalb wurde die Kopie vom {date} wiederhergestellt. Prüfe die Änderungen nach diesem Zeitpunkt. Die beschädigte Datei liegt im Ordner «backups»."
+  },
+  "help.button": { es: "? Ayuda", en: "? Help", de: "? Hilfe" },
+  "help.topics": { es: "Temas", en: "Topics", de: "Themen" },
+  "help.stepOf": {
+    es: "Paso {n} de {total}",
+    en: "Step {n} of {total}",
+    de: "Schritt {n} von {total}"
+  },
+  "help.prev": { es: "Anterior", en: "Back", de: "Zurück" },
+  "help.next": { es: "Siguiente", en: "Next", de: "Weiter" },
+  "help.goThere": { es: "Ir aquí", en: "Go there", de: "Hingehen" },
+  "help.finish": { es: "Terminar", en: "Finish", de: "Fertig" },
   "nav.floatingBack": {
     es: "← Volver",
     en: "← Back",
@@ -1741,9 +1816,9 @@ const strings = {
     de: "Ausstellung hinzufügen"
   },
   "exhibition.form.generateBooklet": {
-    es: "Generar folleto de obras",
-    en: "Generate artwork booklet",
-    de: "Werkbroschüre erstellen"
+    es: "Generar dossier de obras",
+    en: "Generate works dossier",
+    de: "Werkdossier erstellen"
   },
   "exhibition.section.identity": { es: "Identidad", en: "Identity", de: "Identität" },
   "exhibition.section.location": { es: "Ubicación", en: "Location", de: "Ort" },
@@ -3939,29 +4014,29 @@ const strings = {
   /* ── Price list / folleto ───────────────────────────────────────────── */
   "pricelist.eyebrow": { es: "Documentos", en: "Documents", de: "Dokumente" },
   "pricelist.title": {
-    es: "Folleto de obras",
-    en: "Works brochure",
-    de: "Werkkatalog"
+    es: "Dossier de obras",
+    en: "Works dossier",
+    de: "Werkdossier"
   },
   "pricelist.lead": {
-    es: "Guarda cada folleto y vuelve a abrirlo cuando quieras.",
-    en: "Save each brochure and open it again whenever you like.",
-    de: "Speichere jeden Katalog und öffne ihn später wieder."
+    es: "Guarda cada dossier y vuelve a abrirlo cuando quieras.",
+    en: "Save each dossier and open it again whenever you like.",
+    de: "Speichere jedes Dossier und öffne es später wieder."
   },
   "pricelist.add": {
-    es: "+ Nuevo folleto",
-    en: "+ New brochure",
-    de: "+ Neuer Katalog"
+    es: "+ Nuevo dossier",
+    en: "+ New dossier",
+    de: "+ Neues Dossier"
   },
   "pricelist.search": {
-    es: "Buscar folleto…",
-    en: "Search brochure…",
-    de: "Katalog suchen…"
+    es: "Buscar dossier…",
+    en: "Search dossier…",
+    de: "Dossier suchen…"
   },
   "pricelist.empty": {
-    es: "Todavía no hay folletos guardados.",
-    en: "No saved brochures yet.",
-    de: "Noch keine gespeicherten Kataloge."
+    es: "Todavía no hay dossiers guardados.",
+    en: "No saved dossiers yet.",
+    de: "Noch keine gespeicherten Dossiers."
   },
   "pricelist.createFirst": {
     es: "Crear el primero",
@@ -3969,19 +4044,19 @@ const strings = {
     de: "Ersten erstellen"
   },
   "pricelist.noMatch": {
-    es: "Ningún folleto coincide con la búsqueda.",
-    en: "No brochure matches the search.",
-    de: "Kein Katalog passt zur Suche."
+    es: "Ningún dossier coincide con la búsqueda.",
+    en: "No dossier matches the search.",
+    de: "Kein Dossier passt zur Suche."
   },
   "pricelist.untitled": {
-    es: "Folleto sin título",
-    en: "Untitled brochure",
-    de: "Katalog ohne Titel"
+    es: "Dossier sin título",
+    en: "Untitled dossier",
+    de: "Dossier ohne Titel"
   },
   "pricelist.back": {
-    es: "Todos los folletos",
-    en: "All brochures",
-    de: "Alle Kataloge"
+    es: "Todos los dossiers",
+    en: "All dossiers",
+    de: "Alle Dossiers"
   },
   "pricelist.col.name": { es: "Nombre", en: "Name", de: "Name" },
   "pricelist.col.mode": {
@@ -3996,9 +4071,9 @@ const strings = {
     de: "Aktualisiert"
   },
   "pricelist.toast.saved": {
-    es: "Folleto guardado.",
-    en: "Brochure saved.",
-    de: "Katalog gespeichert."
+    es: "Dossier guardado.",
+    en: "Dossier saved.",
+    de: "Dossier gespeichert."
   },
   "pricelist.error.needTitle": {
     es: "Pon un encabezado o elige alguna obra antes de guardar.",
@@ -4086,14 +4161,14 @@ const strings = {
     de: "Preis nach Faktoren"
   },
   "pricelist.price.freeHint": {
-    es: "Escribe el precio en euros (solo para este folleto).",
-    en: "Enter the price in euros (for this brochure only).",
-    de: "Preis in Euro eingeben (nur für diesen Katalog)."
+    es: "Escribe el precio en euros (solo para este dossier).",
+    en: "Enter the price in euros (for this dossier only).",
+    de: "Preis in Euro eingeben (nur für dieses Dossier)."
   },
   "pricelist.price.bulkFreeHint": {
-    es: "Escribe un precio por obra, o el mismo para todas. Solo afecta a este folleto.",
-    en: "Enter a price per work, or the same for all. Only affects this brochure.",
-    de: "Gib einen Preis pro Werk ein, oder denselben für alle. Betrifft nur diesen Katalog."
+    es: "Escribe un precio por obra, o el mismo para todas. Solo afecta a este dossier.",
+    en: "Enter a price per work, or the same for all. Only affects this dossier.",
+    de: "Gib einen Preis pro Werk ein, oder denselben für alle. Betrifft nur dieses Dossier."
   },
   "pricelist.price.bulkFactorsHint": {
     es: "Calcula el precio con tus factores (o precio fijo de técnica) a la fecha elegida. Luego puedes ajustar cada obra.",
@@ -4238,9 +4313,9 @@ const strings = {
     de: "Seite {n}"
   },
   "pricelist.defaultHeader": {
-    es: "Folleto de obras",
-    en: "Artwork booklet",
-    de: "Werkbroschüre"
+    es: "Dossier de obras",
+    en: "Works dossier",
+    de: "Werkdossier"
   },
   "pricelist.datesRange": {
     es: "del {from} al {to}",
@@ -4286,6 +4361,21 @@ const strings = {
     es: "ej. Madrid · Marzo 2026",
     en: "e.g. Madrid · March 2026",
     de: "z. B. Madrid · März 2026"
+  },
+  "pricelist.field.introOptional": {
+    es: "Texto introductorio (opcional)",
+    en: "Introduction (optional)",
+    de: "Einleitungstext (optional)"
+  },
+  "pricelist.introPlaceholder": {
+    es: "Aparece bajo la cabecera, antes de las obras. Ej.: cómo surgió la serie, por qué…",
+    en: "Shown under the header, before the works. E.g. how the series began, why…",
+    de: "Erscheint unter der Kopfzeile, vor den Werken. Z. B. wie die Serie entstand, warum…"
+  },
+  "pricelist.preview.frameTitle": {
+    es: "Vista previa del dossier",
+    en: "Dossier preview",
+    de: "Vorschau des Dossiers"
   },
   "pricelist.field.leftFull": {
     es: "Texto a la izquierda (sala y ciudad)",
@@ -5782,6 +5872,31 @@ const strings = {
     es: "— Seleccionar obra —",
     en: "— Select artwork —",
     de: "— Werk auswählen —"
+  },
+  "pricelist.delete.title": {
+    es: "Eliminar este dossier",
+    en: "Delete this dossier",
+    de: "Dieses Dossier löschen"
+  },
+  "pricelist.delete.body": {
+    es: "Solo se borra este dossier de la lista. Las obras y los PDF ya guardados no se tocan.",
+    en: "Only this dossier is removed from the list. The works and any PDFs you saved are not touched.",
+    de: "Nur dieses Dossier wird aus der Liste entfernt. Die Werke und gespeicherte PDFs bleiben unberührt."
+  },
+  "pricelist.delete.button": {
+    es: "Eliminar dossier…",
+    en: "Delete dossier…",
+    de: "Dossier löschen…"
+  },
+  "pricelist.delete.confirm": {
+    es: "Vas a eliminar el dossier «{title}». Las obras no se tocan.",
+    en: "You are about to delete the dossier «{title}». The works are not touched.",
+    de: "Du löschst das Dossier «{title}». Die Werke bleiben unberührt."
+  },
+  "pricelist.delete.done": {
+    es: "Dossier eliminado",
+    en: "Dossier deleted",
+    de: "Dossier gelöscht"
   },
   "exhibition.delete.title": {
     es: "Eliminar esta exposición",

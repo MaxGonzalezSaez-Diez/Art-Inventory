@@ -80,6 +80,14 @@ function normalizeDeg(value: number) {
   return ((value % 360) + 360) % 360;
 }
 
+function isFullFrame(corners: Point[], width: number, height: number) {
+  const full = fullFrameCorners(width, height);
+  return orderCorners(corners).every(
+    (point, index) =>
+      Math.abs(point.x - full[index].x) < 1 && Math.abs(point.y - full[index].y) < 1
+  );
+}
+
 export function ImageEditModal({
   sourceDataUrl,
   mode = "upload",
@@ -102,6 +110,8 @@ export function ImageEditModal({
   const [scannedPreview, setScannedPreview] = useState<string | null>(null);
   const [corners, setCorners] = useState<Point[] | null>(null);
   const [detected, setDetected] = useState(false);
+  /** Corners were set to the whole photo (retouch start or «Toda la foto»). */
+  const [showingFullPhoto, setShowingFullPhoto] = useState(false);
   /** Corner index, or edge between ordered corners i and (i+1)%4. */
   const [straightenDrag, setStraightenDrag] = useState<
     | { kind: "corner"; index: number; grabOffset: Point }
@@ -136,6 +146,7 @@ export function ImageEditModal({
   async function runAutoScan(img: HTMLImageElement, click?: Point | null) {
     setDetecting(true);
     setError("");
+    setShowingFullPhoto(false);
     try {
       const result = autoScanPainting(img, click);
       previewCornersRef.current = result.corners;
@@ -164,7 +175,15 @@ export function ImageEditModal({
       .then(async (img) => {
         if (cancelled) return;
         setRawImage(img);
-        await runAutoScan(img);
+        // The current photo is usually already straightened and cropped, and
+        // auto-detect would then find a shape inside the painting. Start from
+        // the whole photo; tapping the painting still runs detection.
+        if (mode === "retouch") {
+          showFullPhoto(img);
+          setDetecting(false);
+        } else {
+          await runAutoScan(img);
+        }
       })
       .catch((caught) => {
         if (!cancelled) {
@@ -434,18 +453,31 @@ export function ImageEditModal({
     await runAutoScan(rawImage, point);
   }
 
-  function resetCorners() {
-    if (!rawImage) return;
-    // Full frame — user asked for no crop / all the way to the edges.
-    setCorners(
-      fullFrameCorners(rawImage.naturalWidth, rawImage.naturalHeight)
-    );
+  function showFullPhoto(img: HTMLImageElement) {
+    // Full frame — no crop, all the way to the edges. The result is the
+    // photo itself, so show it directly instead of re-warping.
+    const full = fullFrameCorners(img.naturalWidth, img.naturalHeight);
+    previewCornersRef.current = full;
+    setCorners(full);
     setDetected(false);
-    setScannedPreview(null);
-    previewCornersRef.current = null;
+    setShowingFullPhoto(true);
+    setScannedPreview(originalDataUrl);
+  }
+
+  function resetCorners() {
+    if (rawImage) showFullPhoto(rawImage);
   }
 
   async function acceptScannedAndEdit() {
+    if (
+      rawImage &&
+      corners &&
+      isFullFrame(corners, rawImage.naturalWidth, rawImage.naturalHeight)
+    ) {
+      // Nothing to straighten — keep the original pixels.
+      skipStraighten();
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -580,6 +612,7 @@ export function ImageEditModal({
   return (
     <div className="modal-backdrop image-edit-backdrop" onClick={onCancel}>
       <div
+        data-help-modal={step === "straighten" ? "photoStraighten" : "photoEdit"}
         className="modal image-edit-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -603,7 +636,7 @@ export function ImageEditModal({
 
         {step === "straighten" ? (
           <div className="image-edit-layout image-straighten-layout">
-            <div className="image-edit-stage-wrap">
+            <div className="image-edit-stage-wrap" data-help="photo-stage">
               {detecting ? (
                 <div className="image-edit-loading">
                   Buscando el cuadro y corrigiendo…
@@ -738,12 +771,15 @@ export function ImageEditModal({
                   ? "Detectando bordes…"
                   : detected
                     ? "Así quedará el cuadro. Si no acertó, toca el cuadro en la foto."
-                    : "No se encontró el cuadro. Tócalo en la foto o arrastra las esquinas."}
+                    : showingFullPhoto
+                      ? "Foto entera, sin recortar. Arrastra las esquinas o toca el cuadro para detectarlo."
+                      : "No se encontró el cuadro. Tócalo en la foto o arrastra las esquinas."}
               </p>
               <div className="row-actions" style={{ flexWrap: "wrap", gap: "0.45rem" }}>
                 <button
                   type="button"
                   className="ghost small"
+                  data-help="photo-full"
                   disabled={!rawImage || busy}
                   onClick={resetCorners}
                 >
@@ -820,19 +856,17 @@ export function ImageEditModal({
               )}
             </div>
 
-            <div className="image-edit-controls">
-              {mode === "upload" ? (
-                <button
-                  type="button"
-                  className="ghost small"
-                  onClick={() => {
-                    setStep("straighten");
-                    setImage(null);
-                  }}
-                >
-                  ← Volver a enderezar
-                </button>
-              ) : null}
+            <div className="image-edit-controls" data-help="photo-controls">
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => {
+                  setStep("straighten");
+                  setImage(null);
+                }}
+              >
+                ← Volver a enderezar
+              </button>
               <div className="image-edit-group">
                 <span className="image-edit-label">Girar foto</span>
                 <p className="muted small-note" style={{ margin: "0 0 0.4rem" }}>

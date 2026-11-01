@@ -28,8 +28,18 @@ import type {
 } from "./types/inventory";
 import type { ApplicationPdfPayload } from "./applicationPdf";
 import type { AppLanguage, AppPreferences } from "./preferences";
+import type { BackupStatus } from "./cloudBackup";
+import type { UpdateInfo } from "./updateCheck";
 
 const api = {
+  checkForUpdate: (): Promise<UpdateInfo | null> => ipcRenderer.invoke("app:checkUpdate"),
+  openUpdateDownload: (url: string): Promise<void> =>
+    ipcRenderer.invoke("app:openUpdate", url),
+  getBackupStatus: (): Promise<BackupStatus> => ipcRenderer.invoke("backup:status"),
+  chooseBackupFolder: (where: "icloud" | "pick"): Promise<BackupStatus> =>
+    ipcRenderer.invoke("backup:choose", where),
+  /** `force`: copy even though the library has far less data than the copy. */
+  runBackup: (force = false): Promise<BackupStatus> => ipcRenderer.invoke("backup:run", force),
   getLibraryPath: (): Promise<string> => ipcRenderer.invoke("library:getPath"),
   chooseLibrary: (): Promise<string> => ipcRenderer.invoke("library:choose"),
   getPreferences: (): Promise<

@@ -1,3 +1,4 @@
+import { pruneSnapshots } from "./libraryFiles";
 import ExcelJS from "exceljs";
 import { access, copyFile, mkdir } from "fs/promises";
 import path from "path";
@@ -111,6 +112,7 @@ export async function saveWorkbook(
 ): Promise<void> {
   await ensureLibrary(libraryPath);
   await backupWorkbook(libraryPath);
+  await pruneSnapshots(libraryPath, "xlsx");
   await workbook.xlsx.writeFile(path.join(libraryPath, WORKBOOK_FILE));
 }
 

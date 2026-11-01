@@ -4457,122 +4457,6 @@ button.ghost.danger:hover {
  * Round 8 — faithful PDF preview sheet, leave-modal choices, row controls   *
  * ========================================================================= */
 
-/* The sheet reproduces the PDF's HTML at real A4 pixel sizes and is scaled
- * with zoom so proportions match the generated document. Centered on a beige
- * canvas (like Solicitudes) so unused pane width isn't mistaken for page. */
-.pl-paper {
-  align-items: center;
-  background: #e6e0d4;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: none;
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 160px);
-  overflow-x: auto;
-  overflow-y: auto;
-  padding: 18px 16px 28px;
-}
-.pl-sheet {
-  background: #fff;
-  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.12);
-  color: #1c1c1c;
-  flex: none;
-  padding: 58px;
-  width: 795px;
-  zoom: 0.66;
-}
-.pl-sheet-subhead {
-  align-items: baseline;
-  color: #333;
-  display: flex;
-  font-size: 12.5px;
-  justify-content: space-between;
-  margin: 0 2px 14px;
-}
-.pl-sheet-subhead-left {
-  font-weight: 600;
-}
-.pl-sheet-title {
-  font-size: 26px;
-  letter-spacing: 0.5px;
-  margin: 0 0 4px;
-  text-align: center;
-}
-.pl-sheet-subtitle {
-  font-size: 13px;
-  margin: 0;
-  text-align: center;
-}
-.pl-sheet-rule {
-  border-top: 1.5px solid #1c1c1c;
-  margin: 12px 0 18px;
-}
-.pl-sheet-row {
-  align-items: center;
-  border-bottom: 1px solid #d8d8d8;
-  display: flex;
-}
-.pl-sheet-imgcell {
-  flex: none;
-  padding: 12px 0 12px 10px;
-}
-.pl-sheet-frame {
-  align-items: center;
-  background: transparent;
-  border: 1px solid #e4e4e4;
-  box-sizing: border-box;
-  display: flex;
-  justify-content: center;
-  overflow: hidden;
-  padding: 8px;
-}
-.pl-sheet-noimg {
-  color: #aaa;
-  font-family: Arial, sans-serif;
-  font-size: 10px;
-}
-.pl-sheet-info {
-  flex: 1;
-  min-width: 0;
-  padding-bottom: 12px;
-  padding-top: 12px;
-}
-.pl-sheet-info-title {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 3px;
-}
-.pl-sheet-meta {
-  color: #444;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-.pl-sheet-price {
-  color: #1c1c1c;
-  font-size: 15px;
-  font-weight: 600;
-  margin-top: 14px;
-}
-.pl-page-break {
-  align-items: center;
-  color: #b06a14;
-  display: flex;
-  font-family: Inter, sans-serif;
-  font-size: 12px;
-  font-weight: 700;
-  gap: 10px;
-  letter-spacing: 0.4px;
-  margin: 10px 0;
-  text-transform: uppercase;
-}
-.pl-page-break::before,
-.pl-page-break::after {
-  border-top: 2px dashed #e0b878;
-  content: "";
-  flex: 1;
-}
-
 /* per-artwork controls (price / custom image), config column ------------- */
 .pl-config .segmented {
   border-radius: 12px;
@@ -8798,4 +8682,135 @@ button.ghost.danger:hover {
   .inbox-summary-actions { width: 100%; justify-content: flex-start; }
   .inbox-filter-row { flex-direction: column; align-items: stretch; }
   .inbox-interval-row { grid-template-columns: 1fr; }
+}
+
+/* help guide -------------------------------------------------------------- */
+.sidebar .brand {
+  align-items: flex-end;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+}
+/* Above every popup's backdrop, so «Ayuda» can always be pressed. */
+.help-button {
+  position: relative;
+  z-index: 120;
+  background: #2f3f35;
+  border: 1px solid #4a5d50;
+  border-radius: 999px;
+  color: #f3efe6;
+  flex: none;
+  font-size: 0.85rem;
+  font-weight: 650;
+  padding: 0.4rem 0.75rem;
+}
+.help-button:hover {
+  background: #3b4f42;
+}
+.nav-button.nav-help-highlight {
+  animation: help-pulse 1.4s ease-in-out infinite;
+  border-color: #e0b878;
+}
+@keyframes help-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224, 184, 120, 0.55); }
+  50% { box-shadow: 0 0 0 5px rgba(224, 184, 120, 0); }
+}
+/* walk-through: outline around the element + docked text panel */
+.tour-spot {
+  border: 3px solid #e0a43a;
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(20, 28, 24, 0.28);
+  pointer-events: none;
+  position: fixed;
+  transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease;
+  z-index: 88;
+}
+.tour-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 1.1rem 1.1rem;
+  position: fixed;
+  width: min(380px, calc(100vw - 2.5rem));
+  z-index: 95;
+}
+.tour-panel-br { bottom: 20px; right: 20px; }
+.tour-panel-bl { bottom: 20px; left: 288px; }
+.tour-panel-tr { right: 20px; top: 20px; }
+.tour-panel-tl { left: 288px; top: 20px; }
+.tour-head {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+.tour-chapter-label {
+  color: var(--muted);
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.tour-chapters {
+  flex: 1;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+.tour-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0.2rem 0 0;
+  text-transform: uppercase;
+}
+.tour-panel h3 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+.tour-body {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 0;
+}
+.tour-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.3rem;
+}
+
+/* Data restored from a backup: stays until dismissed. */
+.notice.recovery-notice {
+  animation: banner-in 0.25s ease-out;
+}
+
+/* update notice + sidebar backup box ------------------------------------- */
+.notice.update-notice {
+  animation: banner-in 0.25s ease-out;
+}
+.update-actions {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+}
+.backup-box {
+  border-top: 1px solid #33453a;
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+  padding-top: 0.75rem;
+}
+.backup-box strong {
+  color: #fff;
+}
+.backup-when,
+.backup-off {
+  color: #c9d3cc;
+}
+.backup-error {
+  color: #f0a58f;
 }

@@ -80,6 +80,13 @@ import {
   type Translate
 } from "./i18n";
 import { buildApplicationHtml } from "../main/applicationDocumentHtml";
+import { buildPriceListHtml, type PriceListPayload } from "../main/pricelistHtml";
+import { HelpTour } from "./HelpTour";
+import type { HelpTarget, TourView } from "./helpContent";
+import type { BackupStatus } from "../main/cloudBackup";
+import type { UpdateInfo } from "../main/updateCheck";
+
+const HELP_SEEN_KEY = "help-tour-seen-v1";
 
 /** Import an edited JPEG/PNG data-URL as an artwork main photo. */
 async function importEditedArtworkImage(
@@ -263,6 +270,8 @@ type Page =
 interface PriceListPreset {
   exhibitionId?: string;
   artworkIds?: string[];
+  /** Open an empty new draft (used by the help guide). */
+  blank?: boolean;
 }
 type FormTab = "info" | "movimientos";
 type DetailTab = "info" | "movimientos" | "precio";
@@ -301,6 +310,20 @@ export function App() {
     Array<{ page: Page; artworkId: string; contactId: string }>
   >([]);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
+  /** The data file was restored from this snapshot time (ISO) on load. */
+  const [recoveredFrom, setRecoveredFrom] = useState("");
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updateClicked, setUpdateClicked] = useState(false);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+
+  // Ask GitHub once per launch whether a newer version exists.
+  useEffect(() => {
+    void window.inventoryApi
+      .checkForUpdate()
+      .then(setUpdate)
+      .catch(() => undefined);
+  }, []);
   const [toast, setToast] = useState("");
   const [dirty, setDirty] = useState(false);
   const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
@@ -311,6 +334,24 @@ export function App() {
   // nothing because the page does not change).
   const [exhResetToken, setExhResetToken] = useState(0);
   const [appResetToken, setAppResetToken] = useState(0);
+  const [formTab, setFormTab] = useState<FormTab>("info");
+  // A new session each time «Ayuda» is pressed, so it reads the screen afresh.
+  const [helpSession, setHelpSession] = useState<{ id: number; fromStart: boolean } | null>(
+    null
+  );
+  const [helpHighlight, setHelpHighlight] = useState<HelpTarget | null>(null);
+
+  // Show the guide once, the first time the library is open.
+  useEffect(() => {
+    if (!prefs?.setupComplete || !inventory) return;
+    try {
+      if (localStorage.getItem(HELP_SEEN_KEY)) return;
+      localStorage.setItem(HELP_SEEN_KEY, "1");
+    } catch {
+      return;
+    }
+    setHelpSession({ id: Date.now(), fromStart: true });
+  }, [prefs?.setupComplete, Boolean(inventory)]);
 
   useEffect(() => {
     void (async () => {
@@ -337,8 +378,11 @@ export function App() {
       const data = await window.inventoryApi.loadInventory();
       setInventory(data);
       setMessage("");
+      setLoadError("");
+      if (data.recoveredFrom) setRecoveredFrom(data.recoveredFrom);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : t("common.error.load"));
+      // Stays on screen: the library could not be opened at all.
+      setLoadError(error instanceof Error ? error.message : t("common.error.load"));
     }
   }
 
@@ -392,10 +436,60 @@ export function App() {
   }
 
   function startAdd() {
+    setFormTab("info");
     setEditingArtwork({ ...emptyArtwork });
     setSelectedArtworkId("");
     setFormKey(`new-${Date.now()}`);
     goTo("form");
+  }
+
+  function openSection(target: HelpTarget) {
+    guarded(() => {
+      if (target === "exhibitions") {
+        setExhibitionToOpen(null);
+        setExhResetToken((value) => value + 1);
+      } else if (target === "pricelist") {
+        setPricelistResetToken((token) => token + 1);
+        setPricelistPreset(null);
+      } else if (target === "applications") {
+        setAppResetToken((token) => token + 1);
+      }
+      goTo(target);
+    });
+  }
+
+  /** Move to the screen a help step talks about (no-op if already there). */
+  function showTourView(view: TourView) {
+    const art =
+      inventory?.artworks.find((item) => item.id === selectedArtworkId) ??
+      inventory?.artworks[0];
+    if (view === "artworkDetail") {
+      if (!art || (page === "detail" && selectedArtworkId === art.id)) return;
+      guarded(() => {
+        setSelectedArtworkId(art.id);
+        goTo("detail");
+      });
+      return;
+    }
+    if (view === "artworkEdit" || view === "artworkMovements") {
+      if (!art) return;
+      const tab: FormTab = view === "artworkMovements" ? "movimientos" : "info";
+      guarded(() => {
+        startEdit(art, tab);
+        setFormKey(`${art.id}-${tab}-${Date.now()}`);
+      });
+      return;
+    }
+    if (view === "pricelistNew") {
+      guarded(() => {
+        setPricelistResetToken((token) => token + 1);
+        openPriceList({ blank: true });
+      });
+      return;
+    }
+    // The guide only asks when the step's element isn't on screen, so this
+    // also resets a section that has an editor open (e.g. a folleto draft).
+    openSection(view);
   }
 
   function openPriceList(preset: PriceListPreset | null) {
@@ -403,7 +497,8 @@ export function App() {
     goTo("pricelist");
   }
 
-  function startEdit(artwork: Artwork) {
+  function startEdit(artwork: Artwork, tab: FormTab = "info") {
+    setFormTab(tab);
     setEditingArtwork(toInput(artwork, inventory!));
     setSelectedArtworkId(artwork.id);
     setFormKey(artwork.id);
@@ -460,13 +555,23 @@ export function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <p className="eyebrow">{t("brand.eyebrow")}</p>
-          <h1>{t("brand.title")}</h1>
+          <div>
+            <p className="eyebrow">{t("brand.eyebrow")}</p>
+            <h1>{t("brand.title")}</h1>
+          </div>
+          <button
+            type="button"
+            className="help-button"
+            data-help="help-button"
+            onClick={() => setHelpSession({ id: Date.now(), fromStart: false })}
+          >
+            {t("help.button")}
+          </button>
         </div>
-        <nav>
+        <nav data-help="sidebar-nav">
           <div className="nav-inbox-block">
             <NavButton
-              className="nav-button-inbox"
+              className={`nav-button-inbox${helpHighlight === "inbox" ? " nav-help-highlight" : ""}`}
               active={page === "inbox"}
               onClick={() => guarded(() => goTo("inbox"))}
             >
@@ -485,16 +590,17 @@ export function App() {
             </NavButton>
           </div>
           <div className="nav-rest">
-          <NavButton active={page === "library" || page === "form" || page === "detail"} onClick={() => guarded(() => goTo("library"))}>
+          <NavButton className={helpHighlight === "library" ? "nav-help-highlight" : ""} active={page === "library" || page === "form" || page === "detail"} onClick={() => guarded(() => goTo("library"))}>
             <span className="nav-dot dot-obras" /> {t("nav.library")}
           </NavButton>
-          <NavButton active={page === "series"} onClick={() => guarded(() => goTo("series"))}>
+          <NavButton className={helpHighlight === "series" ? "nav-help-highlight" : ""} active={page === "series"} onClick={() => guarded(() => goTo("series"))}>
             <span className="nav-dot dot-series" /> {t("nav.series")}
           </NavButton>
-          <NavButton active={page === "contacts"} onClick={() => guarded(() => goTo("contacts"))}>
+          <NavButton className={helpHighlight === "contacts" ? "nav-help-highlight" : ""} active={page === "contacts"} onClick={() => guarded(() => goTo("contacts"))}>
             <span className="nav-dot dot-people" /> {t("nav.contacts")}
           </NavButton>
           <NavButton
+            className={helpHighlight === "exhibitions" ? "nav-help-highlight" : ""}
             active={page === "exhibitions"}
             onClick={() =>
               guarded(() => {
@@ -507,6 +613,7 @@ export function App() {
             <span className="nav-dot dot-exh" /> {t("nav.exhibitions")}
           </NavButton>
           <NavButton
+            className={helpHighlight === "pricelist" ? "nav-help-highlight" : ""}
             active={page === "pricelist"}
             onClick={() =>
               guarded(() => {
@@ -517,16 +624,18 @@ export function App() {
           >
             <span className="nav-dot dot-price" /> {t("nav.pricelist")}
           </NavButton>
-          <NavButton active={page === "pricing"} onClick={() => guarded(() => goTo("pricing"))}>
+          <NavButton className={helpHighlight === "pricing" ? "nav-help-highlight" : ""} active={page === "pricing"} onClick={() => guarded(() => goTo("pricing"))}>
             <span className="nav-dot dot-factor" /> {t("nav.pricing")}
           </NavButton>
           <NavButton
+            className={helpHighlight === "financials" ? "nav-help-highlight" : ""}
             active={page === "financials"}
             onClick={() => guarded(() => goTo("financials"))}
           >
             <span className="nav-dot dot-money" /> {t("nav.financials")}
           </NavButton>
           <NavButton
+            className={helpHighlight === "applications" ? "nav-help-highlight" : ""}
             active={page === "applications"}
             onClick={() =>
               guarded(() => {
@@ -538,12 +647,14 @@ export function App() {
             <span className="nav-dot dot-app" /> {t("nav.applications")}
           </NavButton>
           <NavButton
+            className={helpHighlight === "textGenerator" ? "nav-help-highlight" : ""}
             active={page === "textGenerator"}
             onClick={() => guarded(() => goTo("textGenerator"))}
           >
             <span className="nav-dot dot-textgen" /> {t("nav.textGenerator")}
           </NavButton>
           <NavButton
+            className={helpHighlight === "examples" ? "nav-help-highlight" : ""}
             active={page === "examples"}
             onClick={() => guarded(() => goTo("examples"))}
           >
@@ -570,8 +681,21 @@ export function App() {
           <button className="ghost small" onClick={chooseLibrary}>
             {t("sidebar.changeFolder")}
           </button>
+          <BackupBox />
         </div>
       </aside>
+
+      {helpSession ? (
+        <HelpTour
+          key={helpSession.id}
+          fromStart={helpSession.fromStart}
+          page={page}
+          hasArtworks={(inventory?.artworks.length ?? 0) > 0}
+          onClose={() => setHelpSession(null)}
+          onHighlight={setHelpHighlight}
+          onShow={showTourView}
+        />
+      ) : null}
 
       <main className="main-panel">
         {(history.length > 0 ||
@@ -581,6 +705,7 @@ export function App() {
           <button
             type="button"
             className="floating-back"
+            data-help="back"
             onClick={() => guarded(() => goBack())}
           >
             {t("nav.floatingBack")}
@@ -604,8 +729,53 @@ export function App() {
             </button>
           </div>
         )}
+        {update && !updateDismissed ? (
+          <div className="notice update-notice" role="status">
+            <span>
+              {updateClicked
+                ? t("update.howTo")
+                : t("update.available", { version: update.latest })}
+            </span>
+            <span className="update-actions">
+              {!updateClicked ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUpdateClicked(true);
+                    void window.inventoryApi.openUpdateDownload(update.downloadUrl);
+                  }}
+                >
+                  {t("update.download")}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="banner-dismiss"
+                aria-label={t("common.close")}
+                onClick={() => setUpdateDismissed(true)}
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+        ) : null}
+        {recoveredFrom ? (
+          <div className="notice recovery-notice" role="alert">
+            {t("recovery.notice", {
+              date: new Date(recoveredFrom).toLocaleString(lang)
+            })}
+            <button
+              type="button"
+              className="banner-dismiss"
+              aria-label={t("common.close")}
+              onClick={() => setRecoveredFrom("")}
+            >
+              ✕
+            </button>
+          </div>
+        ) : null}
         {!inventory ? (
-          <div className="empty-state">{t("app.loadingExcel")}</div>
+          <div className="empty-state">{loadError || t("app.loadingExcel")}</div>
         ) : page === "library" ? (
           <LibraryPage
             inventory={inventory}
@@ -619,6 +789,7 @@ export function App() {
         ) : page === "form" ? (
           <ArtworkForm
             key={formKey}
+            initialTab={formTab}
             inventory={inventory}
             artwork={editingArtwork}
             setInventory={setInventory}
@@ -785,7 +956,7 @@ export function App() {
 
       {pendingNav && (
         <div className="modal-backdrop" onClick={() => setPendingNav(null)}>
-          <div className="modal confirm-modal" onClick={(event) => event.stopPropagation()}>
+          <div data-help-modal="unsaved" className="modal confirm-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
               <h3>{t("unsaved.title")}</h3>
             </div>
@@ -1183,6 +1354,7 @@ function LibraryPage({
         <div className="table-toolbar">
           <button
             className="ghost"
+            data-help="library-filters"
             onClick={() => setShowFilters((value) => !value)}
           >
             {showFilters ? t("library.filtersHide") : t("library.filtersShow")}
@@ -1210,10 +1382,10 @@ function LibraryPage({
             >
               {t("library.bulkExport")}
             </button>
-            <button onClick={onAdd}>{t("library.add")}</button>
+            <button data-help="library-add" onClick={onAdd}>{t("library.add")}</button>
           </div>
         </div>
-        <div className="library-table-wrap">
+        <div className="library-table-wrap" data-help="library-table">
           <div className="art-table">
             <div className="art-row art-row-header">
               <span>{t("library.col.photo")}</span>
@@ -1365,7 +1537,7 @@ function RetrievalMark({
             setConfirming(false);
           }}
         >
-          <div className="modal confirm-modal" onClick={(event) => event.stopPropagation()}>
+          <div data-help-modal="returned" className="modal confirm-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
               <h3>{t("library.overdue.title")}</h3>
             </div>
@@ -1397,7 +1569,8 @@ function ArtworkForm({
   onSaved,
   onBackToList,
   onDirtyChange,
-  saveRef
+  saveRef,
+  initialTab = "info"
 }: {
   inventory: InventoryData;
   artwork: ArtworkInput;
@@ -1407,10 +1580,11 @@ function ArtworkForm({
   onBackToList: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   saveRef?: MutableRefObject<null | (() => Promise<boolean>)>;
+  initialTab?: FormTab;
 }) {
   const { lang, t } = useLanguage();
   const [form, setForm] = useState<ArtworkInput>(artwork);
-  const [tab, setTab] = useState<FormTab>("info");
+  const [tab, setTab] = useState<FormTab>(initialTab);
   const [locked, setLocked] = useState(false);
   const [error, setError] = useState("");
   const [collapseSignal, setCollapseSignal] = useState(0);
@@ -1608,7 +1782,7 @@ function ArtworkForm({
             </>
           ) : (
             <>
-              <button type="button" onClick={() => void save()}>
+              <button type="button" data-help="form-save" onClick={() => void save()}>
                 {t("common.save")}
               </button>
               <button type="button" className="ghost" onClick={onNew}>
@@ -1640,6 +1814,7 @@ function ArtworkForm({
         >
           <button
             type="button"
+            data-help="form-photo"
             className={`artwork-photo-frame${
               pendingImage || imageUrl || image?.absolutePath ? " has-image" : ""
             }${photoDrop.over ? " is-file-drag" : ""}`}
@@ -1684,6 +1859,7 @@ function ArtworkForm({
               {t("artwork.tab.info")}
             </SubTab>
             <SubTab
+              help="form-movements-tab"
               active={tab === "movimientos"}
               onClick={() => setTab("movimientos")}
             >
@@ -1766,7 +1942,7 @@ function ArtworkForm({
                         }
                       />
                     </label>
-                    <label className="field">
+                    <label className="field" data-help="form-status">
                       {t("artwork.field.status")}
                       <input
                         className="artwork-status-readonly"
@@ -2066,7 +2242,6 @@ function MovementEditor({
     { mode: "new" } | { mode: "edit"; index: number } | null
   >(null);
   const [saveError, setSaveError] = useState("");
-
   const newDraft: MovementInput = {
     type: "exhibition",
     recipientType: "person",
@@ -2220,6 +2395,7 @@ function MovementEditor({
       <button
         type="button"
         className="ghost"
+        data-help="movement-add"
         onClick={() => {
           setSaveError("");
           setEditing({ mode: "new" });
@@ -2364,7 +2540,7 @@ function MovementModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="movement" className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{isNew ? t("movement.modal.add") : t("movement.modal.edit")}</h3>
           <button className="icon-button ghost" onClick={onClose}>
@@ -2392,7 +2568,7 @@ function MovementModal({
             </label>
           )}
 
-          <div className="form-row">
+          <div className="form-row" data-help="mv-type">
             <LookupSelect
               inventory={inventory}
               setInventory={setInventory}
@@ -3088,7 +3264,7 @@ function ImageExportModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="imageExport"
         className="modal export-image-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -3631,7 +3807,7 @@ function BulkImageExportModal({
         />
       ) : (
         <div className="modal-backdrop" onClick={onClose}>
-          <div
+          <div data-help-modal="bulkExport"
             className="modal export-image-modal bulk-export-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -4198,7 +4374,10 @@ function ArtworkDetail({
         ) : (
           <div>{t("common.noPhoto")}</div>
         )}
-        <div className="image-panel-actions image-panel-actions-stack">
+        <div
+          className="image-panel-actions image-panel-actions-stack"
+          data-help="detail-photo-actions"
+        >
           <button
             type="button"
             className="photo-action photo-action-change"
@@ -4245,7 +4424,7 @@ function ArtworkDetail({
           className="modal-backdrop"
           onClick={() => !certBusy && setCertLangOpen(false)}
         >
-          <div
+          <div data-help-modal="cert"
             className="modal confirm-modal cert-lang-modal"
             role="dialog"
             aria-labelledby="cert-lang-title"
@@ -4369,19 +4548,20 @@ function ArtworkDetail({
             <button
               type="button"
               className="ghost"
+              data-help="detail-cert"
               disabled={certBusy}
               onClick={openCertificateModal}
             >
               {certBusy ? t("artwork.detail.certBusy") : t("artwork.detail.cert")}
             </button>
-            <button onClick={onEdit}>{t("common.edit")}</button>
+            <button data-help="detail-edit" onClick={onEdit}>{t("common.edit")}</button>
             <button className="ghost" onClick={onBack}>
               {t("common.back")}
             </button>
           </div>
         </div>
 
-        <div className="subtabs">
+        <div className="subtabs" data-help="detail-tabs">
           <SubTab active={tab === "info"} onClick={() => setTab("info")}>
             {t("artwork.detail.tab.info")}
           </SubTab>
@@ -4855,7 +5035,7 @@ function LookupReassignModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="lookupReassign" className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{t("confirm.lookup.title")}</h3>
           <button className="icon-button ghost" onClick={onClose}>
@@ -5184,7 +5364,7 @@ function ContactModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="contact" className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{heading}</h3>
           <button className="icon-button ghost" onClick={onClose}>
@@ -5531,6 +5711,7 @@ function ContactsPage({
           {t("common.add")}
           <select
             value=""
+            data-help="contacts-add"
             onChange={(event) => {
               if (event.target.value) setModal({ kind: event.target.value as ContactKind });
             }}
@@ -5881,14 +6062,14 @@ function ArtworkPickerModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="artworkPicker" className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{pickerTitle}</h3>
           <button className="icon-button ghost" onClick={onClose}>
             ✕
           </button>
         </div>
-        <div className="modal-toolbar">
+        <div className="modal-toolbar" data-help="picker-search">
           <input
             className="search-input grow"
             placeholder={t("picker.searchWork")}
@@ -6137,7 +6318,7 @@ function DocumentDescriptionModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="docDescription"
         className="modal doc-desc-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -6318,7 +6499,7 @@ function DocumentPickModal({
   const t = useT();
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="docPick"
         className="modal confirm-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -6782,7 +6963,7 @@ function ExhibitionSalesSection({
 
       {adding && (
         <div className="modal-backdrop" onClick={reset}>
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
+          <div data-help-modal="exhibitionSale" className="modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
               <h3>
                 {t("exhibition.sales.addTitle", { title: exhibition.title })}
@@ -7763,7 +7944,9 @@ function ExhibitionsPage({
           </button>
         )}
         <span className="count-pill">{exhibitions.length}</span>
-        <button onClick={() => setEditing("new")}>{t("exhibitions.add")}</button>
+        <button data-help="exhibitions-add" onClick={() => setEditing("new")}>
+          {t("exhibitions.add")}
+        </button>
       </div>
 
       <div className="list-table-wrap">
@@ -8395,7 +8578,7 @@ function ExhibitionModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="exhibitionNew" className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{t("exhibition.modal.title")}</h3>
           <button className="icon-button ghost" onClick={onClose}>
@@ -8464,7 +8647,7 @@ function ConfirmDialog({
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div
+      <div data-help-modal="confirmDelete"
         className="modal confirm-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -8562,7 +8745,7 @@ function MovementDetailModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="movementDetail" className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{movementSummary(movement, inventory, t, lang)}</h3>
           <button className="icon-button ghost" onClick={onClose}>
@@ -9748,7 +9931,7 @@ function SizeTypeEditModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="sizeType"
         className="modal modal-wide cuentas-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -10090,7 +10273,7 @@ function TaxCountryEditModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="taxCountry"
         className="modal modal-wide cuentas-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -10356,7 +10539,7 @@ function PricingExportModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="pricingExport" className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{t("pricing.export.title")}</h3>
           <button className="icon-button ghost" type="button" onClick={onClose}>
@@ -10624,7 +10807,12 @@ function PricingSettingsPage({
           <p className="page-lead">{t("pricing.leadFactors")}</p>
         </div>
         <div className="form-head-actions">
-          <button type="button" className="ghost" onClick={() => setShowExport(true)}>
+          <button
+            type="button"
+            className="ghost"
+            data-help="pricing-sheet"
+            onClick={() => setShowExport(true)}
+          >
             {t("pricing.generateSheet")}
           </button>
           <button disabled={saving || !dirty} onClick={save}>
@@ -10633,7 +10821,7 @@ function PricingSettingsPage({
         </div>
       </div>
 
-      <div className="pricing-block">
+      <div className="pricing-block" data-help="pricing-sizes">
         <div className="related-head">
           <h3>{t("pricing.size.title")}</h3>
           <button type="button" onClick={addType}>
@@ -10927,7 +11115,7 @@ function FixedTypePriceAddModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="fixedPriceAdd" className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{t("pricing.fixed.addTitle")}</h3>
           <button type="button" className="icon-button ghost" onClick={onClose}>
@@ -11066,7 +11254,7 @@ function FixedTypePriceEditModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="fixedPriceEdit"
         className="modal modal-wide cuentas-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -11615,7 +11803,7 @@ function ExpenseModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="expense"
         className="modal modal-wide cuentas-modal"
         onClick={(event) => event.stopPropagation()}
       >
@@ -11904,7 +12092,7 @@ function FinancialExportModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div data-help-modal="financialExport" className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <h3>{t("financials.export.title")}</h3>
           <button type="button" className="icon-button ghost" onClick={onClose}>
@@ -12140,7 +12328,7 @@ function FinancialsPage({
           <h2>{t("financials.title")}</h2>
           <p className="page-lead">{t("financials.leadLong")}</p>
         </div>
-        <label className="checkline hide-money-toggle">
+        <label className="checkline hide-money-toggle" data-help="financials-hide">
           <input type="checkbox" checked={hideMoney} onChange={toggleHideMoney} />
           {t("financials.hideAmounts")}
         </label>
@@ -12264,7 +12452,7 @@ function FinancialsPage({
         </div>
       </div>
 
-      <div className="cuentas-actions">
+      <div className="cuentas-actions" data-help="financials-actions">
         <button type="button" className="cuentas-primary" onClick={() => setEditing("new")}>
           {t("financials.actions.addExpense")}
         </button>
@@ -12306,7 +12494,7 @@ function FinancialsPage({
 
       {showExpenses && (
         <div className="modal-backdrop" onClick={() => setShowExpenses(false)}>
-          <div
+          <div data-help-modal="expensesList"
             className="modal modal-wide cuentas-expenses-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -12392,7 +12580,7 @@ function FinancialsPage({
 
       {showPayments && (
         <div className="modal-backdrop" onClick={() => setShowPayments(false)}>
-          <div
+          <div data-help-modal="paymentsList"
             className="modal modal-wide cuentas-expenses-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -12472,7 +12660,7 @@ function FinancialsPage({
       )}
       {confirmId && (
         <div className="modal-backdrop" onClick={() => setConfirmId(null)}>
-          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+          <div data-help-modal="expenseDelete" className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <h3>{t("confirm.expense.title")}</h3>
             </div>
@@ -13432,7 +13620,7 @@ function SeriesPage({
           gridTemplateColumns: `minmax(160px, ${sidebarSplitPct}fr) 8px minmax(280px, ${100 - sidebarSplitPct}fr)`
         }}
       >
-        <aside className="series-sidebar">
+        <aside className="series-sidebar" data-help="series-list">
           <div className="series-name-list">
             {names.length === 0 ? (
               <p className="muted small-note">{t("series.empty.sidebar")}</p>
@@ -13785,7 +13973,7 @@ function SeriesDetailPanel({
 
       {editingId && (
         <div className="modal-backdrop" onClick={closeEditText}>
-          <div
+          <div data-help-modal="seriesText"
             className="modal series-text-edit-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -14181,7 +14369,7 @@ function ExampleLibraryPage({
     const close = () => setMoveIds(null);
     return (
       <div className="modal-backdrop" onClick={close}>
-        <div
+        <div data-help-modal="examplesMove"
           className="modal confirm-modal examples-move-modal"
           onClick={(event) => event.stopPropagation()}
         >
@@ -14369,6 +14557,7 @@ function ExampleLibraryPage({
           <button
             type="button"
             className="cuentas-primary"
+            data-help="examples-save"
             disabled={!dirty || saving}
             onClick={() => void persist()}
           >
@@ -14538,7 +14727,7 @@ function ExampleLibraryPage({
           className="modal-backdrop"
           onClick={() => setViewingId(null)}
         >
-          <div
+          <div data-help-modal="exampleView"
             className="modal confirm-modal examples-view-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -15394,7 +15583,7 @@ function InboxPage({
 
       <div className="inbox-stack">
         {/* ── To Do ────────────────────────────────────────────── */}
-        <section className="inbox-fold">
+        <section className="inbox-fold" data-help="inbox-todo">
           <button
             type="button"
             className="inbox-fold-head"
@@ -15505,7 +15694,7 @@ function InboxPage({
         </section>
 
         {/* ── Recordatorios ────────────────────────────────────── */}
-        <section className="inbox-fold">
+        <section className="inbox-fold" data-help="inbox-reminder">
           <button
             type="button"
             className="inbox-fold-head"
@@ -15556,7 +15745,7 @@ function InboxPage({
         </section>
 
         {/* ── Notas ────────────────────────────────────────────── */}
-        <section className="inbox-fold">
+        <section className="inbox-fold" data-help="inbox-note">
           <button
             type="button"
             className="inbox-fold-head"
@@ -15624,7 +15813,7 @@ function InboxPage({
 
       {noteFindOpen ? (
         <div className="modal-backdrop" onClick={() => setNoteFindOpen(false)}>
-          <div
+          <div data-help-modal="notesFind"
             className="modal confirm-modal inbox-compose-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -15694,7 +15883,7 @@ function InboxPage({
           className="modal-backdrop"
           onClick={() => setNoteDraft(null)}
         >
-          <div
+          <div data-help-modal="note"
             className="modal confirm-modal inbox-compose-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -15765,7 +15954,7 @@ function InboxPage({
           className="modal-backdrop"
           onClick={() => setReminderDraft(null)}
         >
-          <div
+          <div data-help-modal="reminder"
             className="modal confirm-modal inbox-compose-modal inbox-reminder-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -15938,7 +16127,7 @@ function InboxPage({
           className="modal-backdrop"
           onClick={() => setHistoryOpen(false)}
         >
-          <div
+          <div data-help-modal="todoHistory"
             className="modal confirm-modal inbox-history-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -16721,7 +16910,11 @@ function TextGeneratorPage({
                 <span className="pl-block-title">{t("textgen.simple.works")}</span>
                 <p className="textgen-step-hint">{t("textgen.simple.worksHint")}</p>
               </div>
-              <button type="button" onClick={() => setShowPicker(true)}>
+              <button
+                type="button"
+                data-help="textgen-works"
+                onClick={() => setShowPicker(true)}
+              >
                 {t("textgen.pickWorks")}
               </button>
             </div>
@@ -17130,6 +17323,7 @@ function TextGeneratorPage({
             <button
               type="button"
               className="cuentas-primary textgen-big-btn"
+              data-help="textgen-copy"
               disabled={copying !== null}
               onClick={() => void copyText()}
             >
@@ -17288,7 +17482,7 @@ function ExamplePickerModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
+      <div data-help-modal="examplePicker"
         className="modal modal-wide"
         onClick={(event) => event.stopPropagation()}
       >
@@ -17498,6 +17692,7 @@ function ApplicationsPage({
             <button
               type="button"
               className="cuentas-primary"
+              data-help="applications-add"
               onClick={() => setEditing("new")}
             >
               {t("applications.add")}
@@ -18911,7 +19106,9 @@ function PriceListPage({
 }) {
   const t = useT();
   const hasLaunchPreset = Boolean(
-    preset?.exhibitionId || (preset?.artworkIds && preset.artworkIds.length > 0)
+    preset?.blank ||
+      preset?.exhibitionId ||
+      (preset?.artworkIds && preset.artworkIds.length > 0)
   );
   const [launchPreset, setLaunchPreset] = useState<PriceListPreset | null>(
     hasLaunchPreset ? preset : null
@@ -18932,7 +19129,11 @@ function PriceListPage({
 
   // Opening from an exhibition (or with preselected works) jumps straight into a new draft.
   useEffect(() => {
-    if (!preset?.exhibitionId && !(preset?.artworkIds && preset.artworkIds.length > 0)) {
+    if (
+      !preset?.blank &&
+      !preset?.exhibitionId &&
+      !(preset?.artworkIds && preset.artworkIds.length > 0)
+    ) {
       return;
     }
     setLaunchPreset(preset);
@@ -18999,6 +19200,7 @@ function PriceListPage({
             <button
               type="button"
               className="cuentas-primary"
+              data-help="pricelist-add"
               onClick={() => {
                 setLaunchPreset(null);
                 setEditing("new");
@@ -19177,6 +19379,7 @@ function PriceListEditor({
   const t = useT();
   const { lang } = useLanguage();
   const [docId, setDocId] = useState(document?.id ?? "");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [mode, setMode] = useState<"free" | "exhibition" | "series">(
     document?.mode ?? (preset?.exhibitionId ? "exhibition" : "free")
   );
@@ -19209,6 +19412,7 @@ function PriceListEditor({
   const [subtitle, setSubtitle] = useState(document?.subtitle ?? "");
   const [leftHeader, setLeftHeader] = useState(document?.leftHeader ?? "");
   const [rightHeader, setRightHeader] = useState(document?.rightHeader ?? "");
+  const [introText, setIntroText] = useState(document?.introText ?? "");
   const [showPrice, setShowPrice] = useState(document?.showPrice !== false);
   const [imagesPerPage, setImagesPerPage] = useState(document?.imagesPerPage ?? 4);
   const [language, setLanguage] = useState<PriceLang>(document?.language ?? "es");
@@ -19260,6 +19464,11 @@ function PriceListEditor({
     return 48;
   });
   const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewHtml, setPreviewHtml] = useState("");
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
+  const previewScrollRef = useRef(0);
+  const previewZoomRef = useRef(previewZoom);
+  previewZoomRef.current = previewZoom;
   const [draggingRowId, setDraggingRowId] = useState<string | null>(null);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
   const splitDragging = useRef(false);
@@ -19506,13 +19715,6 @@ function PriceListEditor({
     closePricesModal();
   }
 
-  // Mirrors rowImageHeight() in the PDF generator so the preview shows the
-  // exact frame size the PDF will use.
-  function previewFrameSize(perPage: number): number {
-    const per = (980 - 110) / Math.max(1, perPage);
-    return Math.max(60, Math.min(340, Math.round(per - 30)));
-  }
-
   async function pickImage(id: string) {
     const dataUrl = await window.inventoryApi.pickImageDataUrl();
     if (dataUrl) {
@@ -19534,6 +19736,7 @@ function PriceListEditor({
       subtitle: subtitle.trim(),
       leftHeader: leftHeader.trim(),
       rightHeader: rightHeader.trim(),
+      introText: introText.trim(),
       showPrice,
       priceBold,
       titleFontSize,
@@ -19585,6 +19788,102 @@ function PriceListEditor({
     };
   });
 
+  /**
+   * One payload for both the preview iframe and the PDF, so they render the
+   * same document. For the PDF, library photos go by path (compressed in main).
+   */
+  function buildPdfPayload(forPdf: boolean): PriceListPayload {
+    const rows = [];
+    for (const id of selectedIds) {
+      const art = artworkById.get(id);
+      if (!art) continue;
+      const image = mainImageFor(art, inventory);
+      rows.push({
+        title: art.title,
+        series: art.series ?? "",
+        material: artTypeLabel(inventory, art.type, language),
+        size: formatSize(art),
+        year: art.yearMade ?? "",
+        price: formatEuro(listedPriceFor(id)),
+        imageDataUrl: customImages[id] || previewImages[id] || undefined,
+        imagePath:
+          forPdf && !customImages[id] ? image?.absolutePath : undefined,
+        widthCm: toCm(art.width, art.unit),
+        heightCm: toCm(art.height, art.unit)
+      });
+    }
+    return {
+      header: header || "Dossier de obras",
+      subtitle,
+      leftHeader,
+      rightHeader,
+      introText,
+      showPrice,
+      priceBold,
+      titleFontSize,
+      textFontSize,
+      priceFontSize,
+      textBold,
+      imagesPerPage,
+      imageGap,
+      frameBorderColor,
+      fonts: { header: fontHeader, subtitle: fontSubtitle, body: fontBody },
+      headerStyle: { bold: headerBold, italic: headerItalic, color: headerColor },
+      subtitleStyle: { italic: subtitleItalic, color: subtitleColor },
+      rows
+    };
+  }
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setPreviewHtml(buildPriceListHtml(buildPdfPayload(false), { preview: true }));
+    }, 220);
+    return () => window.clearTimeout(handle);
+  });
+
+  useEffect(() => {
+    const iframe = previewFrameRef.current;
+    if (!iframe || !previewHtml) return;
+    const win = iframe.contentWindow as
+      | (Window & {
+          setPreviewZoom?: (z: number) => void;
+          __pricelistReady?: Promise<unknown>;
+        })
+      | null;
+    const doc = iframe.contentDocument;
+    if (!doc || !win) return;
+    try {
+      previewScrollRef.current =
+        win.scrollY || doc.documentElement.scrollTop || doc.body?.scrollTop || 0;
+    } catch {
+      /* ignore */
+    }
+    doc.open();
+    doc.write(previewHtml);
+    doc.close();
+    const y = previewScrollRef.current;
+    void Promise.resolve(win.__pricelistReady).then(() => {
+      try {
+        win.setPreviewZoom?.(previewZoomRef.current);
+        win.scrollTo(0, y);
+      } catch {
+        /* ignore */
+      }
+    });
+  }, [previewHtml]);
+
+  useEffect(() => {
+    const win = previewFrameRef.current?.contentWindow as
+      | (Window & { setPreviewZoom?: (z: number) => void })
+      | null
+      | undefined;
+    try {
+      win?.setPreviewZoom?.(previewZoom);
+    } catch {
+      /* ignore */
+    }
+  }, [previewZoom]);
+
   async function generate() {
     if (selectedIds.length === 0) {
       onError(t("pricelist.error.needWorks"));
@@ -19594,42 +19893,8 @@ function PriceListEditor({
     try {
       // Autosave before export so the draft isn't lost.
       await persist({ quiet: true });
-      const rows = [];
-      for (const id of selectedIds) {
-        const art = artworkById.get(id);
-        if (!art) continue;
-        const image = mainImageFor(art, inventory);
-        rows.push({
-          title: art.title,
-          series: art.series ?? "",
-          material: artTypeLabel(inventory, art.type, language),
-          size: formatSize(art),
-          year: art.yearMade ?? "",
-          price: formatEuro(listedPriceFor(id)),
-          imageDataUrl: customImages[id] || previewImages[id] || undefined,
-          imagePath: customImages[id] ? undefined : image?.absolutePath,
-          widthCm: toCm(art.width, art.unit),
-          heightCm: toCm(art.height, art.unit)
-        });
-      }
       const result = await window.inventoryApi.generatePriceList({
-        header: header || "Folleto de obras",
-        subtitle,
-        leftHeader,
-        rightHeader,
-        showPrice,
-        priceBold,
-        titleFontSize,
-        textFontSize,
-        priceFontSize,
-        textBold,
-        imagesPerPage,
-        imageGap,
-        frameBorderColor,
-        fonts: { header: fontHeader, subtitle: fontSubtitle, body: fontBody },
-        headerStyle: { bold: headerBold, italic: headerItalic, color: headerColor },
-        subtitleStyle: { italic: subtitleItalic, color: subtitleColor },
-        rows,
+        ...buildPdfPayload(true),
         maxMb: parsePdfMaxMbInput(pdfMaxMb)
       });
       if (result) {
@@ -19655,6 +19920,20 @@ function PriceListEditor({
     }
   }
 
+  async function remove() {
+    if (!docId) return;
+    setBusy(true);
+    try {
+      setInventory(await window.inventoryApi.deletePriceList(docId));
+      onDirtyChange?.(false);
+      onToast(t("pricelist.delete.done"));
+      onBack();
+    } catch (caught) {
+      onError(caught instanceof Error ? caught.message : t("common.error.save"));
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="list-page pricelist-page">
       <div className="page-head">
@@ -19674,7 +19953,11 @@ function PriceListEditor({
           >
             {t("common.save")}
           </button>
-          <button disabled={busy} onClick={() => void generate()}>
+          <button
+            data-help="pricelist-generate"
+            disabled={busy}
+            onClick={() => void generate()}
+          >
             {t("pricelist.generatePdf")}
           </button>
         </div>
@@ -19687,7 +19970,7 @@ function PriceListEditor({
         }}
       >
         <div className="app-config pl-config">
-          <div className="segmented">
+          <div className="segmented" data-help="pricelist-mode">
             <button
               className={`seg ${mode === "free" ? "active" : ""}`}
               onClick={() => {
@@ -19931,7 +20214,7 @@ function PriceListEditor({
             </div>
           )}
 
-          <label className="field">
+          <label className="field" data-help="pricelist-header">
             {t("pricelist.field.headerFull")}
             <input
               value={header}
@@ -19949,6 +20232,17 @@ function PriceListEditor({
               placeholder={t("pricelist.subtitlePlaceholder")}
               onChange={(event) => {
                 setSubtitle(event.target.value);
+                markDirty();
+              }}
+            />
+          </label>
+          <label className="field" data-help="pricelist-intro">
+            {t("pricelist.field.introOptional")}
+            <textarea
+              value={introText}
+              placeholder={t("pricelist.introPlaceholder")}
+              onChange={(event) => {
+                setIntroText(event.target.value);
                 markDirty();
               }}
             />
@@ -20256,6 +20550,23 @@ function PriceListEditor({
               ))}
             </select>
           </label>
+
+          {docId ? (
+            <div className="danger-zone" data-help="pricelist-delete">
+              <div>
+                <strong>{t("pricelist.delete.title")}</strong>
+                <p className="muted">{t("pricelist.delete.body")}</p>
+              </div>
+              <button
+                type="button"
+                className="ghost danger"
+                disabled={busy}
+                onClick={() => setConfirmDelete(true)}
+              >
+                {t("pricelist.delete.button")}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div
@@ -20267,7 +20578,7 @@ function PriceListEditor({
           onPointerDown={onSplitPointerDown}
         />
 
-        <div className="pl-preview-pane">
+        <div className="pl-preview-pane" data-help="pricelist-preview">
           <div className="app-preview-toolbar">
             <span className="pl-fp-label muted">
               {t("pricelist.preview.label", { n: selectedIds.length })}
@@ -20301,186 +20612,20 @@ function PriceListEditor({
               </button>
             </div>
           </div>
-          <div className="pl-paper">
-            <div
-              className="pl-sheet"
-              style={{
-                fontFamily: fontBody,
-                zoom: 0.66 * previewZoom
-              }}
-            >
-              {(leftHeader || rightHeader) && (
-                <div className="pl-sheet-subhead">
-                  <span className="pl-sheet-subhead-left">{leftHeader}</span>
-                  <span>{rightHeader}</span>
-                </div>
-              )}
-              <div
-                className="pl-sheet-title"
-                style={{
-                  fontFamily: fontHeader,
-                  color: headerColor,
-                  fontWeight: headerBold ? 700 : 400,
-                  fontStyle: headerItalic ? "italic" : "normal"
-                }}
-              >
-                {header || "Folleto de obras"}
-              </div>
-              {subtitle && (
-                <div
-                  className="pl-sheet-subtitle"
-                  style={{
-                    fontFamily: fontSubtitle,
-                    color: subtitleColor,
-                    fontStyle: subtitleItalic ? "italic" : "normal"
-                  }}
-                >
-                  {subtitle}
-                </div>
-              )}
-              <div className="pl-sheet-rule" />
-              {selectedIds.length === 0 ? (
-                <p className="muted">
-                  {mode === "exhibition"
-                    ? t("pricelist.preview.pickExhibition")
-                    : mode === "series"
-                      ? t("pricelist.preview.pickSeries")
-                      : t("pricelist.preview.addWorks")}
-                </p>
-              ) : (
-                selectedIds.map((id, index) => {
-                  const art = artworkById.get(id);
-                  if (!art) return null;
-                  const url = customImages[id] || previewImages[id];
-                  const frameSize = previewFrameSize(imagesPerPage);
-                  // Inner area (leaves an 8px pad + 1px border) so the frame
-                  // border is always visible around the image, matching the PDF.
-                  const innerSize = Math.max(20, frameSize - 2 * 9);
-                  const pageBreakHere =
-                    index > 0 && index % imagesPerPage === 0;
-                  const wCm = toCm(art.width, art.unit) ?? 0;
-                  const hCm = toCm(art.height, art.unit) ?? 0;
-                  let iw = innerSize;
-                  let ih = innerSize;
-                  if (wCm > 0 && hCm > 0) {
-                    const aspect = wCm / hCm;
-                    if (aspect >= 1) ih = Math.round(innerSize / aspect);
-                    else iw = Math.round(innerSize * aspect);
-                  }
-                  return (
-                    <Fragment key={id}>
-                      {pageBreakHere ? (
-                        <div className="pl-page-break">
-                          <span>
-                            {t("pricelist.preview.page", {
-                              n: Math.floor(index / imagesPerPage) + 1
-                            })}
-                          </span>
-                        </div>
-                      ) : null}
-                      <div
-                        className="pl-sheet-row"
-                        style={
-                          index === 0 || pageBreakHere
-                            ? { borderTop: "1px solid #d8d8d8" }
-                            : undefined
-                        }
-                      >
-                        <div className="pl-sheet-imgcell">
-                          <div
-                            className="pl-sheet-frame"
-                            style={{
-                              width: `${frameSize}px`,
-                              height: `${frameSize}px`,
-                              borderColor: frameBorderColor
-                            }}
-                          >
-                            {url ? (
-                              <img
-                                src={url}
-                                alt={art.title}
-                                style={{
-                                  width: `${iw}px`,
-                                  height: `${ih}px`,
-                                  objectFit: "fill"
-                                }}
-                              />
-                            ) : (
-                              <span className="pl-sheet-noimg">
-                                {t("common.noImage")}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div
-                          className="pl-sheet-info"
-                          style={{ paddingLeft: `${imageGap}px` }}
-                        >
-                          <div
-                            className="pl-sheet-info-title"
-                            style={{ fontSize: `${titleFontSize}px` }}
-                          >
-                            {art.title}
-                          </div>
-                          {art.series && (
-                            <div
-                              className="pl-sheet-meta"
-                              style={{
-                                fontSize: `${textFontSize}px`,
-                                fontWeight: textBold ? 700 : 400
-                              }}
-                            >
-                              {art.series}
-                            </div>
-                          )}
-                          <div
-                            className="pl-sheet-meta"
-                            style={{
-                              fontSize: `${textFontSize}px`,
-                              fontWeight: textBold ? 700 : 400
-                            }}
-                          >
-                            {artTypeLabel(inventory, art.type, language)}
-                          </div>
-                          <div
-                            className="pl-sheet-meta"
-                            style={{
-                              fontSize: `${textFontSize}px`,
-                              fontWeight: textBold ? 700 : 400
-                            }}
-                          >
-                            {formatSize(art)}
-                          </div>
-                          {art.yearMade && (
-                            <div
-                              className="pl-sheet-meta"
-                              style={{
-                                fontSize: `${textFontSize}px`,
-                                fontWeight: textBold ? 700 : 400
-                              }}
-                            >
-                              {art.yearMade}
-                            </div>
-                          )}
-                          {showPrice && (
-                            <div
-                              className="pl-sheet-price"
-                              style={{
-                                fontWeight: priceBold ? 700 : 400,
-                                fontSize: `${priceFontSize}px`
-                              }}
-                            >
-                              {formatEuro(listedPriceFor(id)) || "—"}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </Fragment>
-                  );
-                })
-              )}
-            </div>
-          </div>
+          {selectedIds.length === 0 ? (
+            <p className="muted">
+              {mode === "exhibition"
+                ? t("pricelist.preview.pickExhibition")
+                : mode === "series"
+                  ? t("pricelist.preview.pickSeries")
+                  : t("pricelist.preview.addWorks")}
+            </p>
+          ) : null}
+          <iframe
+            ref={previewFrameRef}
+            className="app-pdf-frame"
+            title={t("pricelist.preview.frameTitle")}
+          />
         </div>
       </div>
 
@@ -20500,7 +20645,7 @@ function PriceListEditor({
 
       {showPricesModal && (
         <div className="modal-backdrop" onClick={closePricesModal}>
-          <div
+          <div data-help-modal="pricelistPrices"
             className="modal modal-wide pl-prices-modal"
             onClick={(event) => event.stopPropagation()}
           >
@@ -20666,6 +20811,20 @@ function PriceListEditor({
           </div>
         </div>
       )}
+      {confirmDelete ? (
+        <ConfirmDialog
+          title={t("pricelist.delete.title")}
+          message={t("pricelist.delete.confirm", {
+            title: header.trim() || t("pricelist.untitled")
+          })}
+          confirmLabel={t("common.deleteForever")}
+          onConfirm={() => {
+            setConfirmDelete(false);
+            void remove();
+          }}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -20948,18 +21107,157 @@ function CoverLineEditor({
 function SubTab({
   active,
   onClick,
-  children
+  children,
+  help
 }: {
   active: boolean;
   onClick: () => void;
   children: ReactNode;
+  /** Anchor for the help guide's spotlight. */
+  help?: string;
 }) {
   const classes = ["subtab"];
   if (active) classes.push("active");
   return (
-    <button type="button" className={classes.join(" ")} onClick={onClick}>
+    <button
+      type="button"
+      className={classes.join(" ")}
+      data-help={help}
+      onClick={onClick}
+    >
       {children}
     </button>
+  );
+}
+
+/** Sidebar box: where the safety copy goes, when it last ran, copy now. */
+function BackupBox() {
+  const { lang, t } = useLanguage();
+  const [status, setStatus] = useState<BackupStatus | null>(null);
+  const [error, setError] = useState("");
+  const [confirmForce, setConfirmForce] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const read = () =>
+      void window.inventoryApi
+        .getBackupStatus()
+        .then((next) => alive && setStatus(next))
+        .catch(() => undefined);
+    read();
+    // Automatic copies run in the background; keep the line up to date.
+    const timer = window.setInterval(read, 60_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  async function act(run: () => Promise<BackupStatus>) {
+    setError("");
+    setStatus((current) => (current ? { ...current, running: true } : current));
+    try {
+      setStatus(await run());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : "");
+      setStatus(await window.inventoryApi.getBackupStatus());
+    }
+  }
+
+  if (!status) return null;
+  const when = status.lastAt
+    ? new Date(status.lastAt).toLocaleString(lang, {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit"
+      })
+    : "";
+  const place = status.inICloud
+    ? "iCloud Drive"
+    : status.folder.split(/[\\/]/).slice(-2, -1)[0] || status.folder;
+  const problem = error || status.lastError;
+
+  return (
+    <div className="backup-box" data-help="backup-box">
+      <span>{t("backup.title")}</span>
+      {status.folder ? (
+        <>
+          <strong title={status.folder}>{place}</strong>
+          <span className="backup-when">
+            {status.running
+              ? t("backup.running")
+              : when
+                ? t("backup.last", { date: when })
+                : t("backup.never")}
+          </span>
+          {problem ? <span className="backup-error">{problem}</span> : null}
+          {status.blocked && !status.running ? (
+            <>
+              <span className="backup-error">
+                {t("backup.blocked", {
+                  library: status.blocked.libraryWorks,
+                  copy: status.blocked.copyWorks
+                })}
+              </span>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setConfirmForce(true)}
+              >
+                {t("backup.force")}
+              </button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="ghost small"
+            disabled={status.running}
+            onClick={() => void act(() => window.inventoryApi.runBackup())}
+          >
+            {t("backup.now")}
+          </button>
+          {confirmForce && status.blocked ? (
+            <ConfirmDialog
+              title={t("backup.force.title")}
+              message={t("backup.force.message", {
+                library: status.blocked.libraryWorks,
+                copy: status.blocked.copyWorks
+              })}
+              confirmLabel={t("backup.force")}
+              onConfirm={() => {
+                setConfirmForce(false);
+                void act(() => window.inventoryApi.runBackup(true));
+              }}
+              onCancel={() => setConfirmForce(false)}
+            />
+          ) : null}
+        </>
+      ) : (
+        <>
+          <span className="backup-off">{t("backup.off")}</span>
+          {problem ? <span className="backup-error">{problem}</span> : null}
+          {status.icloudAvailable ? (
+            <button
+              type="button"
+              className="small"
+              disabled={status.running}
+              onClick={() => void act(() => window.inventoryApi.chooseBackupFolder("icloud"))}
+            >
+              {t("backup.useICloud")}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ghost small"
+            disabled={status.running}
+            onClick={() => void act(() => window.inventoryApi.chooseBackupFolder("pick"))}
+          >
+            {t("backup.pickFolder")}
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -1,4 +1,12 @@
 import { access, copyFile, mkdir, readFile, writeFile } from "fs/promises";
+import { stat } from "fs/promises";
+import {
+  backupBeforeWrite,
+  keepUnreadable,
+  listSnapshots,
+  previousCopyPath,
+  writeFileAtomic
+} from "./libraryFiles";
 import path from "path";
 import { randomUUID } from "crypto";
 import type {
@@ -59,19 +67,42 @@ export class InventoryStore {
 
   async load(): Promise<InventoryData> {
     await ensureLibrary(this.libraryPath);
-    const raw = (await this.readJson()) ?? (await this.migrateFromWorkbook());
-    return withResolvedImagePaths(compactData(raw), this.libraryPath);
+    const { data, recoveredFrom } = await this.readOrRecover();
+    const loaded = withResolvedImagePaths(compactData(data), this.libraryPath);
+    return recoveredFrom ? { ...loaded, recoveredFrom } : loaded;
   }
 
-  private async readJson(): Promise<InventoryData | null> {
-    if (!(await exists(this.dataPath))) return null;
-    try {
-      const text = await readFile(this.dataPath, "utf8");
-      const parsed = JSON.parse(text) as Partial<InventoryData>;
-      return normalizeRaw(parsed, this.libraryPath);
-    } catch {
-      return null;
+  /**
+   * Read inventory.json. If it is missing or not valid JSON (e.g. a crash
+   * mid-write in an older version), restore the newest readable snapshot and
+   * keep the broken file aside. Only a library with no data file and no
+   * snapshots is built from the Excel workbook (the original migration).
+   */
+  private async readOrRecover(): Promise<{ data: InventoryData; recoveredFrom?: string }> {
+    const main = await readDataFile(this.dataPath);
+    if (main.kind === "ok") return { data: normalizeRaw(main.raw, this.libraryPath) };
+
+    // Newest first: the copy from just before the last save, then snapshots.
+    const candidates = await listSnapshots(this.libraryPath, "json");
+    const previous = previousCopyPath(this.libraryPath);
+    const previousTime = await stat(previous).then((info) => info.mtimeMs, () => NaN);
+    if (Number.isFinite(previousTime)) candidates.unshift({ file: previous, ms: previousTime });
+    for (const snapshot of candidates) {
+      const candidate = await readDataFile(snapshot.file);
+      if (candidate.kind !== "ok") continue;
+      if (main.kind === "unreadable") await keepUnreadable(this.libraryPath, this.dataPath);
+      await copyFile(snapshot.file, this.dataPath);
+      return {
+        data: normalizeRaw(candidate.raw, this.libraryPath),
+        recoveredFrom: new Date(snapshot.ms).toISOString()
+      };
     }
+
+    if (main.kind === "missing") return { data: await this.migrateFromWorkbook() };
+    // Never rebuild over data we could not read: the Excel copy is incomplete.
+    throw new Error(
+      "No se pudo leer el archivo del inventario (inventory.json) y no hay ninguna copia válida en «backups». No se ha cambiado nada. Escribe a Max antes de seguir."
+    );
   }
 
   private async migrateFromWorkbook(): Promise<InventoryData> {
@@ -106,11 +137,13 @@ export class InventoryStore {
   }
 
   private async writeJson(data: InventoryData): Promise<void> {
+    const { recoveredFrom: _notice, ...rest } = data;
     const payload = {
-      ...data,
+      ...rest,
       images: data.images.map(({ absolutePath, ...image }) => image)
     };
-    await writeFile(this.dataPath, JSON.stringify(payload, null, 2), "utf8");
+    await backupBeforeWrite(this.libraryPath, this.dataPath);
+    await writeFileAtomic(this.dataPath, JSON.stringify(payload, null, 2));
   }
 
   async saveArtwork(input: ArtworkInput): Promise<InventoryData> {
@@ -634,7 +667,7 @@ export class InventoryStore {
     const now = new Date().toISOString();
     const header = String(input.header ?? "").trim();
     const title =
-      String(input.title ?? "").trim() || header || "Folleto de obras";
+      String(input.title ?? "").trim() || header || "Dossier de obras";
     const existing = input.id
       ? (data.priceLists ?? []).find((item) => item.id === input.id)
       : undefined;
@@ -669,6 +702,7 @@ export class InventoryStore {
       subtitle: String(input.subtitle ?? "").trim(),
       leftHeader: String(input.leftHeader ?? "").trim(),
       rightHeader: String(input.rightHeader ?? "").trim(),
+      introText: String(input.introText ?? existing?.introText ?? "").trim(),
       showPrice: input.showPrice !== false,
       priceBold: input.priceBold !== false,
       titleFontSize: clampFontSize(
@@ -1511,6 +1545,27 @@ function sanitizeArtworks(artworks: Artwork[]): Artwork[] {
     });
 }
 
+type DataFile =
+  | { kind: "ok"; raw: Partial<InventoryData> }
+  | { kind: "missing" }
+  | { kind: "unreadable" };
+
+async function readDataFile(filePath: string): Promise<DataFile> {
+  let text: string;
+  try {
+    text = await readFile(filePath, "utf8");
+  } catch {
+    return { kind: (await exists(filePath)) ? "unreadable" : "missing" };
+  }
+  try {
+    const raw = JSON.parse(text) as unknown;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { kind: "unreadable" };
+    return { kind: "ok", raw: raw as Partial<InventoryData> };
+  } catch {
+    return { kind: "unreadable" };
+  }
+}
+
 async function exists(filePath: string): Promise<boolean> {
   try {
     await access(filePath);
@@ -1637,15 +1692,31 @@ function emptyInventory(libraryPath: string): InventoryData {
   };
 }
 
+/**
+ * A hand-picked status was briefly possible in a pre-release build. Status is
+ * movement-only again: drop the old value and recompute what was stored.
+ */
+function dropManualStatus(artworks: Artwork[], movements: Movement[]): Artwork[] {
+  return artworks.map((artwork) => {
+    const legacy = artwork as Artwork & { manualStatus?: string };
+    if (!("manualStatus" in legacy)) return artwork;
+    const { manualStatus: _dropped, ...rest } = legacy;
+    if (!_dropped || artwork.editionMode !== "unique") return rest;
+    const own = movements.filter((movement) => movement.artworkId === artwork.id);
+    return { ...rest, status: computeStatus(own, "in_studio") };
+  });
+}
+
 function normalizeRaw(
   raw: Partial<InventoryData>,
   libraryPath: string
 ): InventoryData {
+  const movements = (raw.movements ?? []).map(hydrateMovement);
   return {
     libraryPath,
-    artworks: raw.artworks ?? [],
+    artworks: dropManualStatus(raw.artworks ?? [], movements),
     editions: raw.editions ?? [],
-    movements: (raw.movements ?? []).map(hydrateMovement),
+    movements,
     exhibitions: raw.exhibitions ?? [],
     contacts: raw.contacts ?? [],
     images: raw.images ?? [],
@@ -1987,7 +2058,7 @@ function hydratePriceList(
         ? "series"
         : "free";
   const header = String(item.header ?? "").trim();
-  const title = String(item.title ?? "").trim() || header || "Folleto de obras";
+  const title = String(item.title ?? "").trim() || header || "Dossier de obras";
   return {
     id: item.id || `PL-${index}`,
     title,
@@ -2000,6 +2071,7 @@ function hydratePriceList(
     subtitle: String(item.subtitle ?? "").trim(),
     leftHeader: String(item.leftHeader ?? "").trim(),
     rightHeader: String(item.rightHeader ?? "").trim(),
+    introText: String(item.introText ?? "").trim(),
     showPrice: item.showPrice !== false,
     priceBold: item.priceBold !== false,
     titleFontSize: clampFontSize(item.titleFontSize, 15),

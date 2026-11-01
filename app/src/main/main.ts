@@ -8,6 +8,13 @@ import {
   shell,
   type OpenDialogOptions
 } from "electron";
+import {
+  backupIfDue,
+  chooseBackupFolder,
+  getBackupStatus,
+  runBackup
+} from "./cloudBackup";
+import { checkForUpdate, openUpdateDownload } from "./updateCheck";
 import { readFile, copyFile, mkdir, rm, writeFile } from "fs/promises";
 import { copyFileSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -62,8 +69,25 @@ import type {
 let mainWindow: BrowserWindow | null = null;
 let libraryPath = "";
 
+// Every store call reads inventory.json, changes it and writes it back, so
+// two calls at once (e.g. Recordatorios autosaving while a work is saved)
+// would overwrite each other. Run them one at a time instead.
+let storeQueue: Promise<unknown> = Promise.resolve();
+
 function store(): InventoryStore {
-  return new InventoryStore(libraryPath);
+  const target = new InventoryStore(libraryPath);
+  return new Proxy(target, {
+    get(object, property, receiver) {
+      const value = Reflect.get(object, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        // Applied to the plain store, so its own internal calls aren't queued.
+        const run = storeQueue.then(() => value.apply(object, args));
+        storeQueue = run.catch(() => undefined);
+        return run;
+      };
+    }
+  });
 }
 
 async function createWindow(): Promise<void> {
@@ -104,7 +128,13 @@ async function createWindow(): Promise<void> {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await createWindow();
+  // Copy to the backup folder on launch if the last copy is old, and keep
+  // checking while the app stays open.
+  setTimeout(() => void backupIfDue(libraryPath), 15_000);
+  setInterval(() => void backupIfDue(libraryPath), 3 * 60 * 60 * 1000);
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
@@ -134,6 +164,16 @@ ipcMain.handle("library:choose", async () => {
   await writePreferences({ libraryPath });
   return libraryPath;
 });
+
+ipcMain.handle("app:checkUpdate", async () => checkForUpdate());
+ipcMain.handle("app:openUpdate", async (_event, url: string) => openUpdateDownload(url));
+ipcMain.handle("backup:status", async () => getBackupStatus());
+ipcMain.handle("backup:choose", async (_event, where: "icloud" | "pick") =>
+  chooseBackupFolder(mainWindow, where === "icloud" ? "icloud" : "pick", libraryPath)
+);
+ipcMain.handle("backup:run", async (_event, force?: boolean) =>
+  runBackup(libraryPath, force === true)
+);
 
 ipcMain.handle("prefs:get", async () => ({
   ...(await readPreferences()),
