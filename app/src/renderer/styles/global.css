@@ -8787,7 +8787,7 @@ button.ghost.danger:hover {
   animation: banner-in 0.25s ease-out;
 }
 
-/* update notice + sidebar backup box ------------------------------------- */
+/* update notice ----------------------------------------------------------- */
 .notice.update-notice {
   animation: banner-in 0.25s ease-out;
 }
@@ -8796,21 +8796,4 @@ button.ghost.danger:hover {
   display: flex;
   flex: none;
   gap: 0.5rem;
-}
-.backup-box {
-  border-top: 1px solid #33453a;
-  display: grid;
-  gap: 0.35rem;
-  margin-top: 0.4rem;
-  padding-top: 0.75rem;
-}
-.backup-box strong {
-  color: #fff;
-}
-.backup-when,
-.backup-off {
-  color: #c9d3cc;
-}
-.backup-error {
-  color: #f0a58f;
 }

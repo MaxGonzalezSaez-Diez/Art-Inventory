@@ -136,7 +136,9 @@ export function buildPriceListHtml(
 ): string {
   const fonts = payload.fonts ?? DEFAULT_FONTS;
   const perPage = payload.imagesPerPage ?? 4;
-  const imgHeight = rowImageHeight(perPage);
+  // One per page: a big centred frame with the details underneath.
+  const single = perPage === 1;
+  const imgHeight = single ? 560 : rowImageHeight(perPage);
   const headerColor = `#${normalizeColor(payload.headerStyle?.color, "1C1C1C")}`;
   const subtitleColor = `#${normalizeColor(payload.subtitleStyle?.color, "555555")}`;
 
@@ -172,6 +174,9 @@ export function buildPriceListHtml(
     ]
       .filter(Boolean)
       .join("");
+    if (single) {
+      return `<tr class="work single"><td class="single-cell"><div class="single-wrap" style="width:${frame}px;"><div class="single-info">${details}</div><div class="img-box" style="width:${frame}px;height:${frame}px;">${innerImg}</div></div></td></tr>`;
+    }
     return `<tr class="work">${imageCell}<td class="info-cell">${details}</td></tr>`;
   }
 
@@ -290,6 +295,17 @@ export function buildPriceListHtml(
     display: flex; align-items: center; justify-content: center;
     background: transparent; border: 1px solid ${borderColor};
     padding: ${framePad}px; overflow: hidden;
+  }
+  /* One per page: details above the painting, lined up with its frame. */
+  .single-cell { padding: 18px 0; }
+  .single-wrap { margin: 0 auto; }
+  /* The header already ends in a black rule: no grey line under it. */
+  .sheet-head + table tr.single:first-child { border-top: none; }
+  .single-info { margin-bottom: ${gap}px; text-align: left; }
+  .single-info .title { font-size: ${titleSizePx}px; font-weight: 600; margin-bottom: 3px; }
+  .single-info .meta { font-size: ${textSizePx}px; font-weight: ${textWeight}; color: #444; line-height: 1.5; }
+  .single-info .price {
+    font-size: ${priceSizePx}px; font-weight: ${priceWeight}; color: #1c1c1c; margin-top: 10px;
   }
   .noimg { font-size: 10px; color: #aaa; font-family: Arial, sans-serif; }
   .info-cell { text-align: left; padding-left: ${gap}px; }

@@ -83,7 +83,6 @@ import { buildApplicationHtml } from "../main/applicationDocumentHtml";
 import { buildPriceListHtml, type PriceListPayload } from "../main/pricelistHtml";
 import { HelpTour } from "./HelpTour";
 import type { HelpTarget, TourView } from "./helpContent";
-import type { BackupStatus } from "../main/cloudBackup";
 import type { UpdateInfo } from "../main/updateCheck";
 
 const HELP_SEEN_KEY = "help-tour-seen-v1";
@@ -681,7 +680,6 @@ export function App() {
           <button className="ghost small" onClick={chooseLibrary}>
             {t("sidebar.changeFolder")}
           </button>
-          <BackupBox />
         </div>
       </aside>
 
@@ -20299,9 +20297,9 @@ function PriceListEditor({
                   markDirty();
                 }}
               >
-                {[2, 3, 4, 5, 6].map((value) => (
+                {[1, 2, 3, 4, 5, 6].map((value) => (
                   <option key={value} value={value}>
-                    {t("pricelist.field.perPage", { n: value })}
+                    {t(value === 1 ? "pricelist.field.perPageOne" : "pricelist.field.perPage", { n: value })}
                   </option>
                 ))}
               </select>
@@ -21127,137 +21125,6 @@ function SubTab({
     >
       {children}
     </button>
-  );
-}
-
-/** Sidebar box: where the safety copy goes, when it last ran, copy now. */
-function BackupBox() {
-  const { lang, t } = useLanguage();
-  const [status, setStatus] = useState<BackupStatus | null>(null);
-  const [error, setError] = useState("");
-  const [confirmForce, setConfirmForce] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    const read = () =>
-      void window.inventoryApi
-        .getBackupStatus()
-        .then((next) => alive && setStatus(next))
-        .catch(() => undefined);
-    read();
-    // Automatic copies run in the background; keep the line up to date.
-    const timer = window.setInterval(read, 60_000);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  async function act(run: () => Promise<BackupStatus>) {
-    setError("");
-    setStatus((current) => (current ? { ...current, running: true } : current));
-    try {
-      setStatus(await run());
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : "");
-      setStatus(await window.inventoryApi.getBackupStatus());
-    }
-  }
-
-  if (!status) return null;
-  const when = status.lastAt
-    ? new Date(status.lastAt).toLocaleString(lang, {
-        day: "numeric",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit"
-      })
-    : "";
-  const place = status.inICloud
-    ? "iCloud Drive"
-    : status.folder.split(/[\\/]/).slice(-2, -1)[0] || status.folder;
-  const problem = error || status.lastError;
-
-  return (
-    <div className="backup-box" data-help="backup-box">
-      <span>{t("backup.title")}</span>
-      {status.folder ? (
-        <>
-          <strong title={status.folder}>{place}</strong>
-          <span className="backup-when">
-            {status.running
-              ? t("backup.running")
-              : when
-                ? t("backup.last", { date: when })
-                : t("backup.never")}
-          </span>
-          {problem ? <span className="backup-error">{problem}</span> : null}
-          {status.blocked && !status.running ? (
-            <>
-              <span className="backup-error">
-                {t("backup.blocked", {
-                  library: status.blocked.libraryWorks,
-                  copy: status.blocked.copyWorks
-                })}
-              </span>
-              <button
-                type="button"
-                className="ghost small"
-                onClick={() => setConfirmForce(true)}
-              >
-                {t("backup.force")}
-              </button>
-            </>
-          ) : null}
-          <button
-            type="button"
-            className="ghost small"
-            disabled={status.running}
-            onClick={() => void act(() => window.inventoryApi.runBackup())}
-          >
-            {t("backup.now")}
-          </button>
-          {confirmForce && status.blocked ? (
-            <ConfirmDialog
-              title={t("backup.force.title")}
-              message={t("backup.force.message", {
-                library: status.blocked.libraryWorks,
-                copy: status.blocked.copyWorks
-              })}
-              confirmLabel={t("backup.force")}
-              onConfirm={() => {
-                setConfirmForce(false);
-                void act(() => window.inventoryApi.runBackup(true));
-              }}
-              onCancel={() => setConfirmForce(false)}
-            />
-          ) : null}
-        </>
-      ) : (
-        <>
-          <span className="backup-off">{t("backup.off")}</span>
-          {problem ? <span className="backup-error">{problem}</span> : null}
-          {status.icloudAvailable ? (
-            <button
-              type="button"
-              className="small"
-              disabled={status.running}
-              onClick={() => void act(() => window.inventoryApi.chooseBackupFolder("icloud"))}
-            >
-              {t("backup.useICloud")}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="ghost small"
-            disabled={status.running}
-            onClick={() => void act(() => window.inventoryApi.chooseBackupFolder("pick"))}
-          >
-            {t("backup.pickFolder")}
-          </button>
-        </>
-      )}
-    </div>
   );
 }
 

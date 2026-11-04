@@ -715,7 +715,7 @@ export class InventoryStore {
       ),
       priceFontSize: resolvePriceFontSize(input, existing),
       textBold: input.textBold === true,
-      imagesPerPage: clampInt(input.imagesPerPage ?? existing?.imagesPerPage ?? 4, 2, 6),
+      imagesPerPage: clampInt(input.imagesPerPage ?? existing?.imagesPerPage ?? 4, 1, 6),
       imageGap: clampInt(input.imageGap ?? existing?.imageGap ?? 16, 0, 120),
       frameBorderColor: normalizeHexColor(
         input.frameBorderColor ?? existing?.frameBorderColor,
@@ -2078,7 +2078,7 @@ function hydratePriceList(
     textFontSize: clampFontSize(item.textFontSize, 12.5),
     priceFontSize: resolvePriceFontSize(item),
     textBold: item.textBold === true,
-    imagesPerPage: clampInt(item.imagesPerPage ?? 4, 2, 6),
+    imagesPerPage: clampInt(item.imagesPerPage ?? 4, 1, 6),
     imageGap: clampInt(item.imageGap ?? 16, 0, 120),
     frameBorderColor: normalizeHexColor(item.frameBorderColor, "#e4e4e4"),
     language:

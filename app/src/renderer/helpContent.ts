@@ -298,13 +298,6 @@ const es: HelpStep[] = [
     body: "Textos tuyos que sirven de modelo para el generador. Esta página no se guarda sola: pulsa «Guardar cambios»."
   },
   {
-    chapter: "Copia de seguridad",
-    view: null,
-    spot: "backup-box",
-    title: "Copia de seguridad",
-    body: "Aquí guardas una copia de todo (datos y fotos) en iCloud o en otra carpeta. Se hace sola cada día. Si se rompe el ordenador: instala el programa, copia la carpeta «Inventario de Arte - copia» de iCloud a «Documentos» y elígela con «Cambiar carpeta»."
-  },
-  {
     chapter: "Fin",
     view: null,
     spot: "help-button",
@@ -560,13 +553,6 @@ const en: HelpStep[] = [
     body: "Your own texts, used as models for the generator. This page doesn't save by itself: press «Save changes»."
   },
   {
-    chapter: "Backup",
-    view: null,
-    spot: "backup-box",
-    title: "Backup",
-    body: "Here you keep a copy of everything (data and photos) in iCloud or another folder. It runs by itself every day. If the computer breaks: install the app, copy the «Inventario de Arte - copia» folder from iCloud into «Documents» and pick it with «Change folder»."
-  },
-  {
     chapter: "End",
     view: null,
     spot: "help-button",
@@ -820,13 +806,6 @@ const de: HelpStep[] = [
     spot: "examples-save",
     title: "Beispielbibliothek",
     body: "Eigene Texte als Vorlagen für den Generator. Diese Seite speichert nicht von selbst: «Änderungen speichern» drücken."
-  },
-  {
-    chapter: "Sicherung",
-    view: null,
-    spot: "backup-box",
-    title: "Sicherung",
-    body: "Hier speicherst du eine Kopie von allem (Daten und Fotos) in iCloud oder einem anderen Ordner. Das passiert jeden Tag von selbst. Geht der Computer kaputt: Programm installieren, den Ordner «Inventario de Arte - copia» aus iCloud nach «Dokumente» kopieren und mit «Ordner ändern» wählen."
   },
   {
     chapter: "Ende",

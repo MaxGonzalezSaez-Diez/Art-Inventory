@@ -8,12 +8,6 @@ import {
   shell,
   type OpenDialogOptions
 } from "electron";
-import {
-  backupIfDue,
-  chooseBackupFolder,
-  getBackupStatus,
-  runBackup
-} from "./cloudBackup";
 import { checkForUpdate, openUpdateDownload } from "./updateCheck";
 import { readFile, copyFile, mkdir, rm, writeFile } from "fs/promises";
 import { copyFileSync, mkdirSync, rmSync } from "fs";
@@ -130,10 +124,6 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   await createWindow();
-  // Copy to the backup folder on launch if the last copy is old, and keep
-  // checking while the app stays open.
-  setTimeout(() => void backupIfDue(libraryPath), 15_000);
-  setInterval(() => void backupIfDue(libraryPath), 3 * 60 * 60 * 1000);
 });
 
 app.on("window-all-closed", () => {
@@ -167,13 +157,6 @@ ipcMain.handle("library:choose", async () => {
 
 ipcMain.handle("app:checkUpdate", async () => checkForUpdate());
 ipcMain.handle("app:openUpdate", async (_event, url: string) => openUpdateDownload(url));
-ipcMain.handle("backup:status", async () => getBackupStatus());
-ipcMain.handle("backup:choose", async (_event, where: "icloud" | "pick") =>
-  chooseBackupFolder(mainWindow, where === "icloud" ? "icloud" : "pick", libraryPath)
-);
-ipcMain.handle("backup:run", async (_event, force?: boolean) =>
-  runBackup(libraryPath, force === true)
-);
 
 ipcMain.handle("prefs:get", async () => ({
   ...(await readPreferences()),

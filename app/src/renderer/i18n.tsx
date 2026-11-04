@@ -77,54 +77,6 @@ const strings = {
     en: "It's downloading. Open the downloaded file and drag «Inventario de Arte» into «Applications» (choose «Replace»). Your data isn't touched.",
     de: "Wird heruntergeladen. Öffne die Datei und ziehe «Inventario de Arte» in «Programme» (wähle «Ersetzen»). Deine Daten bleiben unberührt."
   },
-  "backup.title": { es: "Copia de seguridad", en: "Backup", de: "Sicherung" },
-  "backup.off": {
-    es: "Todavía no hay copia fuera de este ordenador.",
-    en: "No copy outside this computer yet.",
-    de: "Noch keine Kopie außerhalb dieses Computers."
-  },
-  "backup.useICloud": {
-    es: "Guardar copia en iCloud",
-    en: "Back up to iCloud",
-    de: "In iCloud sichern"
-  },
-  "backup.pickFolder": {
-    es: "Otra carpeta…",
-    en: "Another folder…",
-    de: "Anderer Ordner…"
-  },
-  "backup.running": { es: "Copiando…", en: "Copying…", de: "Wird kopiert…" },
-  "backup.last": {
-    es: "Última copia: {date}",
-    en: "Last copy: {date}",
-    de: "Letzte Kopie: {date}"
-  },
-  "backup.never": {
-    es: "Aún no se ha hecho ninguna copia.",
-    en: "No copy made yet.",
-    de: "Noch keine Kopie gemacht."
-  },
-  "backup.blocked": {
-    es: "No se ha copiado: aquí hay muchos menos datos que en la copia ({library} obras frente a {copy}). La copia sigue intacta. Si no has borrado nada a propósito, no sigas y escribe a Max.",
-    en: "Not copied: there is much less data here than in the copy ({library} works vs {copy}). The copy is untouched. If you didn't delete things on purpose, stop and write to Max.",
-    de: "Nicht kopiert: Hier sind viel weniger Daten als in der Kopie ({library} Werke statt {copy}). Die Kopie ist unverändert. Wenn du nicht absichtlich gelöscht hast, hör auf und schreib Max."
-  },
-  "backup.force": {
-    es: "Copiar igualmente",
-    en: "Copy anyway",
-    de: "Trotzdem kopieren"
-  },
-  "backup.force.title": {
-    es: "¿Copiar igualmente?",
-    en: "Copy anyway?",
-    de: "Trotzdem kopieren?"
-  },
-  "backup.force.message": {
-    es: "Hazlo solo si has borrado obras o datos a propósito. La copia pasará a tener {library} obras en vez de {copy}. El archivo anterior de la copia se guarda en su carpeta «backups».",
-    en: "Only do this if you deleted works or data on purpose. The copy will then have {library} works instead of {copy}. The copy's previous file is kept in its «backups» folder.",
-    de: "Nur, wenn du absichtlich Werke oder Daten gelöscht hast. Die Kopie hat dann {library} Werke statt {copy}. Die bisherige Datei der Kopie bleibt in ihrem Ordner «backups»."
-  },
-  "backup.now": { es: "Hacer copia ahora", en: "Back up now", de: "Jetzt sichern" },
   "recovery.notice": {
     es: "El archivo del inventario no se podía leer, así que se ha recuperado la copia del {date}. Revisa los últimos cambios de después de esa hora. El archivo dañado está guardado en la carpeta «backups».",
     en: "The inventory file couldn't be read, so the copy from {date} was restored. Check any changes made after that time. The damaged file is kept in the «backups» folder.",
@@ -4261,6 +4213,11 @@ const strings = {
     es: "{n} por página",
     en: "{n} per page",
     de: "{n} pro Seite"
+  },
+  "pricelist.field.perPageOne": {
+    es: "1 imagen por página",
+    en: "1 image per page",
+    de: "1 Bild pro Seite"
   },
   "pricelist.field.perPageLabel": {
     es: "Imágenes por página",
