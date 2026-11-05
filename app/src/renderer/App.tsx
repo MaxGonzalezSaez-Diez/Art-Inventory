@@ -1432,7 +1432,7 @@ function ArtworkRow({
 }) {
   const { lang, t } = useLanguage();
   const image = mainImageFor(artwork, inventory);
-  const imageUrl = useImageDataUrl(image?.absolutePath);
+  const imageUrl = useImageDataUrl(image?.absolutePath, THUMB_EDGE);
   const overdue = overdueMovement(artwork, inventory);
   const statusLabel = labelFor(inventory, "status", artwork.status, lang);
 
@@ -3024,7 +3024,7 @@ function ExportThumb({
   const name = documentDisplayName(image, "");
   const kind = fileKindFromName(name);
   const showInline = canInlineImagePreview(name);
-  const url = useImageDataUrl(showInline ? image.absolutePath : undefined);
+  const url = useImageDataUrl(showInline ? image.absolutePath : undefined, THUMB_EDGE);
   const [broken, setBroken] = useState(false);
   useEffect(() => {
     setBroken(false);
@@ -5787,7 +5787,7 @@ function PickThumb({
   inventory: InventoryData;
 }) {
   const image = mainImageFor(artwork, inventory);
-  const imageUrl = useImageDataUrl(image?.absolutePath);
+  const imageUrl = useImageDataUrl(image?.absolutePath, THUMB_EDGE);
   return (
     <span className="pick-thumb">
       {imageUrl ? (
@@ -17978,7 +17978,10 @@ function ApplicationEditor({
       for (const art of selectedArts) {
         const image = mainImageFor(art, inventory);
         if (image?.absolutePath) {
-          next[art.id] = await window.inventoryApi.imageToDataUrl(image.absolutePath);
+          next[art.id] = await window.inventoryApi.imagePreviewDataUrl(
+            image.absolutePath,
+            PREVIEW_EDGE
+          );
         }
       }
       if (!cancelled) setPreviewImages(next);
@@ -19616,7 +19619,10 @@ function PriceListEditor({
         const art = artworkById.get(id);
         const image = art ? mainImageFor(art, inventory) : undefined;
         if (image?.absolutePath) {
-          next[id] = await window.inventoryApi.imageToDataUrl(image.absolutePath);
+          next[id] = await window.inventoryApi.imagePreviewDataUrl(
+            image.absolutePath,
+            PREVIEW_EDGE
+          );
         }
       }
       if (!cancelled) setPreviewImages(next);
@@ -21434,7 +21440,12 @@ function mainImageFor(artwork: Pick<Artwork, "id" | "mainImageId">, inventory: I
   );
 }
 
-function useImageDataUrl(filePath?: string) {
+/** Small photos for lists and previews: full camera photos freeze the window. */
+const THUMB_EDGE = 320;
+const PREVIEW_EDGE = 1200;
+
+/** `maxEdge`: load a shrunk copy instead of the original (thumbnails). */
+function useImageDataUrl(filePath?: string, maxEdge?: number) {
   const [imageUrl, setImageUrl] = useState("");
   useEffect(() => {
     let cancelled = false;
@@ -21442,8 +21453,9 @@ function useImageDataUrl(filePath?: string) {
       setImageUrl("");
       return;
     }
-    void window.inventoryApi
-      .imageToDataUrl(filePath)
+    void (maxEdge
+      ? window.inventoryApi.imagePreviewDataUrl(filePath, maxEdge)
+      : window.inventoryApi.imageToDataUrl(filePath))
       .then((url) => {
         if (!cancelled) setImageUrl(url);
       })
@@ -21453,7 +21465,7 @@ function useImageDataUrl(filePath?: string) {
     return () => {
       cancelled = true;
     };
-  }, [filePath]);
+  }, [filePath, maxEdge]);
   return imageUrl;
 }
 

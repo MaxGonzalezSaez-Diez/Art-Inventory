@@ -9,6 +9,7 @@ import {
   type OpenDialogOptions
 } from "electron";
 import { checkForUpdate, openUpdateDownload } from "./updateCheck";
+import { previewDataUrl } from "./imagePreview";
 import { readFile, copyFile, mkdir, rm, writeFile } from "fs/promises";
 import { copyFileSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -869,6 +870,16 @@ ipcMain.handle("image:toDataUrl", async (_event, filePath: string) => {
   const buffer = await readFile(filePath);
   return `data:${mimeType(filePath)};base64,${buffer.toString("base64")}`;
 });
+
+async function fullDataUrl(filePath: string): Promise<string> {
+  const buffer = await readFile(filePath);
+  return `data:${mimeType(filePath)};base64,${buffer.toString("base64")}`;
+}
+
+// Shrunk copy for previews and thumbnails (see imagePreview.ts).
+ipcMain.handle("image:toPreviewDataUrl", async (_event, filePath: string, maxEdge: number) =>
+  previewDataUrl(filePath, Number(maxEdge), fullDataUrl)
+);
 
 ipcMain.handle(
   "image:saveCopy",

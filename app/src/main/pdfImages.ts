@@ -206,6 +206,36 @@ export function compressPdfRowImages<T extends PdfImageSource>(
 }
 
 /**
+ * All photos together go into one page in memory. Past this size it can't be
+ * built at all (the PDF failed with ~100 camera photos), so shrink them.
+ */
+const NO_CAP_TOTAL_CHARS = 200 * 1024 * 1024;
+
+function embeddedChars(rows: PdfImageSource[]): number {
+  return rows.reduce((sum, row) => sum + String(row.imageDataUrl || "").length, 0);
+}
+
+/** Originals when they fit; otherwise the best quality that does. */
+function rowsWithoutCap<T extends PdfImageSource>(rows: T[]): T[] {
+  const originals = embedOriginalPdfImages(rows);
+  if (embeddedChars(originals) <= NO_CAP_TOTAL_CHARS) return originals;
+  // 2800 px is still well above print quality on an A4 page.
+  const passes: PdfImagePass[] = [
+    { maxEdge: 2800, quality: 90 },
+    { maxEdge: 2000, quality: 84 },
+    { maxEdge: 1500, quality: 78 },
+    { maxEdge: 1100, quality: 72 },
+    { maxEdge: 720, quality: 60 }
+  ];
+  let smaller = originals;
+  for (const pass of passes) {
+    smaller = compressPdfRowImages(rows, pass);
+    if (embeddedChars(smaller) <= NO_CAP_TOTAL_CHARS) return smaller;
+  }
+  return smaller;
+}
+
+/**
  * Downscale photos before printToPDF. Electron's nativeImage cannot decode
  * every data-URL; loading from disk is the reliable path.
  * When maxBytes is set, keep shrinking and re-rendering until the file fits
@@ -218,7 +248,7 @@ export async function renderPdfWithImageBudget<T extends PdfImageSource>(options
   render: (rows: T[]) => Promise<Buffer>;
 }): Promise<{ buffer: Buffer; overLimit: boolean }> {
   if (!options.maxBytes) {
-    const buffer = await options.render(embedOriginalPdfImages(options.rows));
+    const buffer = await options.render(rowsWithoutCap(options.rows));
     return { buffer, overLimit: false };
   }
 

@@ -258,6 +258,9 @@ const api = {
     ipcRenderer.invoke("movement:markReturned", movementId),
   imageToDataUrl: (filePath: string): Promise<string> =>
     ipcRenderer.invoke("image:toDataUrl", filePath),
+  /** Small copy for previews/thumbnails; the original file is untouched. */
+  imagePreviewDataUrl: (filePath: string, maxEdge: number): Promise<string> =>
+    ipcRenderer.invoke("image:toPreviewDataUrl", filePath, maxEdge),
   saveImageCopy: (filePath: string, suggestedName?: string): Promise<string | null> =>
     ipcRenderer.invoke("image:saveCopy", filePath, suggestedName),
   exportImage: (options: ImageExportOptions): Promise<ImageExportResult | null> =>
