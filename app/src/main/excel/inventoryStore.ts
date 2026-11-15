@@ -58,6 +58,11 @@ import { DEFAULT_LOOKUPS } from "./schema";
 
 const DATA_FILE = "inventory.json";
 
+/** Keeps "" (meaning: none) but drops anything that isn't text. */
+function optionalText(value: unknown, max: number): string | undefined {
+  return typeof value === "string" ? value.trim().slice(0, max) : undefined;
+}
+
 export class InventoryStore {
   constructor(private libraryPath: string) {}
 
@@ -722,6 +727,10 @@ export class InventoryStore {
         "#e4e4e4"
       ),
       language,
+      showSeries: (input.showSeries ?? existing?.showSeries) !== false,
+      seriesPrefix: optionalText(input.seriesPrefix ?? existing?.seriesPrefix, 120),
+      pageNumbers: (input.pageNumbers ?? existing?.pageNumbers) === true,
+      footerText: String(input.footerText ?? existing?.footerText ?? "").trim().slice(0, 300),
       fonts: {
         header: String(input.fonts?.header ?? existing?.fonts?.header ?? "Georgia").trim() || "Georgia",
         subtitle:
@@ -2085,6 +2094,10 @@ function hydratePriceList(
       item.language === "en" || item.language === "de" || item.language === "es"
         ? item.language
         : "es",
+    showSeries: item.showSeries !== false,
+    seriesPrefix: optionalText(item.seriesPrefix, 120),
+    pageNumbers: item.pageNumbers === true,
+    footerText: String(item.footerText ?? "").trim().slice(0, 300),
     fonts: {
       header: String(item.fonts?.header ?? "Georgia").trim() || "Georgia",
       subtitle: String(item.fonts?.subtitle ?? "Georgia").trim() || "Georgia",

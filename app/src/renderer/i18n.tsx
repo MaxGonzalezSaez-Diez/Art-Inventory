@@ -72,6 +72,44 @@ const strings = {
     de: "Eine neue Version des Programms ist da ({version})."
   },
   "update.download": { es: "Descargar", en: "Download", de: "Herunterladen" },
+  "update.install": { es: "Actualizar", en: "Update", de: "Aktualisieren" },
+  "update.downloading": {
+    es: "Descargando la versión nueva… {percent} %. Puedes seguir trabajando.",
+    en: "Downloading the new version… {percent} %. You can keep working.",
+    de: "Die neue Version wird geladen… {percent} %. Du kannst weiterarbeiten."
+  },
+  "update.ready": {
+    es: "La versión nueva está lista.",
+    en: "The new version is ready.",
+    de: "Die neue Version ist bereit."
+  },
+  "update.installNow": { es: "Actualizar ahora", en: "Update now", de: "Jetzt aktualisieren" },
+  "update.saveAndInstall": {
+    es: "Guardar y actualizar",
+    en: "Save and update",
+    de: "Speichern und aktualisieren"
+  },
+  "update.later": { es: "Más tarde", en: "Later", de: "Später" },
+  "update.restartInfo": {
+    es: "El programa se cerrará y se volverá a abrir solo, ya actualizado. Tus obras y datos no se tocan.",
+    en: "The app will close and open again by itself, updated. Your works and data aren't touched.",
+    de: "Das Programm schließt sich und öffnet sich von selbst aktualisiert wieder. Deine Werke und Daten bleiben unberührt."
+  },
+  "update.unsavedInfo": {
+    es: "Tienes cambios sin guardar: se guardan antes de cerrar.",
+    en: "You have unsaved changes: they are saved before closing.",
+    de: "Du hast ungespeicherte Änderungen: Sie werden vor dem Schließen gespeichert."
+  },
+  "update.closing": {
+    es: "Cerrando para actualizar…",
+    en: "Closing to update…",
+    de: "Wird zum Aktualisieren geschlossen…"
+  },
+  "update.failed": {
+    es: "No se ha podido actualizar sola ({error}). Puedes descargarla a mano.",
+    en: "It couldn't update by itself ({error}). You can download it by hand.",
+    de: "Die automatische Aktualisierung ging nicht ({error}). Du kannst sie von Hand laden."
+  },
   "update.howTo": {
     es: "Se está descargando. Abre el archivo descargado y arrastra «Inventario de Arte» a «Aplicaciones» (elige «Reemplazar»). Tus datos no se tocan.",
     en: "It's downloading. Open the downloaded file and drag «Inventario de Arte» into «Applications» (choose «Replace»). Your data isn't touched.",
@@ -4205,9 +4243,40 @@ const strings = {
   "pricelist.field.left": { es: "Izquierda", en: "Left", de: "Links" },
   "pricelist.field.right": { es: "Derecha", en: "Right", de: "Rechts" },
   "pricelist.field.artTypeLang": {
-    es: "Idioma de la técnica",
-    en: "Language for technique",
-    de: "Sprache für die Technik"
+    es: "Idioma (técnica y serie)",
+    en: "Language (technique and series)",
+    de: "Sprache (Technik und Serie)"
+  },
+  "pricelist.field.showSeries": {
+    es: "Mostrar la serie",
+    en: "Show the series",
+    de: "Serie anzeigen"
+  },
+  "pricelist.field.seriesPrefix": {
+    es: "Texto delante del nombre de la serie",
+    en: "Words before the series name",
+    de: "Text vor dem Seriennamen"
+  },
+  "pricelist.field.seriesPrefixEmpty": {
+    es: "Vacío = solo el nombre de la serie",
+    en: "Empty = just the series name",
+    de: "Leer = nur der Serienname"
+  },
+  "pricelist.footer.title": { es: "Pie de página", en: "Footer", de: "Fußzeile" },
+  "pricelist.footer.numbers": {
+    es: "Numerar las páginas (abajo a la derecha)",
+    en: "Number the pages (bottom right)",
+    de: "Seiten nummerieren (unten rechts)"
+  },
+  "pricelist.footer.text": {
+    es: "Texto en todas las páginas (opcional)",
+    en: "Text on every page (optional)",
+    de: "Text auf jeder Seite (optional)"
+  },
+  "pricelist.footer.placeholder": {
+    es: "Tu nombre · web · email · teléfono",
+    en: "Your name · website · email · phone",
+    de: "Dein Name · Website · E-Mail · Telefon"
   },
   "pricelist.field.perPage": {
     es: "{n} por página",

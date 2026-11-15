@@ -34,6 +34,16 @@ const api = {
   checkForUpdate: (): Promise<UpdateInfo | null> => ipcRenderer.invoke("app:checkUpdate"),
   openUpdateDownload: (url: string): Promise<void> =>
     ipcRenderer.invoke("app:openUpdate", url),
+  /** Download and check the new version; the app keeps working meanwhile. */
+  prepareUpdate: (url: string, version: string): Promise<{ version: string }> =>
+    ipcRenderer.invoke("app:prepareUpdate", url, version),
+  /** Quit, install the prepared version and reopen. Save everything first. */
+  installUpdate: (): Promise<void> => ipcRenderer.invoke("app:installUpdate"),
+  onUpdateProgress: (listener: (percent: number) => void): (() => void) => {
+    const handler = (_event: unknown, percent: number) => listener(percent);
+    ipcRenderer.on("update:progress", handler);
+    return () => ipcRenderer.removeListener("update:progress", handler);
+  },
   getLibraryPath: (): Promise<string> => ipcRenderer.invoke("library:getPath"),
   chooseLibrary: (): Promise<string> => ipcRenderer.invoke("library:choose"),
   getPreferences: (): Promise<

@@ -18,6 +18,10 @@ const es: Record<string, HelpStep[]> = {
     ["@popup", "Una ventana", "Se abrió una ventana encima de la pantalla. El título de arriba dice para qué sirve. Rellena lo que necesites."],
     ["@actions", "Terminar", "El botón verde guarda o confirma. «Cancelar» o ✕ cierran la ventana sin cambiar nada."]
   ]),
+  updateReady: popup("Versión nueva", [
+    ["@popup", "La versión nueva está lista", "Ya se ha descargado. Al actualizar, el programa se cierra y se vuelve a abrir solo con la versión nueva. Tus obras, fotos y datos no se tocan."],
+    ["@actions", "Elige", "«Actualizar ahora» (o «Guardar y actualizar» si tienes cambios abiertos) guarda lo que estés haciendo y actualiza. «Más tarde» te deja seguir; el botón «Actualizar ahora» queda arriba."]
+  ]),
   unsaved: popup("Cambios sin guardar", [
     ["@popup", "Tienes cambios sin guardar", "Ibas a salir de una pantalla con cambios que aún no están guardados."],
     ["@actions", "Elige", "«Guardar y salir» guarda y continúa. «Salir sin guardar» pierde los cambios. «Seguir editando» te deja donde estabas. Si dudas: «Guardar y salir»."]
@@ -168,6 +172,10 @@ const en: Record<string, HelpStep[]> = {
     ["@popup", "A window", "A window opened on top of the screen. The title at the top says what it's for. Fill in what you need."],
     ["@actions", "Finish", "The green button saves or confirms. «Cancel» or ✕ close the window without changing anything."]
   ]),
+  updateReady: popup("New version", [
+    ["@popup", "The new version is ready", "It has been downloaded. Updating closes the app and opens it again by itself with the new version. Your works, photos and data aren't touched."],
+    ["@actions", "Choose", "«Update now» (or «Save and update» if you have open changes) saves what you're doing and updates. «Later» lets you keep working; the «Update now» button stays at the top."]
+  ]),
   unsaved: popup("Unsaved changes", [
     ["@popup", "You have unsaved changes", "You were leaving a screen with changes that aren't saved yet."],
     ["@actions", "Choose", "«Save and leave» saves and moves on. «Leave without saving» loses the changes. «Keep editing» keeps you where you were. If unsure: «Save and leave»."]
@@ -317,6 +325,10 @@ const de: Record<string, HelpStep[]> = {
   generic: popup("Dieses Fenster", [
     ["@popup", "Ein Fenster", "Über dem Bildschirm hat sich ein Fenster geöffnet. Der Titel oben sagt, wofür es ist. Fülle aus, was du brauchst."],
     ["@actions", "Abschließen", "Der grüne Knopf speichert oder bestätigt. «Abbrechen» oder ✕ schließen das Fenster, ohne etwas zu ändern."]
+  ]),
+  updateReady: popup("Neue Version", [
+    ["@popup", "Die neue Version ist bereit", "Sie ist schon geladen. Beim Aktualisieren schließt sich das Programm und öffnet sich von selbst mit der neuen Version. Deine Werke, Fotos und Daten bleiben unberührt."],
+    ["@actions", "Wählen", "«Jetzt aktualisieren» (oder «Speichern und aktualisieren» bei offenen Änderungen) speichert und aktualisiert. «Später» lässt dich weiterarbeiten; der Knopf «Jetzt aktualisieren» bleibt oben."]
   ]),
   unsaved: popup("Ungespeicherte Änderungen", [
     ["@popup", "Ungespeicherte Änderungen", "Du wolltest einen Bildschirm mit noch nicht gespeicherten Änderungen verlassen."],

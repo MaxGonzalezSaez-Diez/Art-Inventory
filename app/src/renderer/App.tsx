@@ -80,7 +80,7 @@ import {
   type Translate
 } from "./i18n";
 import { buildApplicationHtml } from "../main/applicationDocumentHtml";
-import { buildPriceListHtml, type PriceListPayload } from "../main/pricelistHtml";
+import { buildPriceListHtml, SERIES_PREFIX, type PriceListPayload } from "../main/pricelistHtml";
 import { HelpTour } from "./HelpTour";
 import type { HelpTarget, TourView } from "./helpContent";
 import type { UpdateInfo } from "../main/updateCheck";
@@ -315,6 +315,13 @@ export function App() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateClicked, setUpdateClicked] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  /** One-click update: idle → downloading → ready (→ installing), or failed. */
+  const [installStage, setInstallStage] = useState<
+    "idle" | "downloading" | "ready" | "installing" | "failed"
+  >("idle");
+  const [installPercent, setInstallPercent] = useState(0);
+  const [installError, setInstallError] = useState("");
+  const [showUpdateReady, setShowUpdateReady] = useState(false);
 
   // Ask GitHub once per launch whether a newer version exists.
   useEffect(() => {
@@ -397,6 +404,58 @@ export function App() {
       await requireApi("setLanguage", t)(next);
     } catch {
       /* the choice still applies to this session */
+    }
+  }
+
+  async function startUpdate() {
+    if (!update) return;
+    setInstallStage("downloading");
+    setInstallPercent(0);
+    const stop = window.inventoryApi.onUpdateProgress(setInstallPercent);
+    try {
+      await window.inventoryApi.prepareUpdate(update.downloadUrl, update.latest);
+      setInstallStage("ready");
+      setShowUpdateReady(true);
+    } catch (error) {
+      setInstallError(
+        error instanceof Error
+          ? error.message
+              .replace(/^Error invoking remote method '[^']+': (Error: )?/, "")
+              .replace(/\.$/, "")
+          : ""
+      );
+      setInstallStage("failed");
+    } finally {
+      stop();
+    }
+  }
+
+  /** Save what is open (if anything), then quit, install and reopen. */
+  async function installUpdateNow() {
+    if (dirty) {
+      setSaving(true);
+      const ok = saveRef.current ? await saveRef.current() : true;
+      setSaving(false);
+      // Saving failed (e.g. a missing title): stay, the error is on screen.
+      if (!ok) {
+        setShowUpdateReady(false);
+        return;
+      }
+      setDirty(false);
+    }
+    setShowUpdateReady(false);
+    setInstallStage("installing");
+    try {
+      await window.inventoryApi.installUpdate();
+    } catch (error) {
+      setInstallError(
+        error instanceof Error
+          ? error.message
+              .replace(/^Error invoking remote method '[^']+': (Error: )?/, "")
+              .replace(/\.$/, "")
+          : ""
+      );
+      setInstallStage("failed");
     }
   }
 
@@ -730,12 +789,33 @@ export function App() {
         {update && !updateDismissed ? (
           <div className="notice update-notice" role="status">
             <span>
-              {updateClicked
-                ? t("update.howTo")
-                : t("update.available", { version: update.latest })}
+              {installStage === "downloading"
+                ? t("update.downloading", { percent: installPercent })
+                : installStage === "ready"
+                  ? t("update.ready")
+                  : installStage === "installing"
+                    ? t("update.closing")
+                    : installStage === "failed"
+                      ? updateClicked
+                        ? t("update.howTo")
+                        : t("update.failed", { error: installError })
+                      : updateClicked
+                        ? t("update.howTo")
+                        : t("update.available", { version: update.latest })}
             </span>
             <span className="update-actions">
-              {!updateClicked ? (
+              {installStage === "idle" && update.canInstall ? (
+                <button type="button" onClick={() => void startUpdate()}>
+                  {t("update.install")}
+                </button>
+              ) : null}
+              {installStage === "ready" ? (
+                <button type="button" onClick={() => setShowUpdateReady(true)}>
+                  {t("update.installNow")}
+                </button>
+              ) : null}
+              {!updateClicked &&
+              ((installStage === "idle" && !update.canInstall) || installStage === "failed") ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -746,14 +826,16 @@ export function App() {
                   {t("update.download")}
                 </button>
               ) : null}
-              <button
-                type="button"
-                className="banner-dismiss"
-                aria-label={t("common.close")}
-                onClick={() => setUpdateDismissed(true)}
-              >
-                ✕
-              </button>
+              {installStage === "downloading" || installStage === "installing" ? null : (
+                <button
+                  type="button"
+                  className="banner-dismiss"
+                  aria-label={t("common.close")}
+                  onClick={() => setUpdateDismissed(true)}
+                >
+                  ✕
+                </button>
+              )}
             </span>
           </div>
         ) : null}
@@ -951,6 +1033,44 @@ export function App() {
           <div className="empty-state">{t("app.selectArtwork")}</div>
         )}
       </main>
+
+      {showUpdateReady && installStage === "ready" ? (
+        <div className="modal-backdrop" onClick={() => setShowUpdateReady(false)}>
+          <div
+            data-help-modal="updateReady"
+            className="modal confirm-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3>{t("update.ready")}</h3>
+            </div>
+            <p className="confirm-message">{t("update.restartInfo")}</p>
+            {dirty ? <p className="confirm-message">{t("update.unsavedInfo")}</p> : null}
+            <div className="leave-choices">
+              <button
+                className="leave-choice"
+                disabled={saving}
+                onClick={() => void installUpdateNow()}
+              >
+                <strong>
+                  {saving
+                    ? t("common.saving")
+                    : dirty
+                      ? t("update.saveAndInstall")
+                      : t("update.installNow")}
+                </strong>
+              </button>
+              <button
+                className="leave-choice ghost-choice"
+                disabled={saving}
+                onClick={() => setShowUpdateReady(false)}
+              >
+                <strong>{t("update.later")}</strong>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {pendingNav && (
         <div className="modal-backdrop" onClick={() => setPendingNav(null)}>
@@ -19417,6 +19537,28 @@ function PriceListEditor({
   const [showPrice, setShowPrice] = useState(document?.showPrice !== false);
   const [imagesPerPage, setImagesPerPage] = useState(document?.imagesPerPage ?? 4);
   const [language, setLanguage] = useState<PriceLang>(document?.language ?? "es");
+  // A new dossier starts with the footer of the last one, so her name and
+  // details only have to be typed once.
+  const [lastDoc] = useState(() =>
+    [...(inventory.priceLists ?? [])].sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt)
+    )[0]
+  );
+  const [showSeries, setShowSeries] = useState(document?.showSeries !== false);
+  // What is typed here is printed as is; older dossiers get the default.
+  const [seriesPrefix, setSeriesPrefix] = useState(() => {
+    if (document) return document.seriesPrefix ?? SERIES_PREFIX[document.language ?? "es"];
+    if (lastDoc?.seriesPrefix !== undefined && (lastDoc.language ?? "es") === "es") {
+      return lastDoc.seriesPrefix;
+    }
+    return SERIES_PREFIX.es;
+  });
+  const [pageNumbers, setPageNumbers] = useState(
+    document ? document.pageNumbers === true : lastDoc?.pageNumbers === true
+  );
+  const [footerText, setFooterText] = useState(
+    document ? document.footerText ?? "" : lastDoc?.footerText ?? ""
+  );
   const [fontHeader, setFontHeader] = useState(document?.fonts?.header ?? "Georgia");
   const [fontSubtitle, setFontSubtitle] = useState(
     document?.fonts?.subtitle ?? "Georgia"
@@ -19751,6 +19893,10 @@ function PriceListEditor({
       imageGap,
       frameBorderColor,
       language,
+      showSeries,
+      seriesPrefix: seriesPrefix.trim(),
+      pageNumbers,
+      footerText: footerText.trim(),
       fonts: { header: fontHeader, subtitle: fontSubtitle, body: fontBody },
       headerStyle: { bold: headerBold, italic: headerItalic, color: headerColor },
       subtitleStyle: { italic: subtitleItalic, color: subtitleColor }
@@ -19804,7 +19950,7 @@ function PriceListEditor({
       const image = mainImageFor(art, inventory);
       rows.push({
         title: art.title,
-        series: art.series ?? "",
+        series: showSeries && !isNoSeries(art.series) ? art.series?.trim() ?? "" : "",
         material: artTypeLabel(inventory, art.type, language),
         size: formatSize(art),
         year: art.yearMade ?? "",
@@ -19831,6 +19977,10 @@ function PriceListEditor({
       imagesPerPage,
       imageGap,
       frameBorderColor,
+      language,
+      seriesPrefix,
+      pageNumbers,
+      footerText,
       fonts: { header: fontHeader, subtitle: fontSubtitle, body: fontBody },
       headerStyle: { bold: headerBold, italic: headerItalic, color: headerColor },
       subtitleStyle: { italic: subtitleItalic, color: subtitleColor },
@@ -20283,7 +20433,12 @@ function PriceListEditor({
               <select
                 value={language}
                 onChange={(event) => {
-                  setLanguage(event.target.value as PriceLang);
+                  const next = event.target.value as PriceLang;
+                  // Follow the language unless she wrote her own words.
+                  if (Object.values(SERIES_PREFIX).includes(seriesPrefix.trim())) {
+                    setSeriesPrefix(SERIES_PREFIX[next]);
+                  }
+                  setLanguage(next);
                   markDirty();
                 }}
               >
@@ -20323,6 +20478,58 @@ function PriceListEditor({
             />
             {t("pricelist.field.showPriceEuros")}
           </label>
+          <label className="checkline">
+            <input
+              type="checkbox"
+              checked={showSeries}
+              onChange={(event) => {
+                setShowSeries(event.target.checked);
+                markDirty();
+              }}
+            />
+            {t("pricelist.field.showSeries")}
+          </label>
+          {showSeries ? (
+            <label className="field" data-help="pricelist-series-prefix">
+              {t("pricelist.field.seriesPrefix")}
+              <input
+                value={seriesPrefix}
+                maxLength={120}
+                placeholder={t("pricelist.field.seriesPrefixEmpty")}
+                onChange={(event) => {
+                  setSeriesPrefix(event.target.value);
+                  markDirty();
+                }}
+              />
+            </label>
+          ) : null}
+
+          <div className="pl-style-block" data-help="pricelist-footer">
+            <span className="pl-block-title">{t("pricelist.footer.title")}</span>
+            <label className="checkline">
+              <input
+                type="checkbox"
+                checked={pageNumbers}
+                onChange={(event) => {
+                  setPageNumbers(event.target.checked);
+                  markDirty();
+                }}
+              />
+              {t("pricelist.footer.numbers")}
+            </label>
+            <label className="field">
+              {t("pricelist.footer.text")}
+              <input
+                value={footerText}
+                maxLength={300}
+                placeholder={t("pricelist.footer.placeholder")}
+                onChange={(event) => {
+                  setFooterText(event.target.value);
+                  markDirty();
+                }}
+              />
+            </label>
+          </div>
 
           <div className="pl-style-block">
             <span className="pl-block-title">{t("pricelist.style.letterSizes")}</span>

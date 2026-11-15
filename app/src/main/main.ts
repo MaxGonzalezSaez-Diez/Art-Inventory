@@ -8,7 +8,8 @@ import {
   shell,
   type OpenDialogOptions
 } from "electron";
-import { checkForUpdate, openUpdateDownload } from "./updateCheck";
+import { checkForUpdate, DOWNLOAD_PREFIX, openUpdateDownload } from "./updateCheck";
+import { cleanUpAfterUpdate, installAndRestart, prepareUpdate } from "./selfUpdate";
 import { previewDataUrl } from "./imagePreview";
 import { readFile, copyFile, mkdir, rm, writeFile } from "fs/promises";
 import { copyFileSync, mkdirSync, rmSync } from "fs";
@@ -125,6 +126,7 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   await createWindow();
+  void cleanUpAfterUpdate();
 });
 
 app.on("window-all-closed", () => {
@@ -158,6 +160,25 @@ ipcMain.handle("library:choose", async () => {
 
 ipcMain.handle("app:checkUpdate", async () => checkForUpdate());
 ipcMain.handle("app:openUpdate", async (_event, url: string) => openUpdateDownload(url));
+ipcMain.handle("app:prepareUpdate", async (event, url: string, version: string) => {
+  if (typeof url !== "string" || !url.startsWith(DOWNLOAD_PREFIX)) {
+    throw new Error("Enlace de descarga no válido.");
+  }
+  return prepareUpdate(url, String(version), (percent) => {
+    if (!event.sender.isDestroyed()) event.sender.send("update:progress", percent);
+  });
+});
+// Waits for every queued save to reach the disk before quitting.
+ipcMain.handle("app:installUpdate", async () =>
+  installAndRestart(async () => {
+    // A save can queue another one; wait until nothing new was added.
+    let current: Promise<unknown>;
+    do {
+      current = storeQueue;
+      await current;
+    } while (current !== storeQueue);
+  })
+);
 
 ipcMain.handle("prefs:get", async () => ({
   ...(await readPreferences()),

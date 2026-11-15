@@ -352,6 +352,14 @@ export interface PriceListDoc {
   imageGap?: number;
   frameBorderColor?: string;
   language?: "es" | "en" | "de";
+  /** Series line under each work ("Perteneciente a la serie …"). Missing → true. */
+  showSeries?: boolean;
+  /** Words before the series name. Missing → default of the language; "" → none. */
+  seriesPrefix?: string;
+  /** "3 / 12" bottom-right on every page. Missing → false. */
+  pageNumbers?: boolean;
+  /** One line at the bottom of every page (name, web…). Missing → "". */
+  footerText?: string;
   fonts?: { header: string; subtitle: string; body: string };
   headerStyle?: { bold?: boolean; italic?: boolean; color?: string };
   subtitleStyle?: { italic?: boolean; color?: string };

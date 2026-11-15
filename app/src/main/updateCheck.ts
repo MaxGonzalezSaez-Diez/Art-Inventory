@@ -1,19 +1,27 @@
 /**
  * "Hay una versión nueva": compares this build with the newest vX.Y.Z
- * release on GitHub. No auto-install (that needs a paid Apple certificate);
- * the renderer offers a download button instead.
+ * release on GitHub. selfUpdate.ts installs it in one click when it can;
+ * otherwise the renderer offers the plain download button.
  */
 import { app, shell } from "electron";
+import { canSelfUpdate } from "./selfUpdate";
 
 const REPO = "MaxGonzalezSaez-Diez/Art-Inventory";
-const RELEASES_URL = `https://api.github.com/repos/${REPO}/releases?per_page=20`;
-const DOWNLOAD_PREFIX = `https://github.com/${REPO}/`;
+// INVENTARIO_UPDATE_FEED: only for testing the updater against a local server.
+const TEST_FEED = process.env.INVENTARIO_UPDATE_FEED || "";
+const RELEASES_URL =
+  TEST_FEED || `https://api.github.com/repos/${REPO}/releases?per_page=20`;
+export const DOWNLOAD_PREFIX = TEST_FEED
+  ? new URL(TEST_FEED).origin + "/"
+  : `https://github.com/${REPO}/`;
 
 export interface UpdateInfo {
   current: string;
   latest: string;
   /** Direct link to the DMG (falls back to the release page). */
   downloadUrl: string;
+  /** The app can download and install it by itself (one click). */
+  canInstall: boolean;
 }
 
 function parseVersion(value: string): number[] | null {
@@ -45,17 +53,25 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       html_url?: string;
       assets?: Array<{ name?: string; browser_download_url?: string }>;
     }>;
-    let best: { version: number[]; tag: string; url: string } | null = null;
+    let best: { version: number[]; tag: string; url: string; isDmg: boolean } | null = null;
     for (const release of releases) {
       if (release.draft || release.prerelease || !release.tag_name) continue;
       const version = parseVersion(release.tag_name);
       if (!version || (best && !isNewer(version, best.version))) continue;
       const dmg = release.assets?.find((asset) => asset.name?.endsWith(".dmg"));
       const url = dmg?.browser_download_url || release.html_url || "";
-      if (url.startsWith(DOWNLOAD_PREFIX)) best = { version, tag: release.tag_name, url };
+      if (url.startsWith(DOWNLOAD_PREFIX)) {
+        best = { version, tag: release.tag_name, url, isDmg: Boolean(dmg) };
+      }
     }
     if (!best || !isNewer(best.version, current)) return null;
-    return { current: app.getVersion(), latest: best.tag.replace(/^v/, ""), downloadUrl: best.url };
+    const latest = best.tag.replace(/^v/, "");
+    return {
+      current: app.getVersion(),
+      latest,
+      downloadUrl: best.url,
+      canInstall: best.isDmg && (await canSelfUpdate(latest))
+    };
   } catch {
     return null;
   }

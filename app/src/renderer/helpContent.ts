@@ -195,6 +195,13 @@ const es: HelpStep[] = [
   {
     chapter: "Dossier de obras",
     view: "pricelistNew",
+    spot: "pricelist-footer",
+    title: "Pie de página",
+    body: "Marca «Numerar las páginas» y escribe tu nombre y datos: salen abajo en todas las páginas, para que no se pierdan si se mezclan con otros papeles. El siguiente dossier ya los trae puestos."
+  },
+  {
+    chapter: "Dossier de obras",
+    view: "pricelistNew",
     spot: "pricelist-preview",
     title: "Vista previa",
     body: "A la derecha ves el PDF tal y como saldrá."
@@ -450,6 +457,13 @@ const en: HelpStep[] = [
   {
     chapter: "Works dossier",
     view: "pricelistNew",
+    spot: "pricelist-footer",
+    title: "Footer",
+    body: "Tick «Number the pages» and type your name and details: they go at the bottom of every page, so pages aren't lost if they get mixed with other papers. Your next dossier already has them filled in."
+  },
+  {
+    chapter: "Works dossier",
+    view: "pricelistNew",
     spot: "pricelist-preview",
     title: "Preview",
     body: "On the right you see the PDF exactly as it will come out."
@@ -701,6 +715,13 @@ const de: HelpStep[] = [
     spot: "pricelist-intro",
     title: "Einleitungstext",
     body: "Hier kannst du erzählen, wie die Serie entstand. Er steht unter der Kopfzeile, vor den Werken."
+  },
+  {
+    chapter: "Werkdossier",
+    view: "pricelistNew",
+    spot: "pricelist-footer",
+    title: "Fußzeile",
+    body: "«Seiten nummerieren» anhaken und Namen und Angaben eintragen: Sie stehen unten auf jeder Seite, damit nichts verloren geht, wenn sich Blätter mit anderen mischen. Das nächste Dossier übernimmt sie."
   },
   {
     chapter: "Werkdossier",

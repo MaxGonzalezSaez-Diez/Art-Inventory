@@ -50,9 +50,24 @@ export interface PriceListPayload {
   headerStyle?: PriceListStyle;
   subtitleStyle?: PriceListStyle;
   rows: PriceListRow[];
+  /** Language of the words the dossier adds itself ("Perteneciente a la serie"). */
+  language?: "es" | "en" | "de";
+  /** Words before the series name. Missing → SERIES_PREFIX of the language; "" → none. */
+  seriesPrefix?: string;
+  /** "3 / 12" in the bottom-right corner of every page. */
+  pageNumbers?: boolean;
+  /** One line at the bottom-left of every page (name, web, email…). */
+  footerText?: string;
   /** Optional cap for the generated PDF, in megabytes. */
   maxMb?: number;
 }
+
+/** Default words before the series name; the user can change them per dossier. */
+export const SERIES_PREFIX: Record<"es" | "en" | "de", string> = {
+  es: "Perteneciente a la serie",
+  en: "From the series",
+  de: "Aus der Serie"
+};
 
 // A4 with 0.6in margins on every side.
 const PAGE_MARGIN_MM = 15.24;
@@ -151,16 +166,30 @@ export function buildPriceListHtml(
   const framePad = 8;
   const innerFrame = Math.max(20, frame - 2 * (framePad + 1));
 
+  const seriesPrefix = escapeHtml(
+    String(
+      payload.seriesPrefix ?? SERIES_PREFIX[payload.language ?? "es"] ?? SERIES_PREFIX.es
+    ).trim()
+  );
+  const footerText = String(payload.footerText ?? "").trim();
+  const pageNumbers = payload.pageNumbers === true;
+
   function renderRow(row: PriceListRow): string {
     const fit = fitInSquare(row, innerFrame);
     const innerImg = row.imageDataUrl
       ? `<img src="${row.imageDataUrl}" alt="" style="width:${fit.width}px;height:${fit.height}px;object-fit:fill;" />`
       : `<span class="noimg">Sin imagen</span>`;
     const imageCell = `<td class="img-cell"><div class="img-box" style="width:${frame}px;height:${frame}px;">${innerImg}</div></td>`;
-    const meta = [row.series, row.material, row.size]
-      .filter((value) => value && value.trim())
-      .map((value) => `<div class="meta">${escapeHtml(value)}</div>`)
-      .join("");
+    const seriesName = String(row.series ?? "").trim();
+    const seriesLine = seriesName
+      ? `<div class="meta">${seriesPrefix ? `${seriesPrefix} ` : ""}<em>${escapeHtml(seriesName)}</em></div>`
+      : "";
+    const meta =
+      seriesLine +
+      [row.material, row.size]
+        .filter((value) => value && value.trim())
+        .map((value) => `<div class="meta">${escapeHtml(value)}</div>`)
+        .join("");
     const yearLine = row.year ? `<div class="meta">${escapeHtml(row.year)}</div>` : "";
     const priceLine =
       payload.showPrice && row.price
@@ -257,6 +286,15 @@ export function buildPriceListHtml(
     width: 210mm;
   }
   .page:last-child { break-after: auto; page-break-after: auto; }
+  .page { position: relative; }
+  /* Footer sits in the bottom margin, so it never moves the works. */
+  .page-foot {
+    align-items: baseline; bottom: 7mm; color: #666; display: flex;
+    font-size: 10.5px; gap: 12px; justify-content: space-between;
+    left: ${PAGE_MARGIN_MM}mm; position: absolute; right: ${PAGE_MARGIN_MM}mm;
+  }
+  .page-foot-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .page-foot-number { flex: none; margin-left: auto; }
   .page-inner { height: 100%; overflow: hidden; }
   .header { text-align: center; margin-bottom: 6px; }
   .header h1 {
@@ -368,10 +406,35 @@ export function buildPriceListHtml(
           }
         });
       }
+      var footerText = ${JSON.stringify(footerText).replace(/</g, "\u003c")};
+      var pageNumbers = ${pageNumbers ? "true" : "false"};
+      function addFooters() {
+        if (!footerText && !pageNumbers) return;
+        var pages = document.querySelectorAll(".page");
+        pages.forEach(function (page, index) {
+          var foot = document.createElement("div");
+          foot.className = "page-foot";
+          var text = document.createElement("span");
+          text.className = "page-foot-text";
+          text.textContent = footerText;
+          foot.appendChild(text);
+          if (pageNumbers) {
+            var number = document.createElement("span");
+            number.className = "page-foot-number";
+            number.textContent = (index + 1) + " / " + pages.length;
+            foot.appendChild(number);
+          }
+          page.appendChild(foot);
+        });
+      }
       var fontsReady = document.fonts && document.fonts.ready
         ? document.fonts.ready
         : Promise.resolve();
-      window.__pricelistReady = fontsReady.then(paginate, paginate);
+      function layout() {
+        paginate();
+        addFooters();
+      }
+      window.__pricelistReady = fontsReady.then(layout, layout);
       ${previewScript}
     })();
   </script>
