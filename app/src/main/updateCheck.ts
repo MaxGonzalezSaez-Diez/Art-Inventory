@@ -38,6 +38,9 @@ function isNewer(a: number[], b: number[]): boolean {
 
 /** Newer release, or null (up to date, offline, or GitHub unreachable). */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  // `npm run dev` reports package.json's placeholder version (only release
+  // builds get the tag's number), so it would always look out of date.
+  if (!app.isPackaged && !TEST_FEED) return null;
   const current = parseVersion(app.getVersion());
   if (!current) return null;
   try {

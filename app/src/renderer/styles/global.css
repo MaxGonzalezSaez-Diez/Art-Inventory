@@ -8797,3 +8797,22 @@ button.ghost.danger:hover {
   flex: none;
   gap: 0.5rem;
 }
+
+/* «Series con otro precio»: editable rows, not buttons. */
+.series-percent-row,
+.series-percent-row:hover {
+  background: transparent;
+  cursor: default;
+}
+.series-percent-input {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+}
+.series-percent-input input {
+  width: 5.5rem;
+}
+.related-head .series-add-select {
+  flex: none;
+  width: auto;
+}

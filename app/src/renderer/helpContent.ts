@@ -260,7 +260,7 @@ const es: HelpStep[] = [
     view: "pricing",
     spot: "pricing-sizes",
     title: "Factores y precios",
-    body: "Aquí decides cómo se calculan los precios según el tamaño; más abajo, los precios fijos por técnica y los impuestos. Pulsa «Guardar» después de cambiar algo."
+    body: "Aquí decides cómo se calculan los precios según el tamaño; más abajo, los precios fijos por técnica, las series con otro precio (p. ej. papel al 50 %) y los impuestos. Pulsa «Guardar» después de cambiar algo."
   },
   {
     chapter: "Factores y precios",
@@ -522,7 +522,7 @@ const en: HelpStep[] = [
     view: "pricing",
     spot: "pricing-sizes",
     title: "Factors and prices",
-    body: "Here you decide how prices are calculated from size; further down, fixed prices by technique and taxes. Press «Save» after changing something."
+    body: "Here you decide how prices are calculated from size; further down, fixed prices by technique, series with a different price (e.g. paper at 50 %) and taxes. Press «Save» after changing something."
   },
   {
     chapter: "Factors and prices",
@@ -784,7 +784,7 @@ const de: HelpStep[] = [
     view: "pricing",
     spot: "pricing-sizes",
     title: "Faktoren und Preise",
-    body: "Hier legst du fest, wie Preise aus der Größe berechnet werden; weiter unten Festpreise nach Technik und Steuern. Nach Änderungen «Speichern» drücken."
+    body: "Hier legst du fest, wie Preise aus der Größe berechnet werden; weiter unten Festpreise nach Technik, Serien mit anderem Preis (z. B. Papier zu 50 %) und Steuern. Nach Änderungen «Speichern» drücken."
   },
   {
     chapter: "Faktoren und Preise",

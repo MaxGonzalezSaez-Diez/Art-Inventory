@@ -1665,6 +1665,20 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
       });
     }
   }
+  const seenSeries = new Set<string>();
+  const seriesPricePercents = (Array.isArray(raw.seriesPricePercents) ? raw.seriesPricePercents : [])
+    .map((item) => ({
+      series: String(item?.series ?? "").trim(),
+      percent: Math.round((Number(item?.percent) || 0) * 10) / 10
+    }))
+    .filter((item) => {
+      const key = item.series.toLowerCase();
+      if (!item.series || item.percent <= 0 || item.percent > 1000 || seenSeries.has(key)) {
+        return false;
+      }
+      seenSeries.add(key);
+      return true;
+    });
   const prompt =
     typeof raw.textGeneratorSystemPrompt === "string"
       ? raw.textGeneratorSystemPrompt.trim()
@@ -1674,6 +1688,7 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
     sizeTypes,
     taxRates,
     fixedTypePrices: [...fixedByType.values()],
+    seriesPricePercents,
     textGeneratorSystemPrompt:
       prompt || base.textGeneratorSystemPrompt || DEFAULT_TEXT_GENERATOR_SYSTEM_PROMPT
   };

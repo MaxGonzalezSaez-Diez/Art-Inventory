@@ -10,8 +10,10 @@ import {
 } from "electron";
 import { checkForUpdate, DOWNLOAD_PREFIX, openUpdateDownload } from "./updateCheck";
 import { cleanUpAfterUpdate, installAndRestart, prepareUpdate } from "./selfUpdate";
+import { attachContextMenu, setMenuLanguage } from "./editMenus";
 import { previewDataUrl } from "./imagePreview";
-import { readFile, copyFile, mkdir, rm, writeFile } from "fs/promises";
+import { readFile, copyFile, mkdir, rm, stat, writeFile } from "fs/promises";
+import { fileURLToPath } from "url";
 import { copyFileSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
@@ -89,6 +91,7 @@ function store(): InventoryStore {
 async function createWindow(): Promise<void> {
   const prefs = await readPreferences();
   libraryPath = prefs.libraryPath;
+  setMenuLanguage(prefs.language);
   // Before setup finishes the folder is only a suggestion, so nothing is written
   // to disk until the user confirms where the library should live.
   if (prefs.setupComplete) await ensureLibrary(libraryPath);
@@ -107,6 +110,10 @@ async function createWindow(): Promise<void> {
       sandbox: false
     }
   });
+  attachContextMenu(mainWindow.webContents);
+  // A file dropped where the app doesn't take files would otherwise open in
+  // the window instead of the app (and lose what was being typed).
+  mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   mainWindow.webContents.session.setPermissionRequestHandler(
     (_webContents, permission, callback) => {
       callback(permission === "media");
@@ -185,9 +192,11 @@ ipcMain.handle("prefs:get", async () => ({
   choices: libraryLocationChoices()
 }));
 
-ipcMain.handle("prefs:setLanguage", async (_event, language: AppLanguage) =>
-  writePreferences({ language })
-);
+ipcMain.handle("prefs:setLanguage", async (_event, language: AppLanguage) => {
+  const saved = await writePreferences({ language });
+  setMenuLanguage(saved.language);
+  return saved;
+});
 
 /** Lets the setup screen offer a folder other than Documents or Desktop. */
 ipcMain.handle("prefs:pickLibraryParent", async () => {
@@ -209,11 +218,13 @@ ipcMain.handle(
     if (!chosen) throw new Error("No folder was chosen for the library.");
     await ensureLibrary(chosen);
     libraryPath = chosen;
-    return writePreferences({
+    const saved = await writePreferences({
       language: payload?.language,
       libraryPath: chosen,
       setupComplete: true
     });
+    setMenuLanguage(saved.language);
+    return saved;
   }
 );
 
@@ -880,6 +891,42 @@ ipcMain.handle(
   async (_event, imageId: string, caption: string) =>
     store().updateImageCaption(imageId, caption)
 );
+
+/**
+ * Files copied in Finder (Cmd+C) and then pasted: their paths, so the app can
+ * keep the file itself instead of pasting just its name. [] when the
+ * clipboard holds text.
+ */
+ipcMain.handle("clipboard:filePaths", async () => {
+  const found: string[] = [];
+  const plist = clipboard.read("NSFilenamesPboardType");
+  for (const match of plist.matchAll(/<string>([^<]*)<\/string>/g)) {
+    found.push(
+      match[1]
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, "&")
+    );
+  }
+  if (found.length === 0) {
+    const url = clipboard.read("public.file-url");
+    if (url.startsWith("file://")) {
+      try {
+        found.push(fileURLToPath(url));
+      } catch {
+        /* not a usable file URL */
+      }
+    }
+  }
+  const files: string[] = [];
+  for (const filePath of found) {
+    const info = await stat(filePath).catch(() => null);
+    if (info?.isFile()) files.push(filePath);
+  }
+  return files;
+});
 
 ipcMain.handle("document:open", async (_event, filePath: string) => {
   const error = await shell.openPath(filePath);

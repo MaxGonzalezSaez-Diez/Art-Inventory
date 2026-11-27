@@ -217,6 +217,8 @@ const api = {
     ipcRenderer.invoke("document:setCaption", imageId, caption),
   openDocument: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke("document:open", filePath),
+  /** Paths of files copied in Finder; [] when the clipboard holds text. */
+  clipboardFilePaths: (): Promise<string[]> => ipcRenderer.invoke("clipboard:filePaths"),
   pickImagePath: (): Promise<{ path: string; dataUrl: string } | null> =>
     ipcRenderer.invoke("image:pickPath"),
   getPathForFile: (file: File): string => {

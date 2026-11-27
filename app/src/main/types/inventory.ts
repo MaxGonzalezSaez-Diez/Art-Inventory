@@ -443,11 +443,23 @@ export interface FixedTypePrice {
   prices: FixedPricePeriod[];
 }
 
+/**
+ * A series sold at a share of the normal price, e.g. simple oil drawings on
+ * paper at 50 %. The normal price (size × factor, or flat) is worked out as
+ * always and then this percentage is applied. Matched by series name.
+ */
+export interface SeriesPricePercent {
+  series: string;
+  percent: number;
+}
+
 export interface AppSettings {
   sizeTypes: SizeType[];
   taxRates: TaxRate[];
   /** Techniques priced as a flat amount instead of (alto+ancho) × factor. */
   fixedTypePrices?: FixedTypePrice[];
+  /** Series priced at a percentage of the normal price. Missing → none. */
+  seriesPricePercents?: SeriesPricePercent[];
   /**
    * Fixed system instructions prepended to Generador de texto copies.
    * Editable in a quiet panel on that page.

@@ -490,9 +490,24 @@ const strings = {
   "artwork.field.inches": { es: "pulgadas", en: "inches", de: "Zoll" },
   "artwork.field.depth3dOnly": { es: "Solo 3D", en: "3D only", de: "Nur 3D" },
   "artwork.field.notesPlaceholder": {
-    es: "Observaciones internas…",
-    en: "Internal notes…",
-    de: "Interne Notizen…"
+    es: "Observaciones internas… Para guardar un archivo (Word, PDF…), arrástralo o pégalo aquí.",
+    en: "Internal notes… To keep a file (Word, PDF…), drag or paste it here.",
+    de: "Interne Notizen… Um eine Datei (Word, PDF…) zu speichern, hierher ziehen oder einfügen."
+  },
+  "artwork.notes.fileSaved": {
+    es: "Guardado en «Documentos» de esta obra: {names}",
+    en: "Saved in this work's «Documents»: {names}",
+    de: "In den «Dokumenten» dieses Werks gespeichert: {names}"
+  },
+  "artwork.notes.filePending": {
+    es: "Se guardará en «Documentos» al guardar la obra: {names}",
+    en: "Will be saved in «Documents» when you save the work: {names}",
+    de: "Wird beim Speichern des Werks in den «Dokumenten» gespeichert: {names}"
+  },
+  "artwork.notes.fileFailed": {
+    es: "No se ha podido guardar el archivo. Prueba con «Añadir documento» en «Documentos».",
+    en: "The file couldn't be saved. Try «Add document» in «Documents».",
+    de: "Die Datei konnte nicht gespeichert werden. Versuche «Dokument hinzufügen» unter «Dokumente»."
   },
   "artwork.status.perCopy": {
     es: "Ver cada copia",
@@ -1970,6 +1985,33 @@ const strings = {
     en: "from {from} with no upper limit",
     de: "von {from} ohne Obergrenze"
   },
+  "pricing.series.title": {
+    es: "Series con otro precio",
+    en: "Series with a different price",
+    de: "Serien mit anderem Preis"
+  },
+  "pricing.series.lead": {
+    es: "Para series que se venden más baratas que lo normal, p. ej. dibujos al óleo sobre papel al 50 %. El precio se calcula como siempre (por tamaño o fijo) y luego se aplica este porcentaje. Los precios puestos a mano no cambian.",
+    en: "For series sold below the normal price, e.g. oil drawings on paper at 50 %. The price is worked out as always (by size or fixed) and then this percentage is applied. Prices typed by hand don't change.",
+    de: "Für Serien, die günstiger als normal verkauft werden, z. B. Ölzeichnungen auf Papier zu 50 %. Der Preis wird wie immer berechnet (nach Größe oder fest) und dann dieser Prozentsatz angewendet. Von Hand eingetragene Preise ändern sich nicht."
+  },
+  "pricing.series.add": { es: "+ Añadir serie", en: "+ Add series", de: "+ Serie hinzufügen" },
+  "pricing.series.empty": {
+    es: "Ninguna: todas las series tienen el precio normal.",
+    en: "None: every series has the normal price.",
+    de: "Keine: Alle Serien haben den normalen Preis."
+  },
+  "pricing.series.noSeries": {
+    es: "Aún no hay series. Cuando las tengas, podrás darles otro precio aquí.",
+    en: "No series yet. Once you have some, you can give them a different price here.",
+    de: "Noch keine Serien. Sobald es welche gibt, kannst du ihnen hier einen anderen Preis geben."
+  },
+  "pricing.series.col.percent": {
+    es: "% del precio normal",
+    en: "% of the normal price",
+    de: "% des normalen Preises"
+  },
+  "pricing.series.col.works": { es: "Obras", en: "Works", de: "Werke" },
   "pricing.tax.title": { es: "Impuestos", en: "Taxes", de: "Steuern" },
   "pricing.fixed.title": {
     es: "Precios fijos por técnica",

@@ -47,6 +47,7 @@ import type {
   SeriesInfo,
   SeriesInfoInput,
   FixedTypePrice,
+  SeriesPricePercent,
   FixedPricePeriod,
   SeriesText,
   Application,
@@ -1716,6 +1717,50 @@ function ArtworkForm({
   } | null>(null);
   const [imageEditorSrc, setImageEditorSrc] = useState<string | null>(null);
   const photoDrop = useFileDragOver(!locked);
+  // Files dropped or pasted into «Notas» go to «Documentos» (a text box can
+  // only keep their name). For a work not saved yet they wait until it is.
+  const [pendingDocs, setPendingDocs] = useState<string[]>([]);
+  const [notesInfo, setNotesInfo] = useState("");
+  const [docsOpenKey, setDocsOpenKey] = useState(0);
+  const savedArtworkId =
+    form.id && inventory.artworks.some((item) => item.id === form.id) ? form.id : "";
+
+  async function attachFilesToArtwork(paths: string[]) {
+    const fresh = paths.filter(Boolean);
+    if (!fresh.length) return;
+    const names = fresh.map((item) => item.split(/[\\/]/).pop() || item).join(", ");
+    if (!savedArtworkId) {
+      setPendingDocs((current) => [...current, ...fresh.filter((p) => !current.includes(p))]);
+      setNotesInfo(t("artwork.notes.filePending", { names }));
+      onDirtyChange?.(true);
+      return;
+    }
+    let next: InventoryData | null = null;
+    let failed = 0;
+    for (const sourcePath of fresh) {
+      try {
+        const result = await window.inventoryApi.importImageFromPath(
+          sourcePath,
+          "artwork",
+          savedArtworkId,
+          "document"
+        );
+        if (result) next = result.inventory;
+        else failed += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    if (next) {
+      setInventory(next);
+      setDocsOpenKey((value) => value + 1);
+    }
+    setNotesInfo(
+      failed && !next
+        ? t("artwork.notes.fileFailed")
+        : t("artwork.notes.fileSaved", { names })
+    );
+  }
 
   useEffect(() => {
     onDirtyChange?.(false);
@@ -1813,6 +1858,23 @@ function ArtworkForm({
         saved = data.artworks.find((item) => item.id === saved!.id) ?? saved;
       }
       setPendingImage(null);
+    }
+    if (saved && pendingDocs.length) {
+      for (const sourcePath of pendingDocs) {
+        try {
+          const result = await window.inventoryApi.importImageFromPath(
+            sourcePath,
+            "artwork",
+            saved.id,
+            "document"
+          );
+          if (result?.inventory) data = result.inventory;
+        } catch {
+          /* the work is saved; the file can be added again in «Documentos» */
+        }
+      }
+      setPendingDocs([]);
+      setNotesInfo("");
     }
     setInventory(data);
     if (saved) setForm(toInput(saved, data));
@@ -2160,9 +2222,65 @@ function ArtworkForm({
                       placeholder={t("artwork.field.notesPlaceholder")}
                       value={form.notes ?? ""}
                       onChange={(event) => update("notes", event.target.value)}
+                      onPaste={(event) => {
+                        // A file copied in Finder: keep the file, not its name.
+                        if (!Array.from(event.clipboardData.types).includes("Files")) return;
+                        event.preventDefault();
+                        const fromPage = Array.from(event.clipboardData.files)
+                          .map(pathForDroppedFile)
+                          .filter(Boolean);
+                        void (fromPage.length
+                          ? Promise.resolve(fromPage)
+                          : window.inventoryApi.clipboardFilePaths()
+                        ).then((paths) => attachFilesToArtwork(paths));
+                      }}
+                      onDragOver={(event) => {
+                        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "copy";
+                      }}
+                      onDrop={(event) => {
+                        const files = filesFromDropEvent(event);
+                        if (!files.length) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void attachFilesToArtwork(files.map(pathForDroppedFile));
+                      }}
                     />
                   </label>
+                  {notesInfo ? <p className="muted small-note">{notesInfo}</p> : null}
                 </div>
+
+                {savedArtworkId ? (
+                  <div className="form-group" data-help="form-documents">
+                    <ArtworkDocuments
+                      inventory={inventory}
+                      setInventory={setInventory}
+                      artworkId={savedArtworkId}
+                      openKey={docsOpenKey}
+                    />
+                  </div>
+                ) : pendingDocs.length ? (
+                  <div className="form-group">
+                    <p className="form-group-label">
+                      {t("artwork.docs", { count: pendingDocs.length })}
+                    </p>
+                    {pendingDocs.map((item) => (
+                      <p className="muted small-note" key={item}>
+                        {item.split(/[\\/]/).pop()}{" "}
+                        <button
+                          type="button"
+                          className="ghost small"
+                          onClick={() =>
+                            setPendingDocs((current) => current.filter((p) => p !== item))
+                          }
+                        >
+                          {t("common.remove")}
+                        </button>
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
 
@@ -2611,6 +2729,7 @@ function MovementModal({
   const settings: AppSettings = {
     sizeTypes: inventory.settings.sizeTypes ?? [],
     taxRates: inventory.settings.taxRates ?? [],
+    seriesPricePercents: inventory.settings.seriesPricePercents ?? [],
     textGeneratorSystemPrompt: inventory.settings.textGeneratorSystemPrompt
   };
 
@@ -6665,14 +6784,20 @@ function DocumentPickModal({
 function ArtworkDocuments({
   inventory,
   setInventory,
-  artworkId
+  artworkId,
+  openKey = 0
 }: {
   inventory: InventoryData;
   setInventory: (data: InventoryData) => void;
   artworkId: string;
+  /** Bump to unfold the list (e.g. after a file was added elsewhere). */
+  openKey?: number;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (openKey) setOpen(true);
+  }, [openKey]);
   const [busy, setBusy] = useState(false);
   const [pickMode, setPickMode] = useState<null | "save" | "remove">(null);
   const [describeId, setDescribeId] = useState<string | null>(null);
@@ -8613,7 +8738,8 @@ function ExhibitionForm({
                 const settings: AppSettings = {
                   sizeTypes: inventory.settings.sizeTypes ?? [],
                   taxRates: inventory.settings.taxRates ?? [],
-                  fixedTypePrices: inventory.settings.fixedTypePrices ?? []
+                  fixedTypePrices: inventory.settings.fixedTypePrices ?? [],
+                  seriesPricePercents: inventory.settings.seriesPricePercents ?? []
                 };
                 for (const id of ids) {
                   if (next[id]) continue;
@@ -9152,16 +9278,31 @@ function currentFixedPrice(entry: FixedTypePrice): number | null {
   return fixedPriceAt(entry, Date.now());
 }
 
+function formatPercent(value: number): string {
+  return `${String(Math.round(value * 10) / 10).replace(".", ",")} %`;
+}
+
+/** The series' share of the normal price in % (100 when it has no rule). */
+function seriesPricePercent(settings: AppSettings, series?: string): number {
+  const key = (series ?? "").trim().toLowerCase();
+  if (!key || isNoSeries(series)) return 100;
+  const rule = (settings.seriesPricePercents ?? []).find(
+    (item) => item.series.trim().toLowerCase() === key
+  );
+  return rule && rule.percent > 0 ? rule.percent : 100;
+}
+
 function basePriceAt(
   artwork: Artwork,
   settings: AppSettings,
   dateMs: number
 ): number | null {
+  const share = seriesPricePercent(settings, artwork.series) / 100;
   const fixed = fixedPriceForType(settings, artwork.type, dateMs);
-  if (fixed != null) return fixed;
+  if (fixed != null) return fixed * share;
   const factor = factorForDate(settings, sizeSumCm(artwork), dateMs);
   if (factor == null) return null;
-  return sizeSumCm(artwork) * factor;
+  return sizeSumCm(artwork) * factor * share;
 }
 
 /** Compact formula shown next to brochure price drafts (e.g. 20×20 cm → (20+20)×23 = 920). */
@@ -9170,9 +9311,12 @@ function priceCalcHint(
   settings: AppSettings,
   dateMs: number
 ): string | null {
+  const percent = seriesPricePercent(settings, artwork.series);
+  const withSeries = (amount: number) =>
+    percent === 100 ? "" : ` → ${formatPercent(percent)} = ${Math.round((amount * percent) / 100)}`;
   const fixed = fixedPriceForType(settings, artwork.type, dateMs);
   if (fixed != null) {
-    return `fijo → ${Math.round(fixed)}`;
+    return `fijo → ${Math.round(fixed)}${withSeries(fixed)}`;
   }
   const h = toCm(artwork.height, artwork.unit);
   const w = toCm(artwork.width, artwork.unit);
@@ -9187,7 +9331,7 @@ function priceCalcHint(
       ? String(Math.round(factor))
       : String(Math.round(factor * 100) / 100);
   const total = Math.round(sum * factor);
-  return `${wStr}×${hStr} cm → (${wStr}+${hStr})×${factorStr} = ${total}`;
+  return `${wStr}×${hStr} cm → (${wStr}+${hStr})×${factorStr} = ${total}${withSeries(sum * factor)}`;
 }
 
 /** Why the «pago a galerista» value could not be calculated. */
@@ -9203,9 +9347,10 @@ function galleryPaymentHalf(
   settings: AppSettings,
   dateMs: number
 ): { half: number | null; gap: GalleryPaymentGap | null } {
+  const share = seriesPricePercent(settings, artwork.series) / 100;
   const fixed = fixedPriceForType(settings, artwork.type, dateMs);
   if (fixed != null) {
-    return { half: Math.round(fixed * 0.5), gap: null };
+    return { half: Math.round(fixed * share * 0.5), gap: null };
   }
   const h = toCm(artwork.height, artwork.unit ?? "cm");
   const w = toCm(artwork.width, artwork.unit ?? "cm");
@@ -9225,7 +9370,7 @@ function galleryPaymentHalf(
   if (factor == null || factor <= 0) {
     return { half: null, gap: { reason: "noFactor", label: type.label ?? "" } };
   }
-  return { half: Math.round(sizeSum * factor * 0.5), gap: null };
+  return { half: Math.round(sizeSum * factor * share * 0.5), gap: null };
 }
 
 function galleryPaymentGapMessage(gap: GalleryPaymentGap, t: Translate): string {
@@ -9654,7 +9799,8 @@ function PriceHistoryTab({
   const settings: AppSettings = {
     sizeTypes: inventory.settings.sizeTypes ?? [],
     taxRates: inventory.settings.taxRates ?? [],
-    fixedTypePrices: inventory.settings.fixedTypePrices ?? []
+    fixedTypePrices: inventory.settings.fixedTypePrices ?? [],
+    seriesPricePercents: inventory.settings.seriesPricePercents ?? []
   };
   const taxRates = settings.taxRates;
   const [country, setCountry] = useState(taxCountries(settings)[0] ?? "");
@@ -10557,6 +10703,7 @@ function PricingExportModal({
   inventory,
   sizeTypes,
   taxRates,
+  seriesPricePercents,
   onClose,
   onError,
   onToast
@@ -10564,12 +10711,13 @@ function PricingExportModal({
   inventory: InventoryData;
   sizeTypes: SizeType[];
   taxRates: TaxRate[];
+  seriesPricePercents: SeriesPricePercent[];
   onClose: () => void;
   onError: (message: string) => void;
   onToast: (message: string) => void;
 }) {
   const t = useT();
-  const settingsNow: AppSettings = { sizeTypes, taxRates };
+  const settingsNow: AppSettings = { sizeTypes, taxRates, seriesPricePercents };
   const countries = taxCountries(settingsNow);
   const [includeTax, setIncludeTax] = useState(true);
   const [country, setCountry] = useState(countries[0] ?? "");
@@ -10617,7 +10765,8 @@ function PricingExportModal({
         const hCm = toCm(art.height, art.unit);
         const sum = sizeSumCm(art);
         const factor = factorForDate(settingsNow, sum, dateMs);
-        const base = factor == null ? null : sum * factor;
+        const share = seriesPricePercent(settingsNow, art.series) / 100;
+        const base = factor == null ? null : sum * factor * share;
         const row: Array<string | number> = [
           art.title,
           art.series || "",
@@ -10786,6 +10935,9 @@ function PricingSettingsPage({
       return [...byType.values()];
     }
   );
+  const [seriesPercents, setSeriesPercents] = useState<SeriesPricePercent[]>(
+    inventory.settings.seriesPricePercents ?? []
+  );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [editing, setEditing] = useState<SizeType | null>(null);
@@ -10799,7 +10951,32 @@ function PricingSettingsPage({
       JSON.stringify(inventory.settings.sizeTypes ?? []) ||
     JSON.stringify(taxRates) !== JSON.stringify(inventory.settings.taxRates ?? []) ||
     JSON.stringify(fixedTypePrices) !==
-      JSON.stringify(inventory.settings.fixedTypePrices ?? []);
+      JSON.stringify(inventory.settings.fixedTypePrices ?? []) ||
+    JSON.stringify(seriesPercents) !==
+      JSON.stringify(inventory.settings.seriesPricePercents ?? []);
+
+  // Series that can get their own price (all named series of the library).
+  const seriesNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const name of [
+      ...inventory.artworks.map((art) => art.series ?? ""),
+      ...(inventory.seriesInfo ?? []).map((info) => info.name ?? "")
+    ]) {
+      const clean = name.trim();
+      if (clean && !isNoSeries(clean) && !names.has(clean.toLowerCase())) {
+        names.set(clean.toLowerCase(), clean);
+      }
+    }
+    return [...names.values()].sort((a, b) => a.localeCompare(b));
+  }, [inventory.artworks, inventory.seriesInfo]);
+  const seriesLeft = seriesNames.filter(
+    (name) => !seriesPercents.some((rule) => rule.series.toLowerCase() === name.toLowerCase())
+  );
+  function worksInSeries(name: string): number {
+    const key = name.trim().toLowerCase();
+    return inventory.artworks.filter((art) => (art.series ?? "").trim().toLowerCase() === key)
+      .length;
+  }
 
   function addType() {
     const now = new Date();
@@ -10888,6 +11065,9 @@ function PricingSettingsPage({
           factors: t.factors.map((p) => ({ ...p, factor: Number(p.factor) || 0 }))
         })),
         taxRates: taxRates.filter((t) => t.country.trim()),
+        seriesPricePercents: seriesPercents
+          .map((rule) => ({ series: rule.series.trim(), percent: Number(rule.percent) || 0 }))
+          .filter((rule) => rule.series && rule.percent > 0),
         fixedTypePrices: fixedTypePrices
           .map((p) => ({
             typeValue: p.typeValue.trim(),
@@ -10905,6 +11085,7 @@ function PricingSettingsPage({
       setSizeTypes(data.settings.sizeTypes);
       setTaxRates(data.settings.taxRates);
       setFixedTypePrices(data.settings.fixedTypePrices ?? []);
+      setSeriesPercents(data.settings.seriesPricePercents ?? []);
       setSaved(true);
       onToast(t("pricing.toast.saved"));
     } catch (error) {
@@ -11037,6 +11218,82 @@ function PricingSettingsPage({
                 </button>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      <div className="pricing-block" data-help="pricing-series">
+        <div className="related-head">
+          <h3>{t("pricing.series.title")}</h3>
+          {seriesLeft.length > 0 ? (
+            <select
+              className="series-add-select"
+              value=""
+              onChange={(event) => {
+                const name = event.target.value;
+                if (!name) return;
+                setSeriesPercents((current) => [...current, { series: name, percent: 50 }]);
+                setSaved(false);
+              }}
+            >
+              <option value="">{t("pricing.series.add")}</option>
+              {seriesLeft.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+        <p className="muted small-note">{t("pricing.series.lead")}</p>
+        {seriesPercents.length === 0 ? (
+          <p className="muted small-note">
+            {seriesNames.length ? t("pricing.series.empty") : t("pricing.series.noSeries")}
+          </p>
+        ) : (
+          <div className="pricing-line-list">
+            <div className="pricing-line-head">
+              <span>{t("artwork.field.series")}</span>
+              <span>{t("pricing.series.col.percent")}</span>
+              <span>{t("pricing.series.col.works")}</span>
+              <span />
+            </div>
+            {seriesPercents.map((rule, index) => (
+              <div className="pricing-line-row series-percent-row" key={rule.series}>
+                <strong>{rule.series}</strong>
+                <span className="series-percent-input">
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    step={5}
+                    value={rule.percent}
+                    aria-label={t("pricing.series.col.percent")}
+                    onChange={(event) => {
+                      const percent = Number(event.target.value);
+                      setSeriesPercents((current) =>
+                        current.map((item, i) => (i === index ? { ...item, percent } : item))
+                      );
+                      setSaved(false);
+                    }}
+                  />
+                  <span>%</span>
+                </span>
+                <span>{worksInSeries(rule.series)}</span>
+                <button
+                  type="button"
+                  className="icon-button remove"
+                  aria-label={t("common.remove")}
+                  title={t("common.remove")}
+                  onClick={() => {
+                    setSeriesPercents((current) => current.filter((_, i) => i !== index));
+                    setSaved(false);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -11204,6 +11461,7 @@ function PricingSettingsPage({
           inventory={inventory}
           sizeTypes={sizeTypes}
           taxRates={taxRates}
+          seriesPricePercents={seriesPercents}
           onClose={() => setShowExport(false)}
           onError={onError}
           onToast={onToast}
@@ -12149,7 +12407,8 @@ function FinancialExportModal({
           const art = inventory.artworks.find((a) => a.id === payment.artworkId);
           const settings: AppSettings = {
             sizeTypes: inventory.settings.sizeTypes ?? [],
-            taxRates: inventory.settings.taxRates ?? []
+            taxRates: inventory.settings.taxRates ?? [],
+            seriesPricePercents: inventory.settings.seriesPricePercents ?? []
           };
           return {
             category: t("financials.export.row.galleryPayment"),
@@ -12409,7 +12668,8 @@ function FinancialsPage({
 
   const settings: AppSettings = {
     sizeTypes: inventory.settings.sizeTypes ?? [],
-    taxRates: inventory.settings.taxRates ?? []
+    taxRates: inventory.settings.taxRates ?? [],
+    seriesPricePercents: inventory.settings.seriesPricePercents ?? []
   };
 
   const paymentCost = galleryPayments.reduce((sum, m) => {
@@ -19794,9 +20054,11 @@ function PriceListEditor({
     () => ({
       sizeTypes: inventory.settings.sizeTypes ?? [],
       taxRates: inventory.settings.taxRates ?? [],
-      fixedTypePrices: inventory.settings.fixedTypePrices ?? []
+      fixedTypePrices: inventory.settings.fixedTypePrices ?? [],
+      seriesPricePercents: inventory.settings.seriesPricePercents ?? []
     }),
     [
+      inventory.settings.seriesPricePercents,
       inventory.settings.sizeTypes,
       inventory.settings.taxRates,
       inventory.settings.fixedTypePrices
